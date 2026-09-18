@@ -7,6 +7,7 @@ ref is a relative path under the data root plus an optional `#split` fragment.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -34,6 +35,15 @@ def load_rows(data_root: str | Path, ref: str) -> list[Row]:
     if not rows:
         raise DataError(f"dataset ref {ref!r} selects no rows")
     return rows
+
+
+def digest(rows: list[Row]) -> str:
+    """The content digest of a table's rows, for an artifact's identity stamp:
+    a rotation fitted against these rows is not the same artifact as one fitted
+    against others."""
+    return hashlib.sha256(
+        json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def field_text(row: Row, field: str) -> str:

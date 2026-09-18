@@ -42,6 +42,7 @@ class _Component:
     op: str | None = None  # the call site of the `.source` operation, for an interior
     arg: int = 0  # which positional argument of that call the tensor is
     seq_axis: int = 1  # which axis of the tensor the sequence runs along
+    width: str | None = None  # the nnterp handle attribute holding this tap's width
 
 
 _COMPONENTS = {
@@ -59,8 +60,10 @@ _COMPONENTS = {
         arg=1,
         seq_axis=2,
     ),
-    "block_output": _Component(path="layers.{layer}", side="output", stage=1),
-    "lm_head": _Component(path="lm_head", side="output", stage=0),
+    "block_output": _Component(
+        path="layers.{layer}", side="output", stage=1, width="hidden_size"
+    ),
+    "lm_head": _Component(path="lm_head", side="output", stage=0, width="vocab_size"),
 }
 
 
@@ -132,6 +135,19 @@ class Address:
         layer 2 raises, and a write has to go in above the read that observes
         it."""
         return (0 if self.layer is not None else 1, self.layer or 0, self._entry.stage)
+
+    def width(self, model: Any) -> int:
+        """The size of the tap's last axis — the `d` a featurizer's `k` is a
+        subspace of. It is derived from (model, site) and may never be authored,
+        which is exactly why it is asked of an address and not of a document."""
+        attribute = self._entry.width
+        if attribute is None:
+            raise AddressError(
+                f"the width of {self.component!r} is not derivable here; nnterp "
+                "publishes hidden_size and vocab_size on the handle and nothing "
+                "for an attention interior"
+            )
+        return int(getattr(model, attribute))
 
     @classmethod
     def locate(cls, model: Any, component: str, layer: int | None = None) -> "Address":

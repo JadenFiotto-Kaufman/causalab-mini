@@ -14,14 +14,23 @@ The shape, top down:
           taps: one per address, in forward order
             Tap(address, writes, reads)        writes run before reads at the
               WriteOp(name, positions, operand, mechanism, featurizer)  same
-              ReadOp(name, positions)                                   address
-      metrics: MetricOp(name, kind, of, ids)
-      saves:   SaveFile(file_path, value, example_ids, unit, ...)
+              ReadOp(name, positions, featurizer)                       address
+      metrics:     MetricOp(name, kind, of, ids)
+      featurizers: FeaturizerOp(name, kind, k, d, parametrization, seed, trained)
+      train:       TrainPlan(epochs, evaluation, objective, …) or None
+      saves:       SaveFile(file_path, value, example_ids, unit, …)
+
+A fit is a request, so a fit is one plan: `TrainPlan` holds the rows of every
+update it will make, already batched, already tokenized, already in the order
+the seed puts them in — as **plans**, because a training step is this same plan
+over different rows, and a twin type beside `Plan` would be a lie about that.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+import random
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +48,7 @@ class PlanError(ValueError):
 class ReadOp:
     name: str
     positions: Positions
+    featurizer: str = "identity"
 
 
 @dataclass(frozen=True)
@@ -75,20 +85,62 @@ class MetricOp:
 
 
 @dataclass(frozen=True)
+class FeaturizerOp:
+    """One parameter set. `d` is derived from (model, site) here on the client,
+    because the block may not decide anything from a tensor — including how wide
+    the tensor it is about to rotate is."""
+
+    name: str
+    kind: str
+    k: int
+    d: int
+    parametrization: str
+    seed: int
+    trained: bool
+
+
+@dataclass(frozen=True)
 class SaveFile:
     file_path: str
     value: str
-    example_ids: ExampleIds
-    unit: str
-    estimand_version: str
-    produced_by: str
+    example_ids: ExampleIds = ()
+    unit: str = ""
+    estimand_version: str = ""
+    produced_by: str = ""
+    #: For a `.safetensors` bundle: the ArtifactIdentity stamped into its header,
+    #: as pairs because a plan holds no dicts. Empty for a metric table.
+    identity: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class TrainPlan:
+    """Every update the fit will make, as plans over the rows of that update.
+
+    `epochs` is already shuffled: the seed covers data order, and data order
+    decides which rows share a padded batch, which is a tokenizer question and
+    therefore a client-side one. The *parameter* seed travels as data and is
+    drawn inside the session.
+    """
+
+    epochs: tuple[tuple["Plan", ...], ...]
+    evaluation: "Plan"
+    objective: tuple[tuple[float, str], ...]
+    params: tuple[str, ...]
+    lr: float
+    weight_decay: float
+    eval_metrics: tuple[str, ...]
+    early_stop: str
+    patience: int
+    mode: str
 
 
 @dataclass(frozen=True)
 class Plan:
     forwards: tuple[Forward, ...]
     metrics: tuple[MetricOp, ...]
-    saves: tuple[SaveFile, ...]
+    saves: tuple[SaveFile, ...] = ()
+    featurizers: tuple[FeaturizerOp, ...] = ()
+    train: TrainPlan | None = None
 
 
 def build(document: Document, data_root: str | Path, model: Any) -> Plan:
@@ -115,11 +167,34 @@ def build(document: Document, data_root: str | Path, model: Any) -> Plan:
     counts = {role: len(table) for role, table in rows.items()}
     if len(set(counts.values())) != 1:
         raise PlanError(f"roles must have the same row count, got {counts}")
+
+    featurizers = tuple(
+        _featurizer(name, document, addresses, model) for name in document.featurizers
+    )
+    widths = {one.name: one.d for one in featurizers}
+    return replace(
+        _pass(document, rows, addresses, tokenizer),
+        featurizers=featurizers,
+        train=_train(document, data_root, rows, addresses, tokenizer),
+        saves=tuple(
+            _save(entry, document, rows["base"], widths) for entry in document.saves
+        ),
+    )
+
+
+def _pass(
+    document: Document,
+    rows: dict[str, list[data.Row]],
+    addresses: dict[str, Address],
+    tokenizer: Any,
+) -> Plan:
+    """One execution of the document's forwards over one set of rows: the whole
+    plan except what is about the fit and about the files. A training update, an
+    eval pass and the scored run are all this, over different rows."""
     batches = {
         role: encoding.encode(tokenizer, [data.field_text(row, document.roles[role].field) for row in table])
         for role, table in rows.items()
     }
-
     forwards = tuple(
         _forward(name, role, document, batches[role], addresses)
         for name, role in _schedule(document)
@@ -137,19 +212,134 @@ def build(document: Document, data_root: str | Path, model: Any) -> Plan:
         )
         for name, spec in document.metrics.items()
     )
-    ids = data.example_ids(base_rows)
-    saves = tuple(
-        SaveFile(
+    return Plan(forwards=forwards, metrics=metrics)
+
+
+def _featurizer(
+    name: str, document: Document, addresses: dict[str, Address], model: Any
+) -> FeaturizerOp:
+    """One declared featurizer, with its width filled in from the model.
+
+    `k` is the only width a document authors. `d` is the site's, and a `k` wider
+    than the site it acts in is a load error here rather than a shape error
+    inside someone else's process.
+    """
+    spec = document.featurizers[name]
+    at = {read.site for read in document.reads.values() if read.featurizer == name}
+    at |= {write.site for write in document.writes.values() if write.featurizer == name}
+    (site,) = at  # the document refuses one name at two sites
+    d = addresses[site].width(model)
+    if not 0 < spec.k <= d:
+        raise PlanError(
+            f"featurizer {name!r}: k={spec.k} is not a subspace of the {d}-wide "
+            f"site {site!r}"
+        )
+    return FeaturizerOp(
+        name=name,
+        kind=spec.kind,
+        k=spec.k,
+        d=d,
+        parametrization=spec.parametrization,
+        # A subspace with no seed of its own takes the fit's, or 0 when there is
+        # no fit at all — which is what makes an untrained subspace a
+        # reproducible random rank-k basis.
+        seed=document.train.seed if document.train is not None else 0,
+        trained=document.train is not None and name in document.train.params,
+    )
+
+
+def _save(
+    entry: Any, document: Document, base_rows: list[data.Row], widths: dict[str, int]
+) -> SaveFile:
+    if entry.site is not None:
+        spec = document.featurizers[entry.value]
+        return SaveFile(
             file_path=entry.file_path,
             value=entry.value,
-            example_ids=ids,
-            unit=metrics_module.UNITS[document.metrics[entry.value].kind][0],
-            estimand_version=metrics_module.UNITS[document.metrics[entry.value].kind][1],
             produced_by=document.digest,
+            # "A rotation fitted against bf16 weights is not the same artifact as
+            # one fitted against fp32 weights, and the stamp is what says so."
+            identity=(
+                ("produced_by", document.digest),
+                ("model_key", document.model.key),
+                ("model_revision", document.model.revision),
+                ("model_dtype", document.model.dtype),
+                ("site", entry.site),
+                ("component", document.sites[entry.site].component),
+                ("layer", str(document.sites[entry.site].layer)),
+                ("k", str(spec.k)),
+                ("d", str(widths[entry.value])),
+                ("parametrization", spec.parametrization),
+                ("featurizer_dtype", "fp32"),
+                ("trained_on", document.roles["base"].dataset),
+                ("trained_on_digest", data.digest(base_rows)),
+                ("engine", "causalab-mini"),
+            ),
         )
-        for entry in document.saves
+    kind = document.metrics[entry.value].kind
+    return SaveFile(
+        file_path=entry.file_path,
+        value=entry.value,
+        example_ids=data.example_ids(base_rows),
+        unit=metrics_module.UNITS[kind][0],
+        estimand_version=metrics_module.UNITS[kind][1],
+        produced_by=document.digest,
     )
-    return Plan(forwards=forwards, metrics=metrics, saves=saves)
+
+
+def _train(
+    document: Document,
+    data_root: str | Path,
+    rows: dict[str, list[data.Row]],
+    addresses: dict[str, Address],
+    tokenizer: Any,
+) -> TrainPlan | None:
+    spec = document.train
+    if spec is None:
+        return None
+    # The eval split is a dataset ref exactly like a `data` entry's, and each
+    # role reads its own field off it.
+    evaluation = {role: data.load_rows(data_root, spec.eval_split) for role in rows}
+    if spec.eval_split != document.roles["base"].dataset:
+        # Two different refs must be endpoint-disjoint. The same ref for both is
+        # the visible train-equals-test ablation, and is allowed.
+        fitted = {json.dumps(row, sort_keys=True) for row in rows["base"]}
+        shared = [row for row in evaluation["base"] if json.dumps(row, sort_keys=True) in fitted]
+        if shared:
+            raise PlanError(
+                f"method.train.eval.split {spec.eval_split!r} shares {len(shared)} row(s) "
+                f"with the fitted rows {document.roles['base'].dataset!r}; the two must "
+                "be endpoint-disjoint"
+            )
+
+    count = len(rows["base"])
+    order = random.Random(spec.seed)
+    epochs = tuple(
+        tuple(
+            _pass(document, _take(rows, draw[start : start + spec.pairs]), addresses, tokenizer)
+            for start in range(0, count, spec.pairs)
+        )
+        for draw in (order.sample(range(count), count) for _ in range(spec.epochs))
+    )
+    return TrainPlan(
+        epochs=epochs,
+        evaluation=_pass(document, evaluation, addresses, tokenizer),
+        objective=spec.objective,
+        params=spec.params,
+        lr=spec.lr,
+        weight_decay=spec.weight_decay,
+        eval_metrics=spec.eval_metrics,
+        early_stop=spec.early_stop,
+        patience=spec.patience,
+        mode=spec.mode,
+    )
+
+
+def _take(rows: dict[str, list[data.Row]], picked: list[int]) -> dict[str, list[data.Row]]:
+    """One minibatch. Every role is indexed the same way, because rows are
+    paired by index and a shuffle that broke the pairing would silently fit a
+    rotation against mismatched counterfactuals."""
+    return {role: [table[index] for index in picked] for role, table in rows.items()}
 
 
 def _schedule(document: Document) -> list[tuple[str, str]]:
@@ -205,9 +395,7 @@ def _forward(
                     positions=encoding.positions(batch, spec.pos),
                     operand=spec.operand,
                     mechanism=spec.mechanism,
-                    # The identity featurizer is the whole featurizer table for
-                    # now; see ops.FEATURIZERS.
-                    featurizer="identity",
+                    featurizer=spec.featurizer,
                 )
             )
     reads: dict[Address, list[ReadOp]] = {}
@@ -215,7 +403,11 @@ def _forward(
         if (spec.model, spec.input) != (name, role):
             continue
         reads.setdefault(addresses[spec.site], []).append(
-            ReadOp(name=read_name, positions=encoding.positions(batch, spec.pos))
+            ReadOp(
+                name=read_name,
+                positions=encoding.positions(batch, spec.pos),
+                featurizer=spec.featurizer,
+            )
         )
 
     taps = []

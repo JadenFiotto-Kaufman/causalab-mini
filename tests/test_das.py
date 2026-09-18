@@ -5,13 +5,19 @@ on tensors with no model anywhere near them. The second half runs
 `documents/das_cpu_reduction.json` end to end.
 """
 
+import pytest
 import torch
 
-from causalab_mini import featurizer, ops
+from causalab_mini import document, featurizer, ops, plan
 
 
 def rotation(d=16, k=8, seed=0):
     return featurizer.Subspace(featurizer.start_weight(d, k, seed))
+
+
+@pytest.fixture
+def das_plan(das_raw, data_root, model):
+    return plan.build(document.Document.from_json(das_raw), data_root, model)
 
 
 # --------------------------------------------------------------------- #
@@ -101,3 +107,54 @@ def test_the_read_and_the_write_are_one_parameter_set():
     subspace.inverse(torch.zeros(2, 4), None, x).sum().backward()
     assert subspace.weight.grad is not None
     assert not torch.equal(subspace.weight.grad, from_the_read)  # two paths, one tensor
+
+
+# --------------------------------------------------------------------- #
+# the plan: what the client decided before the session opened
+# --------------------------------------------------------------------- #
+
+
+def test_the_fit_is_compiled_into_the_plan_rows_and_all(das_plan):
+    """Every update the fit will make is in the plan, as a plan: which rows,
+    already tokenized, already in the order the seed put them in."""
+    fit = das_plan.train
+    assert fit is not None
+    assert das_plan.featurizers == (
+        plan.FeaturizerOp("rot", "subspace", k=8, d=16, parametrization="cayley", seed=0, trained=True),
+    )
+    # d is derived from (model, site) and is never authored: this model is 16 wide.
+    assert len(fit.epochs) == 10
+    # batch.pairs is 16 and the train split is 2 rows, so a batch is the whole
+    # split and an epoch is one update.
+    assert [len(epoch) for epoch in fit.epochs] == [1] * 10
+    assert [len(f.input_ids) for f in fit.epochs[0][0].forwards] == [2, 2]
+    assert [len(f.input_ids) for f in fit.evaluation.forwards] == [2, 2]
+    assert (fit.objective, fit.params) == (((1.0, "ce"),), ("rot",))
+    assert (fit.early_stop, fit.patience, fit.mode) == ("iia", 3, "max")
+
+
+def test_the_rotation_reaches_the_read_and_the_write_and_not_the_head(das_plan):
+    source, patched = das_plan.forwards
+    assert [read.featurizer for read in source.taps[0].reads] == ["rot"]
+    assert [write.featurizer for write in patched.taps[0].writes] == ["rot"]
+    # the metric's read is a *plain* lm_head read; the document refuses any other.
+    assert [read.featurizer for read in patched.taps[1].reads] == ["identity"]
+
+
+def test_a_k_wider_than_the_site_is_a_load_error(das_raw, data_root, model):
+    das_raw["method"]["featurizers"]["rot"]["k"] = 17
+    with pytest.raises(plan.PlanError, match="not a subspace of the 16-wide site"):
+        plan.build(document.Document.from_json(das_raw), data_root, model)
+
+
+def test_an_eval_split_sharing_rows_with_the_fit_is_a_load_error(das_raw, data_root, model):
+    das_raw["method"]["train"]["eval"]["split"] = "weekdays/data"  # train + test
+    with pytest.raises(plan.PlanError, match="endpoint-disjoint"):
+        plan.build(document.Document.from_json(das_raw), data_root, model)
+
+
+def test_the_same_ref_for_both_is_the_visible_train_equals_test_ablation(das_raw, data_root, model):
+    das_raw["method"]["train"]["eval"]["split"] = "weekdays/data#train"
+    fitted = plan.build(document.Document.from_json(das_raw), data_root, model)
+    assert fitted.train is not None
+    assert fitted.train.evaluation.forwards[0].input_ids == fitted.forwards[0].input_ids

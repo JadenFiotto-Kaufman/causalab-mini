@@ -13,6 +13,18 @@ def minimal_plan(minimal_raw, data_root, model):
     return plan.build(document.Document.from_json(minimal_raw), data_root, model)
 
 
+@pytest.fixture
+def das_plan(das_raw, data_root, model):
+    return plan.build(document.Document.from_json(das_raw), data_root, model)
+
+
+@pytest.fixture(params=["minimal_plan", "das_plan"])
+def any_plan(request):
+    """Both documents. A fit adds a featurizer table, a train block and the rows
+    of every update it will make — and none of that may make a plan less pure."""
+    return request.getfixturevalue(request.param)
+
+
 # --------------------------------------------------------------------- #
 # a plan is pure data
 # --------------------------------------------------------------------- #
@@ -32,8 +44,8 @@ def _walk(value, where="plan"):
             yield from _walk(item, f"{where}[{index}]")
 
 
-def test_a_plan_holds_strings_and_integers_and_nothing_else(minimal_plan):
-    for where, value in _walk(minimal_plan):
+def test_a_plan_holds_strings_and_integers_and_nothing_else(any_plan):
+    for where, value in _walk(any_plan):
         if dataclasses.is_dataclass(value):
             # plan.py's own ops, plus Address — which is (component, layer),
             # pure data, and the reason a tap can be sorted and printed.
@@ -47,8 +59,8 @@ def test_a_plan_holds_strings_and_integers_and_nothing_else(minimal_plan):
         assert not hasattr(value, "requires_grad"), f"{where} carries a graph"
 
 
-def test_a_plan_pickles_with_plain_pickle(minimal_plan):
-    assert pickle.loads(pickle.dumps(minimal_plan)) == minimal_plan
+def test_a_plan_pickles_with_plain_pickle(any_plan):
+    assert pickle.loads(pickle.dumps(any_plan)) == any_plan
 
 
 # --------------------------------------------------------------------- #
