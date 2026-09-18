@@ -13,20 +13,74 @@ line is DAS — the error term and the unselected directions come from `x`, the
 pre-write value, which is exactly what makes a subspace swap leave the
 orthogonal complement alone. That is why `err` and `x` are threaded through
 `inverse` even though the identity ignores both.
+
+**A featurizer is an object and a mechanism is a function**, and that asymmetry
+is forced rather than chosen: a trained rotation *is state*, so `featurize` and
+`inverse` have to be two methods over one parameter, while `swap` has nothing to
+remember (a coefficient, when a mechanism needs one, comes from the document as
+an argument). Both get a named protocol so the shared signature is written down
+once.
 """
 
 from __future__ import annotations
 
+from typing import Any, Protocol, runtime_checkable
+
 import torch
 
+from .shapes import Positions
 
-def gather(tensor, positions):
+
+@runtime_checkable
+class Featurizer(Protocol):
+    """A pair of maps between an activation and the feature space a write acts
+    in. `featurize` may throw information away; `err` is what it threw away, and
+    `inverse` gets it back together with the pre-write activation `x`."""
+
+    def featurize(self, x: Any) -> tuple[Any, Any]:
+        """x -> (f, err)."""
+        ...
+
+    def inverse(self, f: Any, err: Any, x: Any) -> Any:
+        """(f, err, x) -> an activation of x's shape."""
+        ...
+
+
+class Identity:
+    """The featurizer a read or write with no `featurizer` key gets: the feature
+    space is the activation itself and nothing is left over."""
+
+    def featurize(self, x: Any) -> tuple[Any, None]:
+        return x, None
+
+    def inverse(self, f: Any, err: Any, x: Any) -> Any:
+        return f
+
+
+class Mechanism(Protocol):
+    """A `do`: the feature value in, the feature value out. Stateless."""
+
+    def __call__(self, f: Any, operand: Any) -> Any: ...
+
+
+def swap(f: Any, operand: Any) -> Any:
+    """The absolute class: it replaces, it does not add."""
+    return operand
+
+
+# The two closed vocabularies, by the name a document spells. `featurizer.py`
+# will add a `subspace` object to the first and change nothing else.
+FEATURIZERS: dict[str, Featurizer] = {"identity": Identity()}
+MECHANISMS: dict[str, Mechanism] = {"swap": swap}
+
+
+def gather(tensor: Any, positions: Positions) -> Any:
     """(batch, seq, width) at one position per row -> (batch, width)."""
     index = torch.as_tensor(positions, device=tensor.device)
     return tensor[torch.arange(tensor.shape[0], device=tensor.device), index]
 
 
-def scatter(tensor, positions, values):
+def scatter(tensor: Any, positions: Positions, values: Any) -> Any:
     """A copy of `tensor` with one position per row replaced by `values`."""
     index = torch.as_tensor(positions, device=tensor.device)
     out = tensor.clone()
@@ -34,30 +88,15 @@ def scatter(tensor, positions, values):
     return out
 
 
-def _identity_featurize(x):
-    return x, None
-
-
-def _identity_inverse(f, err, x):
-    return f
-
-
-# name -> (featurize, inverse). The only entry today; `featurizer.py` will add
-# `subspace` here and change nothing else.
-FEATURIZERS = {"identity": (_identity_featurize, _identity_inverse)}
-
-
-def _swap(f, operand):
-    return operand
-
-
-# name -> mechanism. `swap` is the absolute class: it replaces, it does not add.
-MECHANISMS = {"swap": _swap}
-
-
-def apply_write(tensor, positions, operand, mechanism="swap", featurizer="identity"):
-    featurize, inverse = FEATURIZERS[featurizer]
+def apply_write(
+    tensor: Any,
+    positions: Positions,
+    operand: Any,
+    mechanism: str = "swap",
+    featurizer: str = "identity",
+) -> Any:
+    featurize = FEATURIZERS[featurizer]
     x = gather(tensor, positions)
-    f, err = featurize(x)
+    f, err = featurize.featurize(x)
     f = MECHANISMS[mechanism](f, operand)
-    return scatter(tensor, positions, inverse(f, err, x))
+    return scatter(tensor, positions, featurize.inverse(f, err, x))
