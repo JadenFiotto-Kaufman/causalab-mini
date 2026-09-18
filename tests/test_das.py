@@ -5,10 +5,13 @@ on tensors with no model anywhere near them. The second half runs
 `documents/das_cpu_reduction.json` end to end.
 """
 
+import json
+
 import pytest
+import safetensors
 import torch
 
-from causalab_mini import document, featurizer, ops, plan
+from causalab_mini import cli, document, featurizer, ops, output, plan, run
 
 
 def rotation(d=16, k=8, seed=0):
@@ -158,3 +161,129 @@ def test_the_same_ref_for_both_is_the_visible_train_equals_test_ablation(das_raw
     fitted = plan.build(document.Document.from_json(das_raw), data_root, model)
     assert fitted.train is not None
     assert fitted.train.evaluation.forwards[0].input_ids == fitted.forwards[0].input_ids
+
+
+# --------------------------------------------------------------------- #
+# the fit: one session, N executions of the same plan
+# --------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def fitted(das_plan, model):
+    return run.execute(model, das_plan)
+
+
+def test_the_fit_reduces_its_own_objective(fitted):
+    """Measured at step 0 and at the end, on the thing the document said to
+    minimize — `[[1.0, "ce"]]` — and not on anything else."""
+    losses = fitted["train/loss"]
+    assert losses[-1] < losses[0]
+    assert (losses[1:] < losses[:-1]).all(), losses
+
+
+def test_the_rotation_is_still_orthonormal_after_training(fitted):
+    """The Cayley parametrization's whole claim: no retraction step, no penalty
+    term, no projection after the update, and `QᵀQ` is still `I`."""
+    basis = featurizer.cayley(fitted["rot"])
+    assert (basis.T @ basis - torch.eye(8)).abs().max() < 1e-5
+
+
+def test_the_fit_moved_the_rotation_off_its_start(fitted):
+    assert not torch.equal(fitted["rot"], featurizer.start_weight(16, 8, 0))
+
+
+def test_early_stopping_ends_the_fit_before_its_epoch_budget(fitted):
+    """`steps.epochs` is 10 and one epoch is one update here, so a fit that ran
+    to the budget would leave 10 losses. The watched metric (`iia`, mode max)
+    *falls* on every pass — the objective is `ce`, and on this model the two
+    disagree — so the first pass is the best and patience 3 ends it at 4."""
+    assert len(fitted["train/loss"]) == 4
+    evaluated = fitted["train/eval"][:, 0]
+    assert (evaluated[1:] < evaluated[:-1]).all(), evaluated
+
+
+def test_the_same_seed_fits_the_same_rotation_and_another_seed_does_not(das_raw, data_root, model):
+    def fit(seed):
+        das_raw["method"]["train"]["seed"] = seed
+        built = plan.build(document.Document.from_json(das_raw), data_root, model)
+        return run.execute(model, built)["rot"]
+
+    assert torch.equal(fit(0), fit(0))
+    assert not torch.equal(fit(0), fit(1))
+
+
+def test_a_full_width_rotation_is_a_plain_swap_end_to_end(das_raw, data_root, model):
+    """The bridge between the two methods, through the whole engine: at `k = d`
+    the complement is empty, so DAS's write lands the counterfactual activation
+    entire — whatever the rotation is, trained or not — and the run's metrics are
+    the identity featurizer's to five decimals."""
+    das_raw["method"]["featurizers"]["rot"]["k"] = 16
+    rotated = run.execute(model, plan.build(document.Document.from_json(das_raw), data_root, model))
+
+    del das_raw["method"]["featurizers"], das_raw["method"]["train"]
+    del das_raw["method"]["reads"]["v_cf"]["featurizer"]
+    del das_raw["method"]["writes"]["patch"]["featurizer"]
+    das_raw["method"]["save"] = das_raw["method"]["save"][:2]
+    plain = run.execute(model, plan.build(document.Document.from_json(das_raw), data_root, model))
+
+    for name in ("iia", "ce"):
+        assert torch.allclose(rotated[name], plain[name], atol=1e-5), name
+
+
+def test_remote_local_fits_the_same_rotation_and_gets_the_same_numbers(model, das_plan):
+    """The single-path claim, under training: `remote="local"` serializes the
+    session — the loop, the optimizer and the backward with it — and runs it with
+    this project's modules hidden. Same plan, same numbers."""
+    here = run.execute(model, das_plan)
+    shipped = run.execute(model, das_plan, remote="local")
+    assert set(here) == set(shipped)
+    for name, values in here.items():
+        assert torch.equal(values, shipped[name]), name
+
+
+# --------------------------------------------------------------------- #
+# what leaves the run
+# --------------------------------------------------------------------- #
+
+
+def test_the_artifact_is_written_stamped_and_reloads_to_the_trained_values(
+    tmp_path, data_root, model, das_plan
+):
+    results = run.execute(model, das_plan)
+    written = output.write_results(tmp_path, das_plan, results)
+
+    assert sorted(path.name for path in written) == ["ce.json", "iia.json", "rot.safetensors"]
+    assert sorted(path.name for path in tmp_path.iterdir()) == [
+        "ce.json",
+        "iia.json",
+        "rot.safetensors",
+    ]
+    with safetensors.safe_open(tmp_path / "rot.safetensors", "pt") as bundle:
+        assert bundle.keys() == ["weight"]  # one auto-declared slot, `rot.weight`
+        assert torch.equal(bundle.get_tensor("weight"), results["rot"])
+        stamp = bundle.metadata()
+    # "A rotation fitted against bf16 weights is not the same artifact as one
+    # fitted against fp32 weights, and the stamp is what says so."
+    assert stamp["k"] == "8" and stamp["d"] == "16"
+    assert stamp["model_dtype"] == "fp32"
+    assert stamp["parametrization"] == "cayley"
+    assert stamp["trained_on"] == "weekdays/data#train"
+    assert stamp["produced_by"] == document.Document.load(data_root.parent / "das_cpu_reduction.json").digest
+    assert [row["unit"] for row in json.loads((tmp_path / "ce.json").read_text())] == ["nat", "nat"]
+
+
+def test_the_cli_runs_the_das_document_end_to_end(tmp_path, data_root):
+    exit_code = cli.main(
+        [
+            str(data_root.parent / "das_cpu_reduction.json"),
+            "--data-root",
+            str(data_root),
+            "--out",
+            str(tmp_path),
+            "--device-map",
+            "cpu",
+        ]
+    )
+    assert exit_code == 0
+    assert len(json.loads((tmp_path / "iia.json").read_text())) == 2
+    assert (tmp_path / "rot.safetensors").exists()

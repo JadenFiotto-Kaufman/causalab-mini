@@ -7,6 +7,8 @@ dependencies = [
     "nnsight",
     "nnterp",
     "torch",
+    # a trained featurizer leaves the run as a safetensors bundle.
+    "safetensors",
     # nnterp defaults device_map="auto", and transformers 5 refuses a device_map
     # without accelerate installed.
     "accelerate",

@@ -628,6 +628,11 @@ def _cross_check(
             "with no featurizer",
         )
 
+    _check(
+        not (set(metrics) & set(featurizers)),
+        f"{sorted(set(metrics) & set(featurizers))} names both a metric and a "
+        "featurizer; a save entry could not say which one it meant",
+    )
     trained = set(train.params) if train is not None else set()
     saved = {entry.value for entry in saves}
     for entry in saves:
