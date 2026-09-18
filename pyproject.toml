@@ -38,3 +38,18 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["causalab_mini*"]
+
+[tool.setuptools.package-data]
+causalab_mini = ["py.typed"]
+
+# The type checker: `uvx pyright`. `venvPath`/`venv` point it at this project's
+# environment so torch, nnsight and nnterp resolve; without them every import
+# of a dependency is an error and nothing else is visible.
+[tool.pyright]
+include = ["causalab_mini", "tests"]
+venvPath = "."
+venv = ".venv"
+# nnterp is installed editable through an import-hook finder rather than a path
+# entry, so a static checker cannot see it without being told where it is.
+extraPaths = ["/home/localjadenfk/wd/nnterp"]
+typeCheckingMode = "standard"

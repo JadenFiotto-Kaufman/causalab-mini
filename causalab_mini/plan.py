@@ -22,9 +22,12 @@ The shape, top down:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from . import data, encoding, metrics as metrics_module
 from .address import Address
+from .document import Document
 from .shapes import ExampleIds, Positions, TokenIds, TokenRows
 
 
@@ -88,7 +91,7 @@ class Plan:
     saves: tuple[SaveFile, ...]
 
 
-def build(document, data_root, model) -> Plan:
+def build(document: Document, data_root: str | Path, model: Any) -> Plan:
     """Compile a document into a plan. Takes the loaded model because two
     things have to be decided against it on the client: the tokenizer resolves
     prompts and answer columns, and `num_layers` bounds the layer band — a site
@@ -141,7 +144,7 @@ def build(document, data_root, model) -> Plan:
     return Plan(forwards=forwards, metrics=metrics, saves=saves)
 
 
-def _schedule(document) -> list[tuple[str, str]]:
+def _schedule(document: Document) -> list[tuple[str, str]]:
     """The forwards, as (model, input) pairs, in execution order.
 
     Cross-model data flow has one channel: a read in model A may be the operand
@@ -176,7 +179,7 @@ def _schedule(document) -> list[tuple[str, str]]:
     return ordered
 
 
-def _forward(name, role, document, batch) -> Forward:
+def _forward(name: str, role: str, document: Document, batch: encoding.Batch) -> Forward:
     """One model pass: its taps, grouped by address and put in forward order."""
     writes: dict[Address, list[WriteOp]] = {}
     if name in document.intervened_models:
@@ -221,7 +224,7 @@ def _forward(name, role, document, batch) -> Forward:
     )
 
 
-def _address(document, site_name) -> Address:
+def _address(document: Document, site_name: str) -> Address:
     """A site's address — the only call into the one file that knows about
     models."""
     site = document.sites[site_name]

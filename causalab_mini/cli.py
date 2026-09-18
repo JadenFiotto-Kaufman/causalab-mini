@@ -7,7 +7,7 @@ import argparse
 from . import document, model as model_module, output, plan as plan_module, run
 
 
-def main(argv=None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="causalab-mini")
     parser.add_argument("document", help="a protocol_version 3 document")
     parser.add_argument("--data-root", default="documents/data")

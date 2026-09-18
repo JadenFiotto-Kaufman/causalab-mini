@@ -10,6 +10,11 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import Any
+
+from .shapes import ExampleIds
+
+Row = dict[str, Any]
 
 _INDEXED_FIELD = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(?:\[(\d+)\])?$")
 
@@ -18,7 +23,7 @@ class DataError(ValueError):
     pass
 
 
-def load_rows(data_root, ref: str) -> list[dict]:
+def load_rows(data_root: str | Path, ref: str) -> list[Row]:
     """`weekdays/data#train` -> the rows of <root>/weekdays/data.json whose
     `split` column is "train"."""
     path, _, split = ref.partition("#")
@@ -31,7 +36,7 @@ def load_rows(data_root, ref: str) -> list[dict]:
     return rows
 
 
-def field_text(row: dict, field: str) -> str:
+def field_text(row: Row, field: str) -> str:
     """`input` -> the column; `counterfactual_inputs[0]` -> one entry of a
     list-valued column. No deeper indexing exists."""
     match = _INDEXED_FIELD.match(field)
@@ -48,7 +53,7 @@ def field_text(row: dict, field: str) -> str:
     return value
 
 
-def column(rows: list[dict], name: str) -> list[str]:
+def column(rows: list[Row], name: str) -> list[str]:
     """A metric's column, off the *base* rows. A row whose value is null or
     empty is an excluded measurement in causalab; nothing in this corpus has
     one, so we refuse rather than pretend to have eligibility machinery."""
@@ -64,7 +69,7 @@ def column(rows: list[dict], name: str) -> list[str]:
     return values
 
 
-def example_ids(rows: list[dict]) -> tuple[str, ...]:
+def example_ids(rows: list[Row]) -> ExampleIds:
     """The row's label: the `example_id` column if the table has one, else the
     zero-based row index as a string."""
     return tuple(

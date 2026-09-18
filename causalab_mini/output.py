@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
+
+from .plan import Plan
 
 
-def write_results(out_dir, plan, results) -> list[Path]:
+def write_results(out_dir: str | Path, plan: Plan, results: dict[str, Any]) -> list[Path]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     written = []

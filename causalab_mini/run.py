@@ -13,13 +13,16 @@ of those ships it.
 
 from __future__ import annotations
 
+from typing import Any
+
 import nnsight
 import torch
 
 from . import metrics, ops
+from .plan import Forward, Plan
 
 
-def execute(model, plan, remote: bool | str = False) -> dict:
+def execute(model: Any, plan: Plan, remote: bool | str = False) -> dict[str, Any]:
     """Run `plan` against `model` and return {metric name: per-row tensor}."""
     if remote:
         # Our own package is not installed on an NDIF server, so the functions
@@ -35,7 +38,7 @@ def execute(model, plan, remote: bool | str = False) -> dict:
     return dict(results)
 
 
-def batch(forward) -> dict:
+def batch(forward: Forward) -> dict[str, Any]:
     """The plan's integers, as the tensors a forward takes."""
     return {
         "input_ids": torch.tensor(forward.input_ids),
@@ -43,7 +46,7 @@ def batch(forward) -> dict:
     }
 
 
-def apply_taps(model, forward, values) -> None:
+def apply_taps(model: Any, forward: Forward, values: dict[str, Any]) -> None:
     """One pass over the addresses of one forward, in forward order.
 
     `values` carries reads between forwards inside the session: an operand is a
@@ -63,7 +66,7 @@ def apply_taps(model, forward, values) -> None:
             values[read.name] = ops.gather(tap.address.read(model), read.positions).clone()
 
 
-def score(plan, values, results) -> None:
+def score(plan: Plan, values: dict[str, Any], results: dict[str, Any]) -> None:
     """Metrics run inside the session, so what leaves is one number per row."""
     for metric in plan.metrics:
         results[metric.name] = metrics.compute(

@@ -8,6 +8,9 @@ never resolves a position.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
+
+from .shapes import Positions, TokenRows
 
 
 class EncodingError(ValueError):
@@ -23,13 +26,13 @@ class Batch:
     padding side.
     """
 
-    input_ids: tuple[tuple[int, ...], ...]
-    attention_mask: tuple[tuple[int, ...], ...]
-    starts: tuple[int, ...]
-    ends: tuple[int, ...]
+    input_ids: TokenRows
+    attention_mask: TokenRows
+    starts: Positions
+    ends: Positions
 
 
-def encode(tokenizer, texts: list[str]) -> Batch:
+def encode(tokenizer: Any, texts: list[str]) -> Batch:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     encoded = tokenizer(list(texts), padding=True)
@@ -45,7 +48,7 @@ def encode(tokenizer, texts: list[str]) -> Batch:
     return Batch(input_ids, mask, tuple(starts), tuple(ends))
 
 
-def positions(batch: Batch, pos: int) -> tuple[int, ...]:
+def positions(batch: Batch, pos: int) -> Positions:
     """One absolute index into the padded sequence, per row.
 
     Negative counts from the end of the row's content, non-negative from its
@@ -60,7 +63,7 @@ def positions(batch: Batch, pos: int) -> tuple[int, ...]:
     return tuple(resolved)
 
 
-def token_id(tokenizer, text: str, token_form: str) -> int:
+def token_id(tokenizer: Any, text: str, token_form: str) -> int:
     """One vocabulary id for an authored answer string.
 
     A leading space in the column value is normalized away first, so `" X"` and

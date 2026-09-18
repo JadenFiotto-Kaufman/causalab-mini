@@ -10,12 +10,14 @@ from __future__ import annotations
 import torch
 from nnterp import StandardizedTransformer
 
+from .document import ModelSpec
+
 # `model.dtype` is part of the experiment's identity, not of the run: the same
 # document at bf16 and at fp32 is two different experiments.
 DTYPES = {"fp32": torch.float32, "bf16": torch.bfloat16}
 
 
-def load(spec, device_map: str = "auto") -> StandardizedTransformer:
+def load(spec: ModelSpec, device_map: str = "auto") -> StandardizedTransformer:
     return StandardizedTransformer(
         spec.key,
         revision=spec.revision,

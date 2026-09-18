@@ -71,11 +71,11 @@ def _pos(spec: Any, where: str) -> int:
     {"index": -1} — one token per row, counted from the end of the sequence."""
     if isinstance(spec, dict) and set(spec) == {"index"}:
         spec = spec["index"]
-    _check(
-        isinstance(spec, int) and not isinstance(spec, bool),
-        f"{where}: only an integer position (or {{'index': i}}) is implemented",
-    )
-    return int(spec)
+    if isinstance(spec, bool) or not isinstance(spec, int):
+        raise DocumentError(
+            f"{where}: only an integer position (or {{'index': i}}) is implemented"
+        )
+    return spec
 
 
 @dataclass(frozen=True)
@@ -135,11 +135,11 @@ class SiteSpec:
         if raw.get("component") in LAYERLESS:
             _check(layers is None, f"site {name!r}: {raw['component']} takes no layers")
             return cls(raw["component"], None)
-        _check(
-            isinstance(layers, list) and len(layers) == 1,
-            f"site {name!r}: layers must be a one-element band; a band spanning "
-            "several layers is one address and is not implemented",
-        )
+        if not isinstance(layers, list) or len(layers) != 1:
+            raise DocumentError(
+                f"site {name!r}: layers must be a one-element band; a band spanning "
+                "several layers is one address and is not implemented"
+            )
         return cls(raw["component"], int(layers[0]))
 
 
