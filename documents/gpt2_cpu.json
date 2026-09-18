@@ -1,0 +1,49 @@
+{
+  "header": {
+    "protocol_version": "3",
+    "title": "block_output interchange, tiny GPT-2, CPU",
+    "description": "AUTHORED FOR causalab-mini — not copied from causalab, like documents/attention_query_cpu.json and documents/das_cpu_reduction.json. It exists to ask one question: does the engine generalize to a second model family, or only the metrics? It does not ask whether the *result* means anything — the weights are random. minimal_cpu.json cannot be pointed at this checkpoint, because tiny GPT-2's near-character byte-level vocabulary spells ' Friday' as four tokens and a single-token answer metric refuses; so the weekdays table is replaced by documents/data/counting, whose answers (' one' ... ' four') are one token each under that tokenizer. Everything else is minimal_cpu.json's method with one metric: one swap at the last prompt token of layer 2 (the tiny GPT-2 has five layers), one lm_head read, one logit_diff. Unlike the tiny Llama's sentencepiece tokenizer, this one gives ' two' and 'two' different ids, so token_form: space_prefixed is load-bearing here and inert there."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-gpt2",
+    "revision": "71034c5d8bde858ff824298bdedc65515b97d2b9",
+    "dtype": "fp32"
+  },
+  "data": {
+    "base": {"dataset": "counting/train", "field": "input"},
+    "counterfactual": {"dataset": "counting/train", "field": "counterfactual_inputs[0]"}
+  },
+  "method": {
+    "sites": {
+      "target": {"component": "block_output", "layers": [2]},
+      "lm_head": {"component": "lm_head"}
+    },
+    "reads": {
+      "v_cf": {"site": "target", "pos": -1, "model": "original", "input": "counterfactual"},
+      "logits": {"site": "lm_head", "pos": -1, "model": "patched", "input": "base"}
+    },
+    "writes": {
+      "patch": {"site": "target", "pos": -1, "do": {"swap": "v_cf"}}
+    },
+    "intervened_models": {
+      "patched": {"input": "base", "writes": ["patch"]}
+    },
+    "metrics": {
+      "logit_diff": {
+        "kind": "logit_diff",
+        "of": "logits",
+        "a": "cf_answer",
+        "b": "base_answer",
+        "token_form": "space_prefixed"
+      }
+    },
+    "save": [
+      {
+        "value": "logit_diff",
+        "model": "patched",
+        "input": "base",
+        "file_path": "logit_diff.json"
+      }
+    ]
+  }
+}

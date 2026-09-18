@@ -226,6 +226,95 @@ which means a test that passes on tiny-Llama proves nothing about the
 `token_form` machinery. nnterp has `add_prefix_false_tokenizer`, which is
 adjacent to this problem but does not solve it.
 
+### 1.8b The second family needed its own rows, and nothing else
+
+*Where it came from:* running the engine on `hf-internal-testing/tiny-random-gpt2`.
+
+`documents/gpt2_cpu.json` is minimal_cpu.json's method on a GPT-2, and the one
+thing it could not reuse is the **data**: tiny GPT-2's byte-level vocabulary
+spells `" Friday"` as `[304, 82, 271, 288]`, so a single-token answer metric
+refuses (`test_the_shipped_weekdays_answers_are_not_single_tokens_here` asserts
+the refusal, by the message, on the shipped document). `documents/data/counting`
+is four rows whose answers (`" one"` … `" four"`) are one token each here.
+
+That is the scope line this slice draws, and it held: the **engine** generalized
+with no change at all, and the **metrics** needed a new table. Also worth
+recording, because it is the counterexample to §1.8: on this tokenizer `" two"`
+and `"two"` are different ids, so `token_form: space_prefixed` is load-bearing
+here and inert on the tiny Llama. A `token_form` test that passes only on the
+sentencepiece model proves nothing; this is the model that can prove it.
+
+### 1.11 Family axes: where they were needed, and why not in `address.py`
+
+**This is the headline of the GPT-2 slice: no entry in `_COMPONENTS` needed a
+family axis.** One table, three components, two families, and
+`test_one_address_serves_both_families` asserts that `Address.locate` returns
+*equal* addresses on both models — same component, same layer, same resolved
+operation.
+
+That is not because the two models are alike. Their real module paths share
+nothing:
+
+| | tiny Llama | tiny GPT-2 |
+|---|---|---|
+| a block | `model.model.layers.0` | `model.transformer.h.0` |
+| its attention | `model.model.layers.0.self_attn` | `model.transformer.h.0.attn` |
+| the head | `model.lm_head` | `model.lm_head` |
+
+It is because of two decisions, each of which is a fact worth writing down:
+
+1. **A path in `_COMPONENTS` is written in nnterp's accessors, not in module
+   names.** `layers.{layer}` resolves `model.layers[0]`, `attentions.{layer}`
+   resolves `model.attentions[0]`, and those accessors are nnterp's standardized
+   tree, which *is* the family axis — absorbed by a dependency instead of
+   written here. (Both spellings work: nnterp also aliases the attribute, so
+   `layers.0.self_attn` reaches GPT-2's `attn`. We use the accessor, because it
+   is the one nnterp documents.)
+2. **The interior's operation is resolved per model rather than tabulated.**
+   Even if the two forwards had spelled the call differently, the family
+   difference would have landed in the matcher's needle, not in a family column
+   — and the needle would then be the thing to think about.
+
+They *do* spell it identically (`attention_interface_1` on both), and the
+reason matters more than the fact. GPT-2's attention forward is much bigger: a
+cross-attention branch, an `is_updated` cache branch, a `using_eager` branch
+with a second attention implementation (`self__upcast_and_reordered_attn_0`,
+which the Llama forward has no counterpart for). None of that moves the suffix,
+because **a call-op suffix counts calls of one symbol** and the forward calls
+`attention_interface` once.
+
+A *binding* suffix does not survive the same trip, and here it is, measured:
+
+| operation | tiny Llama | tiny GPT-2 |
+|---|---|---|
+| `query_states_0` | the query, projected and reshaped (line 10) | the **cross-attention** query (line 27), on a branch this model never runs |
+| `query_states_1` | — | the query this model actually uses (line 46) |
+
+So an address spelled as the binding `query_states_0` reads the right tensor on
+one family and a never-executed branch on the other, with no error. This is the
+same shape as the `attn_weights_1`/`attn_weights_2` divergence that motivated
+addressing the call, reproduced on a different pair of names, and it is the
+single best argument for "address the call".
+
+### 1.12 A layer-0 query is a no-op for prompts that share their last token
+
+*Where it came from:* a GPT-2 interchange at `attention_query` layer 0 that
+changed nothing, and looked exactly like a broken write.
+
+The query at layer 0 is a function of the block input at that position, which is
+the token embedding plus the position embedding and nothing else. The four
+`counting` prompts have the same length and the same final token, so their
+layer-0 queries at `pos: -1` are *the same tensor*, and swapping one for another
+is arithmetically a no-op —
+`test_the_query_at_layer_0_carries_nothing_a_prompt_pair_differs_in` asserts
+both halves (identical results, and identical query rows). The same document at
+layer 2 moves the logits.
+
+It did not show up on the tiny Llama because the weekdays prompts have
+*different lengths*, so RoPE alone makes the layer-0 queries differ. A test that
+happens to pick prompts of unequal length proves the write works; one that picks
+equal lengths proves nothing, and the engine cannot tell you which you did.
+
 ### 1.9 dtype names
 
 `{"fp32": torch.float32, "bf16": torch.bfloat16}` in `model.py`. Small, but it is
@@ -257,6 +346,15 @@ In priority order, each of which would delete code here:
    maintain a private rank per component.
 4. **Content-span position resolution** from an encoded batch: "row i, token k
    from the end", padding-side-independent.
+5. **Which axis of the tensor at a tap is the sequence**, and — for an interior —
+   **which argument of a call carries which tensor**. Both are per-address
+   constants (2 and 1 for `attention_query`); both are currently a comment
+   beside a number in `_COMPONENTS`.
+
+What nnterp *does* give, and it is the reason (1) needs so little: the
+standardized accessors (`layers`, `attentions`, `lm_head`) already absorb the
+family axis, so an address written in accessor spellings needs no family column
+at all (§1.11). The gap is that they are live accessors and not a table.
 
 (1)–(3) are `address.py` in its entirety. (4) is half of `encoding.py`.
 
@@ -314,8 +412,9 @@ the corpus is actually exercising.
 ## 4. Things this slice does not know, and should
 
 - **Whether a site's component even exists on the loaded model.** We check the
-  layer index against `num_layers`, and nothing else. `block_output` on a model
-  with no `layers` envoy would fail inside the trace.
+  layer index against `num_layers`, and — for an interior only — that its
+  operation is in the forward. `block_output` on a model with no `layers` envoy
+  would still fail inside the trace.
 - **Whether the head tap is the last position only.** See §1.6.
 - **Whether a read and a write at the same address in the same model are
   ordered correctly beyond "writes first".** The rule is implemented (a tap's

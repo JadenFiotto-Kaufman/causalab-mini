@@ -1,0 +1,34 @@
+[
+  {
+    "input": "If the count is one, next is",
+    "counterfactual_inputs": ["If the count is two, next is"],
+    "base_answer": " two",
+    "cf_answer": " three",
+    "label": " three",
+    "split": "all"
+  },
+  {
+    "input": "If the count is two, next is",
+    "counterfactual_inputs": ["If the count is three, next is"],
+    "base_answer": " three",
+    "cf_answer": " four",
+    "label": " four",
+    "split": "all"
+  },
+  {
+    "input": "If the count is three, next is",
+    "counterfactual_inputs": ["If the count is four, next is"],
+    "base_answer": " four",
+    "cf_answer": " one",
+    "label": " one",
+    "split": "all"
+  },
+  {
+    "input": "If the count is four, next is",
+    "counterfactual_inputs": ["If the count is one, next is"],
+    "base_answer": " one",
+    "cf_answer": " two",
+    "label": " two",
+    "split": "all"
+  }
+]
