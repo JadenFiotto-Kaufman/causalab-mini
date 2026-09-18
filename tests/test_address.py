@@ -15,12 +15,27 @@ def test_an_address_is_the_documents_words_and_pickles_as_such():
 
 
 def test_addresses_sort_into_forward_order():
-    stack = [Address("lm_head"), Address("block_output", 1), Address("block_output", 0)]
-    assert sorted(stack, key=lambda one: one.key) == [
-        Address("block_output", 0),
-        Address("block_output", 1),
+    """Depth first, then position inside the block, then everything after the
+    stack. An interior is not a module boundary, so it needs the middle rank."""
+    stack = [
         Address("lm_head"),
+        Address("block_output", 1),
+        Address("block_output", 0),
+        Address("attention_query", 1, "attention_interface_1"),
+        Address("attention_query", 0, "attention_interface_1"),
     ]
+    assert [(one.component, one.layer) for one in sorted(stack, key=lambda one: one.key)] == [
+        ("attention_query", 0),
+        ("block_output", 0),
+        ("attention_query", 1),
+        ("block_output", 1),
+        ("lm_head", None),
+    ]
+
+
+def test_a_module_boundary_cannot_carry_an_operation():
+    with pytest.raises(AddressError, match="module boundary"):
+        Address("block_output", 0, "attention_interface_1")
 
 
 def test_a_component_with_no_address_is_refused_here():

@@ -5,13 +5,15 @@ itself** — every module path, side, tuple index, operation name and shape
 assumption that nnterp did not hand us as data — plus what the document format
 made us implement twice.
 
-All of it is in one file, `causalab_mini/address.py` (67 lines), with the
+All of it is in one file, `causalab_mini/address.py`, with the
 padding-dependent part in `causalab_mini/encoding.py`. That concentration is the
 result this slice was built to produce: if the facts below moved into nnterp,
 `address.py` would be a lookup and nothing else in the project would change.
 
-Measured against nnterp at `334e4ef` and transformers 5.17.0, on
-`hf-internal-testing/tiny-random-LlamaForCausalLM` @ `9fb19125`.
+Measured against nnterp at `334e4ef` (dist `1.3.1.dev64+g0e4b401af`), nnsight
+`0.8.1.dev125+ga8ee93782` and transformers 5.17.0, on
+`hf-internal-testing/tiny-random-LlamaForCausalLM` @ `9fb19125` and
+`hf-internal-testing/tiny-random-gpt2`.
 
 ---
 
@@ -103,6 +105,101 @@ integers on the handle, and they are the counterexample that shows what good
 looks like: `plan.build` uses `model.num_layers` to refuse a site naming a layer
 the model does not have, on the client, before anything runs. Every fact in
 §1.1–§1.6 wants to be available in exactly that form.
+
+### 1.6b `attention_query` is a call, not a module, and not a binding either
+
+*Where it came from:* `print(model.attentions[0].source)` on both tiny models,
+read line by line. Nothing derived it; there is no table anywhere that says it.
+
+The component is "the query tensor as the attention implementation receives
+it". It never crosses a module boundary — `q_proj` is too early (pre-RoPE, and
+not head-shaped the way the kernel wants), and the attention module's output is
+far too late. It exists only as an argument of one call inside
+`LlamaAttention.forward` / `GPT2Attention.forward`:
+
+```
+ ALL_ATTENTION_FUNCTIONS_get_interface_0 -> 20     attention_interface: Callable = ALL_ATTENTION_FUNCTIONS.get_interface(
+ attention_interface_0                   ->  +     ...
+                                            21         self.config._attn_implementation, eager_attention_forward
+                                            22     )
+ attention_interface_1                   -> 24     attn_output, attn_weights = attention_interface(
+                                            25         self,
+                                            26         query_states,
+```
+
+Four facts had to be written down, and `causalab_mini/address.py`'s
+`_COMPONENTS["attention_query"]` is exactly those four:
+
+1. **The module is `attentions.{layer}`** — nnterp's accessor, not a real module
+   path (see §1.11).
+2. **The operation is the call whose call site contains `"attention_interface("`.**
+   Not a name: nnsight's `{callable}_{occurrence}` namespace holds assignments
+   and calls *together*, so this forward has `attention_interface_0` — the
+   assignment that looks the implementation up — and `attention_interface_1` —
+   the call that runs it. A substring match on the name `attention_interface`
+   matches **three** operations (the `get_interface` call, the name it binds,
+   and the call), and `causalab_mini` refuses on that with the whole inventory
+   printed; `"attention_interface("` is call-shaped and matches one. An
+   occurrence suffix is a property of the transformers version and of which
+   branches exist in that particular forward, so nothing hard-codes
+   `attention_interface_1`: `Address.locate(model, …)` resolves it against the
+   loaded checkpoint, on the client, and the plan then carries the resolved
+   name as a string.
+3. **The query is positional argument 1.** The interface is called
+   `attention_interface(self, query, key, value, attention_mask, **kwargs)` —
+   `args[0]` is the attention *module*, so nnsight's `.input` (its first
+   argument) is the module, not the query. `.inputs` and an index is the only
+   honest reach.
+4. **The sequence is axis 2.** At this point the query is
+   `(batch, head, seq, head_dim)` — measured `(2, 4, 5, 4)` on tiny Llama and
+   `(2, 4, 10, 8)` on tiny GPT-2 — not `(batch, seq, width)`. Every position
+   resolution in this project produces one index per row into *the sequence*,
+   so an address has to say which axis that is. `ops.gather`/`ops.scatter` take
+   it; every module boundary passes 1 and this one passes 2.
+
+Two things we checked rather than assumed:
+
+- **It needs no eager attention.** Both checkpoints load with
+  `config._attn_implementation == "sdpa"`, and the read, the write and the
+  change in the logits all happen under it. That is because q/k/v are arguments
+  *to* the dispatch, one level above the kernel: `attention_probs` and
+  `attention_scores` live inside `eager_attention_forward`, which sdpa never
+  calls, but the interface call itself is in the module's own forward whatever
+  implementation is selected.
+- **It is past RoPE.** `test_the_query_is_head_shaped_and_already_rotated`
+  compares the tensor at the address with `q_proj.output` reshaped the way the
+  forward reshapes it; they differ. So `attention_query` is the post-rotation
+  query, which is what "as the implementation receives it" has to mean.
+
+### 1.6c Forward order acquired a rank *inside* a block
+
+*Where it came from:* nnsight's `OutOfOrderError`, again, and by construction.
+
+§1.4 said a private total order over the component vocabulary was needed.
+Adding one interior showed the order is not one-dimensional: `attention_query`
+at layer L runs **before** `block_output` at layer L, and after `block_output`
+at layer L−1. The sort key is now `(inside the stack?, depth, rank within the
+block)`. Reading `q_proj.output` after reading the interface call in the same
+trace raises, so the intra-module order is enforced just as strictly as the
+inter-module one — which means an engine with several interior components
+(causalab has about twenty) must rank them against each other *within one
+module's forward*, and nothing in nnsight or nnterp publishes that ranking.
+`print(module.source)` shows it to a human, in execution order; there is no
+programmatic "op A precedes op B".
+
+### 1.6d An op name is available as data, and it is the only one that is
+
+`Source.names` and each op's `.line`/`.text` are readable **outside** a trace,
+so the matcher runs on the client and a bad address is a load error. This is the
+one place where the thing we needed was available as data rather than as a live
+accessor, and it is worth saying so: it is what makes an interior address
+carryable in a pure-data plan at all.
+
+The cost is that reaching `.source` instruments the module's forward for the
+rest of the process (nnsight documents the overhead as a few percent when not
+tracing). Our session-scoped model fixture is shared by every test and the
+numbers did not move, but a project that resolves an address against a model it
+then benchmarks should know.
 
 ### 1.7 Padding side decides what `pos: -1` means
 

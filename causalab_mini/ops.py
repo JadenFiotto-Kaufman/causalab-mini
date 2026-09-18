@@ -74,17 +74,23 @@ FEATURIZERS: dict[str, Featurizer] = {"identity": Identity()}
 MECHANISMS: dict[str, Mechanism] = {"swap": swap}
 
 
-def gather(tensor: Any, positions: Positions) -> Any:
-    """(batch, seq, width) at one position per row -> (batch, width)."""
+def gather(tensor: Any, positions: Positions, seq_axis: int = 1) -> Any:
+    """One position per row, with the sequence axis dropped: (batch, seq, width)
+    -> (batch, width). `seq_axis` is which axis the sequence runs along — 1 at a
+    module boundary, 2 inside attention, where a tensor is (batch, head, seq,
+    head_dim). Which one it is is a fact about the address, not about the
+    tensor, so it is passed in."""
+    rows = torch.arange(tensor.shape[0], device=tensor.device)
     index = torch.as_tensor(positions, device=tensor.device)
-    return tensor[torch.arange(tensor.shape[0], device=tensor.device), index]
+    return tensor.movedim(seq_axis, 1)[rows, index]
 
 
-def scatter(tensor: Any, positions: Positions, values: Any) -> Any:
+def scatter(tensor: Any, positions: Positions, values: Any, seq_axis: int = 1) -> Any:
     """A copy of `tensor` with one position per row replaced by `values`."""
+    rows = torch.arange(tensor.shape[0], device=tensor.device)
     index = torch.as_tensor(positions, device=tensor.device)
     out = tensor.clone()
-    out[torch.arange(tensor.shape[0], device=tensor.device), index] = values.to(out.dtype)
+    out.movedim(seq_axis, 1)[rows, index] = values.to(out.dtype)  # a view of `out`
     return out
 
 
@@ -94,9 +100,10 @@ def apply_write(
     operand: Any,
     mechanism: str = "swap",
     featurizer: str = "identity",
+    seq_axis: int = 1,
 ) -> Any:
     featurize = FEATURIZERS[featurizer]
-    x = gather(tensor, positions)
+    x = gather(tensor, positions, seq_axis)
     f, err = featurize.featurize(x)
     f = MECHANISMS[mechanism](f, operand)
-    return scatter(tensor, positions, featurize.inverse(f, err, x))
+    return scatter(tensor, positions, featurize.inverse(f, err, x), seq_axis)

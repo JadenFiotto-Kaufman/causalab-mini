@@ -30,7 +30,7 @@ Json = dict[str, Any]
 PROTOCOL_VERSION = "3"
 
 DTYPES = ("fp32", "bf16")
-COMPONENTS = ("block_output", "lm_head")
+COMPONENTS = ("block_output", "lm_head", "attention_query")
 LAYERLESS = ("lm_head",)
 MECHANISMS = ("swap",)
 TOKEN_FORMS = ("space_prefixed",)

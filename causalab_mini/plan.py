@@ -104,6 +104,13 @@ def build(document: Document, data_root: str | Path, model: Any) -> Plan:
                 f"site {name!r}: layer {site.layer} is outside the model's "
                 f"{model.num_layers} layers"
             )
+    # One address per site, resolved against the model now: an interior's
+    # `.source` operation is named by the loaded checkpoint's forward, so a
+    # document that cannot be addressed is a load error here, on the client.
+    addresses = {
+        name: Address.locate(model, site.component, site.layer)
+        for name, site in document.sites.items()
+    }
     rows = {role: data.load_rows(data_root, spec.dataset) for role, spec in document.roles.items()}
     counts = {role: len(table) for role, table in rows.items()}
     if len(set(counts.values())) != 1:
@@ -114,7 +121,8 @@ def build(document: Document, data_root: str | Path, model: Any) -> Plan:
     }
 
     forwards = tuple(
-        _forward(name, role, document, batches[role]) for name, role in _schedule(document)
+        _forward(name, role, document, batches[role], addresses)
+        for name, role in _schedule(document)
     )
     base_rows = rows["base"]  # base is the schema of the pair: metrics read its columns
     metrics = tuple(
@@ -179,13 +187,19 @@ def _schedule(document: Document) -> list[tuple[str, str]]:
     return ordered
 
 
-def _forward(name: str, role: str, document: Document, batch: encoding.Batch) -> Forward:
+def _forward(
+    name: str,
+    role: str,
+    document: Document,
+    batch: encoding.Batch,
+    addresses: dict[str, Address],
+) -> Forward:
     """One model pass: its taps, grouped by address and put in forward order."""
     writes: dict[Address, list[WriteOp]] = {}
     if name in document.intervened_models:
         for write_name in document.intervened_models[name].writes:
             spec = document.writes[write_name]
-            writes.setdefault(_address(document, spec.site), []).append(
+            writes.setdefault(addresses[spec.site], []).append(
                 WriteOp(
                     name=write_name,
                     positions=encoding.positions(batch, spec.pos),
@@ -200,7 +214,7 @@ def _forward(name: str, role: str, document: Document, batch: encoding.Batch) ->
     for read_name, spec in document.reads.items():
         if (spec.model, spec.input) != (name, role):
             continue
-        reads.setdefault(_address(document, spec.site), []).append(
+        reads.setdefault(addresses[spec.site], []).append(
             ReadOp(name=read_name, positions=encoding.positions(batch, spec.pos))
         )
 
@@ -223,9 +237,3 @@ def _forward(name: str, role: str, document: Document, batch: encoding.Batch) ->
         taps=tuple(taps),
     )
 
-
-def _address(document: Document, site_name: str) -> Address:
-    """A site's address — the only call into the one file that knows about
-    models."""
-    site = document.sites[site_name]
-    return Address(site.component, site.layer)

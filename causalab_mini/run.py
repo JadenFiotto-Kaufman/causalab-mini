@@ -60,10 +60,13 @@ def apply_taps(model: Any, forward: Forward, values: dict[str, Any]) -> None:
                 values[write.operand],
                 write.mechanism,
                 write.featurizer,
+                tap.address.seq_axis,
             )
             tap.address.write(model, patched)
         for read in tap.reads:
-            values[read.name] = ops.gather(tap.address.read(model), read.positions).clone()
+            values[read.name] = ops.gather(
+                tap.address.read(model), read.positions, tap.address.seq_axis
+            ).clone()
 
 
 def score(plan: Plan, values: dict[str, Any], results: dict[str, Any]) -> None:
