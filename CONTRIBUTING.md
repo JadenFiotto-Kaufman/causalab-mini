@@ -24,6 +24,13 @@ uv run causalab-mini documents/minimal_cpu.json --data-root documents/data \
     --out out --device-map cpu
 ```
 
+`documents/das_cpu_reduction.json` is the same command and takes a few seconds
+longer: it declares a `train` block, so the run fits a rotation before it scores
+anything, and writes `rot.safetensors` beside the two metric tables. The fit
+happens inside the same single session as the run — see `causalab_mini/run.py` —
+so `--remote local` exercises the loop, the optimizer and the backward pass over
+the serialization path, exactly as `--remote true` would.
+
 Read `NOTES.md` before changing what a document means — it is the ground-truth
 reading of the protocol — and add to `FINDINGS.md` every model fact you had to
 encode by hand.

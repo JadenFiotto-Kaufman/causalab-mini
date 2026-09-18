@@ -6,9 +6,13 @@ assumption that nnterp did not hand us as data — plus what the document format
 made us implement twice.
 
 All of it is in one file, `causalab_mini/address.py`, with the
-padding-dependent part in `causalab_mini/encoding.py`. That concentration is the
-result this slice was built to produce: if the facts below moved into nnterp,
-`address.py` would be a lookup and nothing else in the project would change.
+padding-dependent part in `causalab_mini/encoding.py` and one autograd fact in
+`causalab_mini/ops.py`. That concentration is the result this slice was built to
+produce: if the facts below moved into nnterp, `address.py` would be a lookup
+and nothing else in the project would change. Adding DAS — a rotation, a fit,
+and a training loop inside the session — added **no** new module path, side,
+tuple index or operation name; §1.13–§1.15 are the three things it did add, and
+none of them is an address.
 
 Measured against nnterp at `334e4ef` (dist `1.3.1.dev64+g0e4b401af`), nnsight
 `0.8.1.dev125+ga8ee93782` and transformers 5.17.0, on
@@ -315,6 +319,55 @@ It did not show up on the tiny Llama because the weekdays prompts have
 happens to pick prompts of unequal length proves the write works; one that picks
 equal lengths proves nothing, and the engine cannot tell you which you did.
 
+### 1.13 A tap's width is the one model fact nnterp hands over as data
+
+*Where it came from:* `StandardizedTransformer.hidden_size` / `.vocab_size`,
+already on the handle.
+
+DAS needs `d`: `k` is the only width a document authors, and `d` is derived from
+(model, site). For the two components that can carry a featurizer here it is a
+plain integer attribute on the nnterp handle, readable on the client with no
+trace — so `Address.width(model)` is a two-line lookup, and a `k` wider than its
+site is a load error before anything runs.
+
+This is §1.6's point made twice over: every fact in §1.1–§1.6 wants to be
+available in exactly this form, and this one is. What is *not* available is the
+width of an attention interior — `head_dim` is on the config, not on the
+standardized handle — so `_COMPONENTS["attention_query"].width` is `None` and a
+featurizer there is refused rather than guessed.
+
+### 1.14 `scatter`'s clone is load-bearing for a fit, not hygiene
+
+*Where it came from:* the first training loop, which raised
+`one of the variables needed for gradient computation has been modified by an
+inplace operation: [torch.FloatTensor [2, 16]], which is output 0 of AsStrided,
+is at version 1`.
+
+`ops.scatter` copies the activation and writes one position into the copy. For
+activation patching that reads as defensiveness — nothing downstream would have
+noticed the in-place edit. For a fit it is the difference between a backward
+pass and an exception: the obvious spelling,
+`model.layers_output[0][:, -1, :] = edited`, mutates the tensor autograd
+recorded as an input to the operations that produced it, and torch refuses.
+
+The finding is the shape of the failure, not the fix: **the in-place write is
+correct until the moment you differentiate through it**, and nothing about
+activation patching tells you that. An engine that only ever ran forward
+interventions would have shipped it.
+
+### 1.15 A model's parameters are frozen, and nobody said so
+
+*Where it came from:* `train.params`, and the absence of anything else.
+
+`train.params` is the protocol's only trainability declaration, so the
+optimizer's parameter list is literally it. But the tiny Llama's weights arrive
+with `requires_grad=True` — nothing in nnterp or nnsight freezes them, and the
+backward pass through the patched forward *does* reach them and accumulates
+`.grad` on every model weight the graph touches. It changes nothing here,
+because the optimizer only holds `rot.weight`, but the memory is real and a
+longer fit on a real model would notice. "The model is frozen" is a property of
+which tensors the optimizer was given, not a property of the model.
+
 ### 1.9 dtype names
 
 `{"fp32": torch.float32, "bf16": torch.bfloat16}` in `model.py`. Small, but it is
@@ -405,6 +458,40 @@ we deliberately did not, because the corpus is three documents.
 makes them distinct; a reader of the data cannot tell which column a metric
 *should* use.
 
+**One `seed`, two random number generators, on two sides of the session
+boundary.** `train.seed` covers "both parameter initialization and data order".
+Parameter initialization has to happen *inside* the session — a parameter drawn
+on the client is a tensor the block only receives a copy of, and an optimizer
+over it trains nothing. Data order has to happen *outside* it — which rows share
+a minibatch decides how they are padded, and tokenization is client-side by this
+project's first rule. So one authored integer becomes a `torch.Generator` in the
+block and a `random.Random` in the compiler, and a reader of the document cannot
+tell that the field is doing two jobs in two processes.
+
+**Trainability is stated three times.** A featurizer is trained if it is in
+`train.params`; it must then appear in `save`; and it must appear at a read or a
+write or it is unused. Each of the three is checkable against the other two, and
+`document._cross_check` checks all three pairs (about ten lines). The redundancy
+is real, and unlike the restated bindings above it is not obviously decoration:
+`params` is the one that *means* something, and the other two are the rules that
+stop a fit producing nothing or a document saving a random basis.
+
+**`precision.feature` and `precision.loss` are two fields with one legal
+combination here.** Both must be `fp32`. They are separable in causalab (an
+fp32 loop over a bf16 model), and the spec is right that an engine which cannot
+honour the declared precision must refuse the document rather than digest one
+precision and run another — which is what this one does. But in this corpus they
+are a single bit spelled as two.
+
+**The `save` manifest and `fit_diagnostics.json` contradict each other.** `save`
+is "the complete manifest of everything that leaves the run: nothing is written
+that is not listed", and causalab then writes `fit_diagnostics.json` beside the
+bundle without listing it. We kept the manifest rule, so the rotation's
+`orthonormality_deviation` is not a file: it is an assertion in
+`tests/test_das.py`, and the facts that would have gone in the header
+(`k`, `d`, parametrization, model, dtype, the fitted rows and their content
+digest) are in the safetensors metadata, which is inside a listed file.
+
 **A metric's name says nothing about its arithmetic.** `iia` is a `match` in
 `minimal_cpu.json` and a `logit_diff` in `das.json`. This is not redundancy, it
 is a trap, and it is worth one line in any document linter: the name is the
@@ -420,6 +507,42 @@ the corpus is actually exercising.
 
 ---
 
+## 5. What the DAS slice can and cannot promise
+
+### 5.1 "The complement is untouched" is a statement in exact arithmetic
+
+The defining property of a subspace swap is that the orthogonal complement of
+the rotation survives it. In exact arithmetic it does. In fp32 it does not, and
+cannot: `inverse` computes `Qf + (x − QQᵀx)`, so the complement that comes out
+is *reconstructed by a projection*, not copied. Measured on a 16-wide activation
+with values of order 1 and `k=4`, the complement moves by at most **3.6e-07**
+and the swapped-in subspace lands to within **3.0e-07** — rounding, and about
+what one fp32 projection costs.
+
+Bit-identity is available only to an axis-aligned featurizer, where the
+complement really is copied — `dims` on a write, which this corpus does not use.
+So the test asserts the property at `atol=1e-5` and says why, and the one
+`torch.equal` in it is about the *other positions* of the tensor, which are
+copied and therefore exact.
+
+### 5.2 What the fit demonstrates
+
+Plumbing, not method, and the document says so in its own header. `k: 8` on a
+16-wide residual stream of a randomly-initialized 2-layer Llama, over a 2-row
+train split, is not a scientific DAS fit and no `iia` it produces means
+anything. What the run does show is that every mechanical claim holds: the loss
+falls monotonically on the term the document named, the rotation is still
+orthonormal afterwards, the same seed gives the same weights to the bit, the
+fitted artifact reloads, and `remote="local"` reproduces all of it.
+
+It also shows one thing worth knowing that a good fit would have hidden: the
+objective (`ce`) and the watched metric (`iia`, a `logit_diff`, mode `max`)
+*disagree* here — `ce` falls while `iia` also falls — so early stopping fires
+after four of the ten epochs. That is the machinery working, on a model where
+there is nothing to find.
+
+---
+
 ## 4. Things this slice does not know, and should
 
 - **Whether a site's component even exists on the loaded model.** We check the
@@ -430,3 +553,17 @@ the corpus is actually exercising.
 - **Whether a read and a write at the same address in the same model are
   ordered correctly beyond "writes first".** The rule is implemented (a tap's
   writes run before its reads); no document in the corpus exercises it.
+- **Whether the rotation it fitted is the rotation causalab would have fitted.**
+  `cayley` here is `(I − A)⁻¹(I + A)E` with `A = WEᵀ − EWᵀ` built densely and
+  solved for `k` columns. That is the spec's "Cayley transform from the start
+  basis, rank `k`" as arithmetic, but the spec also says `O(d k²)` per access,
+  which implies a Woodbury solve this does not do. The *basis* is the same; the
+  cost is not, and the numerics of a dense `d`-by-`d` solve and a `2k`-by-`2k`
+  one differ in the last bits. Nothing here can tell you which one causalab's
+  digest was computed against.
+- **How much a fit costs.** `Subspace.basis` recomputes the Cayley transform on
+  every access — twice per write, once per read — because the optimizer steps
+  the parameter between accesses and a cached `Q` would be stale. At `d=16` that
+  is free. At `d=4096` it is the first thing to fix, and the fix (cache per
+  forward, invalidate on `optimizer.step`) needs a place to hang the cache that
+  the current `Featurizer` protocol does not have.
