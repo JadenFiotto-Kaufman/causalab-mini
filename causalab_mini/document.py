@@ -35,6 +35,14 @@ LAYERLESS = ("lm_head",)
 MECHANISMS = ("swap",)
 TOKEN_FORMS = ("space_prefixed",)
 INPUTS = ("base", "counterfactual")
+FEATURIZER_KINDS = ("subspace",)
+PARAMETRIZATIONS = ("cayley",)
+OPTIMIZERS = ("adamw",)
+EARLY_STOP_MODES = ("max",)
+
+#: `identity` is what a read or a write with no `featurizer` key gets. It is
+#: never declared, the way `original` is never declared.
+IDENTITY = "identity"
 
 # A metric kind's operands, in the order metrics.compute() takes them. The
 # values are *column names*: the answer is per row, so the document names a
@@ -47,14 +55,7 @@ METRIC_COLUMNS = {
 
 # Sections that exist in the protocol and that this slice does not implement.
 # Named here so the refusal can say which one.
-UNSUPPORTED_METHOD_SECTIONS = (
-    "segments",
-    "positions",
-    "featurizers",
-    "params",
-    "code",
-    "train",
-)
+UNSUPPORTED_METHOD_SECTIONS = ("segments", "positions", "params", "code")
 
 
 class DocumentError(ValueError):
@@ -64,6 +65,17 @@ class DocumentError(ValueError):
 def _check(condition: object, message: str) -> None:
     if not condition:
         raise DocumentError(message)
+
+
+def _featurizer(raw: Json, where: str) -> str:
+    """The one featurizer a read or a write names. A *list* is a chain, which is
+    real protocol surface and is not implemented."""
+    name = raw.get("featurizer", IDENTITY)
+    _check(
+        isinstance(name, str),
+        f"{where}: a featurizer chain is not implemented; name exactly one",
+    )
+    return name
 
 
 def _pos(spec: Any, where: str) -> int:
@@ -143,11 +155,45 @@ class SiteSpec:
 
 
 @dataclass(frozen=True)
+class FeaturizerSpec:
+    """A pair of maps between an activation and the feature space a write acts
+    in. A featurizer *name* is a parameter set: the same name at a read and at a
+    write is one rotation, and there is no tying field — naming is the tying."""
+
+    kind: str
+    k: int
+    parametrization: str
+
+    def __post_init__(self) -> None:
+        _check(
+            self.kind in FEATURIZER_KINDS,
+            f"featurizer kind {self.kind!r} is not implemented "
+            f"(this slice has {FEATURIZER_KINDS})",
+        )
+        _check(
+            self.parametrization in PARAMETRIZATIONS,
+            f"parametrization {self.parametrization!r} is not implemented "
+            f"(this slice has {PARAMETRIZATIONS})",
+        )
+        _check(isinstance(self.k, int) and self.k > 0, "featurizer k is a positive width")
+
+    @classmethod
+    def from_json(cls, name: str, raw: Json) -> "FeaturizerSpec":
+        _check(
+            not (set(raw) - {"kind", "k", "parametrization"}),
+            f"featurizer {name!r}: only kind/k/parametrization are implemented — in "
+            "particular `d` is derived from (model, site) and may never be authored",
+        )
+        return cls(raw["kind"], raw["k"], raw["parametrization"])
+
+
+@dataclass(frozen=True)
 class ReadSpec:
     site: str
     pos: int
     model: str  # "original" or an intervened model name
     input: str  # "base" | "counterfactual"
+    featurizer: str = IDENTITY
 
     def __post_init__(self) -> None:
         _check(self.input in INPUTS, f"read input must be one of {INPUTS}")
@@ -155,12 +201,16 @@ class ReadSpec:
     @classmethod
     def from_json(cls, name: str, raw: Json) -> "ReadSpec":
         _check(
-            not (set(raw) - {"site", "pos", "model", "input"}),
-            f"read {name!r}: only site/pos/model/input are implemented "
-            "(no featurizer, no dims)",
+            not (set(raw) - {"site", "pos", "model", "input", "featurizer"}),
+            f"read {name!r}: only site/pos/model/input/featurizer are implemented "
+            "(no dims)",
         )
         return cls(
-            raw["site"], _pos(raw["pos"], f"read {name!r}"), raw["model"], raw["input"]
+            raw["site"],
+            _pos(raw["pos"], f"read {name!r}"),
+            raw["model"],
+            raw["input"],
+            _featurizer(raw, f"read {name!r}"),
         )
 
 
@@ -170,6 +220,7 @@ class WriteSpec:
     pos: int
     mechanism: str  # "swap"
     operand: str  # a read name
+    featurizer: str = IDENTITY
 
     def __post_init__(self) -> None:
         _check(
@@ -181,8 +232,8 @@ class WriteSpec:
     @classmethod
     def from_json(cls, name: str, raw: Json) -> "WriteSpec":
         _check(
-            not (set(raw) - {"site", "pos", "do"}),
-            f"write {name!r}: only site/pos/do are implemented (no featurizer)",
+            not (set(raw) - {"site", "pos", "do", "featurizer"}),
+            f"write {name!r}: only site/pos/featurizer/do are implemented",
         )
         do = raw["do"]
         _check(len(do) == 1, f"write {name!r}: do has exactly one key")
@@ -192,7 +243,13 @@ class WriteSpec:
             f"write {name!r}: the operand must be a read name; param and literal "
             "operands are not implemented",
         )
-        return cls(raw["site"], _pos(raw["pos"], f"write {name!r}"), mechanism, operand)
+        return cls(
+            raw["site"],
+            _pos(raw["pos"], f"write {name!r}"),
+            mechanism,
+            operand,
+            _featurizer(raw, f"write {name!r}"),
+        )
 
 
 @dataclass(frozen=True)
@@ -246,22 +303,164 @@ class MetricSpec:
         return cls(kind, raw["of"], raw["token_form"], columns)
 
 
+TRAIN_KEYS = (
+    "objective",
+    "params",
+    "optimizer",
+    "steps",
+    "batch",
+    "precision",
+    "eval",
+    "early_stop",
+    "seed",
+)
+
+
+@dataclass(frozen=True)
+class TrainSpec:
+    """The fit. `params` is the protocol's only trainability declaration: the
+    model is frozen and the featurizers named here are the whole of what a
+    backward pass is allowed to reach."""
+
+    objective: tuple[tuple[float, str], ...]  # [[weight, metric], …], minimized
+    params: tuple[str, ...]  # featurizer names
+    lr: float
+    weight_decay: float
+    epochs: int
+    pairs: int  # base+counterfactual pairs per update, not rows
+    eval_split: str  # a dataset ref, exactly like a `data` entry's
+    eval_metrics: tuple[str, ...]
+    early_stop: str  # the metric watched
+    patience: int
+    mode: str
+    seed: int  # parameter initialization *and* data order
+
+    def __post_init__(self) -> None:
+        _check(self.objective, "method.train.objective is a non-empty sum of terms")
+        _check(self.params, "method.train.params names at least one featurizer")
+        _check(self.epochs > 0 and self.pairs > 0, "method.train: epochs and pairs are positive")
+        _check(self.patience > 0, "method.train.early_stop.patience is positive")
+        _check(
+            self.mode in EARLY_STOP_MODES,
+            f"method.train.early_stop.mode {self.mode!r} is not implemented "
+            f"(this slice has {EARLY_STOP_MODES})",
+        )
+
+    @classmethod
+    def from_json(cls, raw: Json) -> "TrainSpec":
+        unsupported = set(raw) - set(TRAIN_KEYS)
+        _check(not unsupported, f"method.train.{sorted(unsupported)} is not implemented")
+        for key in TRAIN_KEYS:
+            _check(key in raw, f"method.train.{key} is required")
+
+        objective = []
+        for term in raw["objective"]:
+            _check(
+                isinstance(term, list) and len(term) == 2 and isinstance(term[1], str),
+                "method.train.objective: only the positional [[weight, metric], …] "
+                "spelling is implemented, and only over a metric (no regularizers)",
+            )
+            objective.append((float(term[0]), term[1]))
+
+        optimizer = raw["optimizer"]
+        _check(
+            optimizer.get("name") in OPTIMIZERS,
+            f"method.train.optimizer: only {OPTIMIZERS} is implemented",
+        )
+        _check(
+            not (set(optimizer) - {"name", "lr", "weight_decay"}),
+            "method.train.optimizer: only name/lr/weight_decay are implemented "
+            "(no schedule)",
+        )
+        for key in ("lr", "weight_decay"):
+            _check(
+                isinstance(optimizer[key], (int, float)),
+                f"method.train.optimizer.{key}: a per-parameter-group mapping is not "
+                "implemented",
+            )
+        _check(
+            set(raw["steps"]) == {"epochs"},
+            "method.train.steps: only an epoch budget is implemented",
+        )
+        _check(
+            set(raw["batch"]) == {"pairs"},
+            "method.train.batch: only a pair count is implemented",
+        )
+        _check(
+            raw["precision"] == {"feature": "fp32", "loss": "fp32"},
+            "method.train.precision: only fp32 features and an fp32 loss are "
+            "implemented; an engine that cannot honour the declared loop precision "
+            "must refuse the document rather than run another one",
+        )
+        evaluation = raw["eval"]
+        _check(
+            set(evaluation) == {"every", "metrics", "split"},
+            "method.train.eval takes every/metrics/split",
+        )
+        _check(
+            evaluation["every"] == {"epochs": 1},
+            "method.train.eval.every: only one pass per epoch is implemented",
+        )
+        stop = raw["early_stop"]
+        _check(
+            set(stop) == {"metric", "patience", "mode"},
+            "method.train.early_stop takes metric/patience/mode",
+        )
+        return cls(
+            objective=tuple(objective),
+            params=tuple(raw["params"]),
+            lr=float(optimizer["lr"]),
+            weight_decay=float(optimizer["weight_decay"]),
+            epochs=int(raw["steps"]["epochs"]),
+            pairs=int(raw["batch"]["pairs"]),
+            eval_split=evaluation["split"],
+            eval_metrics=tuple(evaluation["metrics"]),
+            early_stop=stop["metric"],
+            patience=int(stop["patience"]),
+            mode=stop["mode"],
+            seed=int(raw["seed"]),
+        )
+
+
 @dataclass(frozen=True)
 class SaveSpec:
     value: str
     file_path: str
     model: str | None
     input: str | None
+    site: str | None = None
 
     def __post_init__(self) -> None:
-        _check(
-            self.file_path.endswith(".json"),
-            f"save {self.value!r}: a metric table is a .json file",
-        )
+        if self.site is None:
+            _check(
+                self.file_path.endswith(".json"),
+                f"save {self.value!r}: a metric table is a .json file",
+            )
+        else:
+            _check(
+                self.model is None and self.input is None,
+                f"save {self.value!r}: a trained featurizer's entry restates its "
+                "site, not a model/input",
+            )
+            _check(
+                self.file_path.endswith(".safetensors"),
+                f"save {self.value!r}: a trained featurizer is a .safetensors bundle",
+            )
 
     @classmethod
     def from_json(cls, raw: Json) -> "SaveSpec":
-        return cls(raw["value"], raw["file_path"], raw.get("model"), raw.get("input"))
+        _check(
+            not (set(raw) - {"value", "file_path", "model", "input", "site"}),
+            f"save {raw.get('value')!r}: only value/file_path/model/input/site are "
+            "implemented (no reduce, no non-value kinds)",
+        )
+        return cls(
+            raw["value"],
+            raw["file_path"],
+            raw.get("model"),
+            raw.get("input"),
+            raw.get("site"),
+        )
 
 
 @dataclass(frozen=True)
@@ -269,6 +468,8 @@ class Document:
     model: ModelSpec
     roles: dict[str, RoleSpec]
     sites: dict[str, SiteSpec]
+    featurizers: dict[str, FeaturizerSpec]
+    train: TrainSpec | None
     reads: dict[str, ReadSpec]
     writes: dict[str, WriteSpec]
     intervened_models: dict[str, IntervenedModelSpec]
@@ -311,6 +512,11 @@ class Document:
         sites = {
             name: SiteSpec.from_json(name, spec) for name, spec in method["sites"].items()
         }
+        featurizers = {
+            name: FeaturizerSpec.from_json(name, spec)
+            for name, spec in method.get("featurizers", {}).items()
+        }
+        train = TrainSpec.from_json(method["train"]) if "train" in method else None
         intervened_models = {
             name: IntervenedModelSpec.from_json(name, spec)
             for name, spec in method.get("intervened_models", {}).items()
@@ -329,11 +535,15 @@ class Document:
         _check(isinstance(method["save"], list) and method["save"], "save must be a non-empty list")
         saves = tuple(SaveSpec.from_json(entry) for entry in method["save"])
 
-        _cross_check(sites, reads, writes, intervened_models, metrics, saves)
+        _cross_check(
+            sites, featurizers, train, reads, writes, intervened_models, metrics, saves
+        )
         return cls(
             model=ModelSpec.from_json(raw["model"]),
             roles=roles,
             sites=sites,
+            featurizers=featurizers,
+            train=train,
             reads=reads,
             writes=writes,
             intervened_models=intervened_models,
@@ -354,6 +564,8 @@ def digest(raw: Json) -> str:
 
 def _cross_check(
     sites: dict[str, SiteSpec],
+    featurizers: dict[str, FeaturizerSpec],
+    train: TrainSpec | None,
     reads: dict[str, ReadSpec],
     writes: dict[str, WriteSpec],
     intervened_models: dict[str, IntervenedModelSpec],
@@ -383,18 +595,61 @@ def _cross_check(
             f"write {name!r}: the operand must be a read name; param and literal "
             "operands are not implemented",
         )
+
+    # A featurizer name is a parameter set, so the sites it appears at are what
+    # its width `d` is derived from. One name at several sites would be one
+    # rotation over two widths.
+    used_at: dict[str, set[str]] = {}
+    for name, read in reads.items():
+        used_at.setdefault(read.featurizer, set()).add(read.site)
+    for name, write in writes.items():
+        used_at.setdefault(write.featurizer, set()).add(write.site)
+    for name, at in used_at.items():
+        if name == IDENTITY:
+            continue
+        _check(name in featurizers, f"undeclared featurizer {name!r}")
+        _check(
+            len(at) == 1,
+            f"featurizer {name!r} is one parameter set but is used at the sites "
+            f"{sorted(at)}; one name per site is what this slice implements",
+        )
+    for name in featurizers:
+        _check(name in used_at, f"featurizer {name!r} is declared and never used")
+
     for name, metric in metrics.items():
         _check(metric.of in reads, f"metric {name!r}: 'of' must name a read")
         _check(
             sites[reads[metric.of].site].component == "lm_head",
             f"metric {name!r}: a token-space kind binds to an lm_head read",
         )
+        _check(
+            reads[metric.of].featurizer == IDENTITY,
+            f"metric {name!r}: a token-space kind binds to a *plain* lm_head read, "
+            "with no featurizer",
+        )
 
+    trained = set(train.params) if train is not None else set()
     saved = {entry.value for entry in saves}
     for entry in saves:
+        if entry.site is not None:
+            _check(
+                entry.value in featurizers,
+                f"save {entry.value!r}: a site-restated entry saves a featurizer",
+            )
+            _check(
+                entry.value in trained,
+                f"save {entry.value!r}: an untrained featurizer may not be saved",
+            )
+            _check(
+                {entry.site} == used_at[entry.value],
+                f"save {entry.value!r}: restated site {entry.site!r} contradicts the "
+                f"declarations ({sorted(used_at[entry.value])})",
+            )
+            continue
         _check(
             entry.value in metrics,
-            f"save {entry.value!r}: only metric values are implemented",
+            f"save {entry.value!r}: only metric and trained-featurizer values are "
+            "implemented",
         )
         read = reads[metrics[entry.value].of]
         # The restated binding is drift protection, never a second source of truth.
@@ -406,6 +661,23 @@ def _cross_check(
         )
     for name in metrics:
         _check(name in saved, f"metric {name!r} is never saved; every metric must be")
+    for name in trained:
+        _check(name in featurizers, f"method.train.params: undeclared featurizer {name!r}")
+        _check(
+            name in saved,
+            f"method.train.params: trained featurizer {name!r} is never saved; every "
+            "trained featurizer must be",
+        )
+    if train is not None:
+        for _weight, term in train.objective:
+            _check(term in metrics, f"method.train.objective: {term!r} is not a metric")
+        for name in train.eval_metrics:
+            _check(name in metrics, f"method.train.eval.metrics: {name!r} is not a metric")
+        _check(
+            train.early_stop in train.eval_metrics,
+            f"method.train.early_stop: {train.early_stop!r} is not one of the metrics "
+            "the eval pass computes",
+        )
     used = {name for im in intervened_models.values() for name in im.writes}
     for name in writes:
         _check(name in used, f"write {name!r} appears in no intervened model")
