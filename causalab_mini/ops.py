@@ -68,8 +68,15 @@ def swap(f: Any, operand: Any) -> Any:
     return operand
 
 
-# The two closed vocabularies, by the name a document spells. `featurizer.py`
-# will add a `subspace` object to the first and change nothing else.
+# The two closed vocabularies, by the name a document spells.
+#
+# `FEATURIZERS` holds the ones that are *stateless*, so one instance per process
+# is the same as one per run. A trained featurizer is not one of those, and that
+# is the single thing DAS changed about this file: a rotation's parameter is run
+# state that an optimizer steps, so it cannot live in a module-level table, and
+# `apply_write` therefore takes either a registered name or the object itself.
+# See `featurizer.KINDS` for the constructors a document's `featurizers` section
+# names.
 FEATURIZERS: dict[str, Featurizer] = {"identity": Identity()}
 MECHANISMS: dict[str, Mechanism] = {"swap": swap}
 
@@ -99,10 +106,10 @@ def apply_write(
     positions: Positions,
     operand: Any,
     mechanism: str = "swap",
-    featurizer: str = "identity",
+    featurizer: str | Featurizer = "identity",
     seq_axis: int = 1,
 ) -> Any:
-    featurize = FEATURIZERS[featurizer]
+    featurize = FEATURIZERS[featurizer] if isinstance(featurizer, str) else featurizer
     x = gather(tensor, positions, seq_axis)
     f, err = featurize.featurize(x)
     f = MECHANISMS[mechanism](f, operand)
