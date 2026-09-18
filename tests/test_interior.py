@@ -243,3 +243,13 @@ def test_the_interior_is_ordered_before_its_own_blocks_output(interior_raw, data
         "lm_head",
     ]
     run.execute(model, built)
+
+
+def test_the_interior_plan_survives_the_remote_path(model, data_root, interior_raw):
+    """`remote="local"` serializes the session exactly as a remote run would.
+    An interior address is a component, a layer and an operation name, so there
+    is nothing in it that cannot make the trip."""
+    built = _build(interior_raw, data_root, model)
+    here = run.execute(model, built)
+    shipped = run.execute(model, built, remote="local")
+    assert torch.equal(here["logit_diff"], shipped["logit_diff"])

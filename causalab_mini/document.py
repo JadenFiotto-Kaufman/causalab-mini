@@ -132,8 +132,7 @@ class SiteSpec:
             f"site {name!r}: only component/layers are implemented",
         )
         layers = raw.get("layers")
-        if raw.get("component") in LAYERLESS:
-            _check(layers is None, f"site {name!r}: {raw['component']} takes no layers")
+        if layers is None:  # __post_init__ refuses a component that needs one
             return cls(raw["component"], None)
         if not isinstance(layers, list) or len(layers) != 1:
             raise DocumentError(
@@ -232,9 +231,11 @@ class MetricSpec:
     @classmethod
     def from_json(cls, name: str, raw: Json) -> "MetricSpec":
         kind = raw["kind"]
+        # The kind first: it decides which columns to look for. token_form and
+        # the columns' arity are `__post_init__`'s.
         _check(kind in METRIC_COLUMNS, f"metric {name!r}: kind {kind!r} is not implemented")
         _check(
-            raw.get("token_form") in TOKEN_FORMS,
+            "token_form" in raw,
             f"metric {name!r}: token_form is required and only {TOKEN_FORMS} is implemented",
         )
         _check(

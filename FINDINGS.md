@@ -350,6 +350,17 @@ In priority order, each of which would delete code here:
    **which argument of a call carries which tensor**. Both are per-address
    constants (2 and 1 for `attention_query`); both are currently a comment
    beside a number in `_COMPONENTS`.
+6. **An operation's kind, from nnsight rather than from nnterp: is this name a
+   call or an assignment?** This is the one thing the matcher wanted and could
+   not have. `Source.names` is a flat tuple of strings in which
+   `attention_interface_0` (an assignment) and `attention_interface_1` (a call)
+   are indistinguishable, so the only way to say "the call" is to look at the
+   source line — `op.text.split("\n")[op.line - 1]`, reconstructed from the two
+   attributes `Source.__repr__` uses to render its gutter. It works, and it is
+   eight lines, but it means an address is matched against *source text*, so
+   reformatting a transformers forward could move an address that renaming
+   nothing did. A `kind` on an operation, or a `calls` view over a `Source`,
+   would let the needle be a symbol again.
 
 What nnterp *does* give, and it is the reason (1) needs so little: the
 standardized accessors (`layers`, `attentions`, `lm_head`) already absorb the

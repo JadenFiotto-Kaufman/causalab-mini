@@ -6,9 +6,12 @@ what a runtime must do about each field, and lists — as explicitly as it can �
 everything the real protocol supports that these three documents do **not**
 touch.
 
-Nothing in `documents/` is generated. Everything except
-`documents/das_cpu_reduction.json` is a byte-for-byte copy of a file in
-`/home/localjadenfk/wd/causalab`.
+Nothing in `documents/` is generated. Everything except the three documents
+marked "written by me" below is a byte-for-byte copy of a file in
+`/home/localjadenfk/wd/causalab`. (Two of those three were authored after this
+reading, for cases the copied corpus cannot reach: see §7 and §10.8 for the
+`.source` interior, and §9.1 for why a second model family needs its own rows.
+Each says so in its own `header.description`.)
 
 ---
 
@@ -20,6 +23,9 @@ Nothing in `documents/` is generated. Everything except
 | `minimal_cpu.json` | `causalab/configs/protocols/minimal_cpu.json` | 1 903 | the activation-patching document |
 | `das.json` | `causalab/configs/protocols/das.json` | 2 827 | the DAS document |
 | `das_cpu_reduction.json` | **written by me**, derived from `das.json` | — | a CPU-runnable reduction of `das.json`; see §4 |
+| `attention_query_cpu.json` | **written by me**, derived from `minimal_cpu.json` | — | the same interchange with its site at the `attention_query` interior; no copied document taps one (§7) |
+| `gpt2_cpu.json` | **written by me**, derived from `minimal_cpu.json` | — | the same interchange on `tiny-random-gpt2`, over `data/counting` — the weekdays answers are multi-token there (§9.1) |
+| `data/counting/train.json` | **written by me** | — | 4 rows with single-token answers under the GPT-2 tokenizer |
 | `data/weekdays/train.json` | `tests/protocol/fixtures/data/weekdays/train.json` | 1 383 | 4 rows — what `minimal_cpu.json` reads |
 | `data/weekdays/data.json` | `tests/protocol/fixtures/data/weekdays/data.json` | 1 389 | 4 rows, 2 `train` + 2 `test` — what `das_cpu_reduction.json` reads |
 | `data/natural_domains_arithmetic/data/weekdays.json` | `causalab/tasks/natural_domains_arithmetic/data/weekdays.json` | 35 199 | 49 rows, 30 `train` + 19 `test` — what `das.json` reads |
