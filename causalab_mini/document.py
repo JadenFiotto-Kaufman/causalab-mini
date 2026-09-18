@@ -2,10 +2,19 @@
 
 Only the subset of `protocol_version` 3 that this slice runs is accepted. Every
 other real protocol feature is refused **by name** at load, so a document we
-cannot run fails loudly instead of running as something else. The rules below
-are the load-time checks from NOTES.md §2 and §6; the cross-checks (a read's
-`input` against its model's, a save's restated binding) are kept because they
-are two lines each and they are what catches a hand-edited JSON.
+cannot run fails loudly instead of running as something else.
+
+Two rules about where a refusal lives:
+
+* a check about **one value** is a `__post_init__` on the piece that holds it,
+  so a spec built in code is refused exactly like one built from JSON;
+* a check about **the JSON shape** (unknown keys, a sugar spelling) or about
+  **two pieces** (a read's model, a save's restated binding) is a function —
+  `from_json` for the first, `_cross_check` for the second.
+
+`Document` is a container, not a god-class: it carries the pieces and the
+digest, and its only behaviour is the two constructors `Document.load` and
+`Document.from_json`.
 """
 
 from __future__ import annotations
@@ -14,6 +23,9 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+Json = dict[str, Any]
 
 PROTOCOL_VERSION = "3"
 
@@ -22,6 +34,7 @@ COMPONENTS = ("block_output", "lm_head")
 LAYERLESS = ("lm_head",)
 MECHANISMS = ("swap",)
 TOKEN_FORMS = ("space_prefixed",)
+INPUTS = ("base", "counterfactual")
 
 # A metric kind's operands, in the order metrics.compute() takes them. The
 # values are *column names*: the answer is per row, so the document names a
@@ -48,9 +61,21 @@ class DocumentError(ValueError):
     """A load error: the document is refused, nothing runs."""
 
 
-def _check(condition, message):
+def _check(condition: object, message: str) -> None:
     if not condition:
         raise DocumentError(message)
+
+
+def _pos(spec: Any, where: str) -> int:
+    """The only position form this slice runs: `pos: -1`, sugar for
+    {"index": -1} — one token per row, counted from the end of the sequence."""
+    if isinstance(spec, dict) and set(spec) == {"index"}:
+        spec = spec["index"]
+    _check(
+        isinstance(spec, int) and not isinstance(spec, bool),
+        f"{where}: only an integer position (or {{'index': i}}) is implemented",
+    )
+    return int(spec)
 
 
 @dataclass(frozen=True)
@@ -59,17 +84,63 @@ class ModelSpec:
     revision: str
     dtype: str
 
+    def __post_init__(self) -> None:
+        _check(self.dtype in DTYPES, f"model.dtype must be one of {DTYPES}")
+
+    @classmethod
+    def from_json(cls, raw: Json) -> "ModelSpec":
+        for key in ("key", "revision", "dtype"):
+            _check(key in raw, f"model.{key} is required")
+        unsupported = set(raw) - {"key", "revision", "dtype"}
+        _check(not unsupported, f"model.{sorted(unsupported)} is not implemented")
+        return cls(raw["key"], raw["revision"], raw["dtype"])
+
 
 @dataclass(frozen=True)
 class RoleSpec:
     dataset: str  # "weekdays/train" or "weekdays/data#train"
     field: str  # "input" or "counterfactual_inputs[0]"
 
+    @classmethod
+    def from_json(cls, raw: Json) -> "RoleSpec":
+        return cls(raw["dataset"], raw["field"])
+
 
 @dataclass(frozen=True)
 class SiteSpec:
     component: str
     layer: int | None
+
+    def __post_init__(self) -> None:
+        _check(
+            self.component in COMPONENTS,
+            f"component {self.component!r} is not implemented "
+            f"(this slice has {COMPONENTS})",
+        )
+        if self.component in LAYERLESS:
+            _check(self.layer is None, f"{self.component} takes no layers")
+        else:
+            _check(
+                isinstance(self.layer, int),
+                f"{self.component} is addressed at one layer",
+            )
+
+    @classmethod
+    def from_json(cls, name: str, raw: Json) -> "SiteSpec":
+        _check(
+            not (set(raw) - {"component", "layers"}),
+            f"site {name!r}: only component/layers are implemented",
+        )
+        layers = raw.get("layers")
+        if raw.get("component") in LAYERLESS:
+            _check(layers is None, f"site {name!r}: {raw['component']} takes no layers")
+            return cls(raw["component"], None)
+        _check(
+            isinstance(layers, list) and len(layers) == 1,
+            f"site {name!r}: layers must be a one-element band; a band spanning "
+            "several layers is one address and is not implemented",
+        )
+        return cls(raw["component"], int(layers[0]))
 
 
 @dataclass(frozen=True)
@@ -79,6 +150,20 @@ class ReadSpec:
     model: str  # "original" or an intervened model name
     input: str  # "base" | "counterfactual"
 
+    def __post_init__(self) -> None:
+        _check(self.input in INPUTS, f"read input must be one of {INPUTS}")
+
+    @classmethod
+    def from_json(cls, name: str, raw: Json) -> "ReadSpec":
+        _check(
+            not (set(raw) - {"site", "pos", "model", "input"}),
+            f"read {name!r}: only site/pos/model/input are implemented "
+            "(no featurizer, no dims)",
+        )
+        return cls(
+            raw["site"], _pos(raw["pos"], f"read {name!r}"), raw["model"], raw["input"]
+        )
+
 
 @dataclass(frozen=True)
 class WriteSpec:
@@ -87,11 +172,43 @@ class WriteSpec:
     mechanism: str  # "swap"
     operand: str  # a read name
 
+    def __post_init__(self) -> None:
+        _check(
+            self.mechanism in MECHANISMS,
+            f"mechanism {self.mechanism!r} is not implemented "
+            f"(this slice has {MECHANISMS})",
+        )
+
+    @classmethod
+    def from_json(cls, name: str, raw: Json) -> "WriteSpec":
+        _check(
+            not (set(raw) - {"site", "pos", "do"}),
+            f"write {name!r}: only site/pos/do are implemented (no featurizer)",
+        )
+        do = raw["do"]
+        _check(len(do) == 1, f"write {name!r}: do has exactly one key")
+        ((mechanism, operand),) = do.items()
+        _check(
+            isinstance(operand, str),
+            f"write {name!r}: the operand must be a read name; param and literal "
+            "operands are not implemented",
+        )
+        return cls(raw["site"], _pos(raw["pos"], f"write {name!r}"), mechanism, operand)
+
 
 @dataclass(frozen=True)
 class IntervenedModelSpec:
     input: str
     writes: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _check(self.input in INPUTS, f"intervened model input must be one of {INPUTS}")
+
+    @classmethod
+    def from_json(cls, name: str, raw: Json) -> "IntervenedModelSpec":
+        _check(name != "original", "'original' is reserved and never declared")
+        _check("input" in raw, f"intervened model {name!r}: input is mandatory")
+        return cls(raw["input"], tuple(raw.get("writes", ())))
 
 
 @dataclass(frozen=True)
@@ -101,6 +218,32 @@ class MetricSpec:
     token_form: str
     columns: tuple[str, ...]  # dataset columns, in the kind's operand order
 
+    def __post_init__(self) -> None:
+        _check(self.kind in METRIC_COLUMNS, f"metric kind {self.kind!r} is not implemented")
+        _check(
+            self.token_form in TOKEN_FORMS,
+            f"token_form is required and only {TOKEN_FORMS} is implemented",
+        )
+        _check(
+            len(self.columns) == len(METRIC_COLUMNS[self.kind]),
+            f"metric kind {self.kind!r} takes the columns {METRIC_COLUMNS[self.kind]}",
+        )
+
+    @classmethod
+    def from_json(cls, name: str, raw: Json) -> "MetricSpec":
+        kind = raw["kind"]
+        _check(kind in METRIC_COLUMNS, f"metric {name!r}: kind {kind!r} is not implemented")
+        _check(
+            raw.get("token_form") in TOKEN_FORMS,
+            f"metric {name!r}: token_form is required and only {TOKEN_FORMS} is implemented",
+        )
+        _check(
+            raw.get("mode", "exact") == "exact",
+            f"metric {name!r}: only mode 'exact' is implemented",
+        )
+        columns = tuple(raw[key] for key in METRIC_COLUMNS[kind])
+        return cls(kind, raw["of"], raw["token_form"], columns)
+
 
 @dataclass(frozen=True)
 class SaveSpec:
@@ -108,6 +251,16 @@ class SaveSpec:
     file_path: str
     model: str | None
     input: str | None
+
+    def __post_init__(self) -> None:
+        _check(
+            self.file_path.endswith(".json"),
+            f"save {self.value!r}: a metric table is a .json file",
+        )
+
+    @classmethod
+    def from_json(cls, raw: Json) -> "SaveSpec":
+        return cls(raw["value"], raw["file_path"], raw.get("model"), raw.get("input"))
 
 
 @dataclass(frozen=True)
@@ -125,53 +278,71 @@ class Document:
     point digest (that is a canonical re-emission, §7 of the spec); it is a
     stable identifier for `produced_by` and nothing more."""
 
+    @classmethod
+    def load(cls, path: str | Path) -> "Document":
+        """The document at `path`."""
+        return cls.from_json(json.loads(Path(path).read_text()))
 
-def load(path) -> Document:
-    return parse(json.loads(Path(path).read_text()))
-
-
-def parse(raw: dict) -> Document:
-    for group in ("header", "model", "data", "method"):
-        _check(group in raw, f"missing top-level group {group!r}")
-    _check(
-        raw["header"].get("protocol_version") == PROTOCOL_VERSION,
-        f"protocol_version must be {PROTOCOL_VERSION!r}",
-    )
-
-    model = _model(raw["model"])
-    roles = _roles(raw["data"])
-    method = raw["method"]
-    for section in UNSUPPORTED_METHOD_SECTIONS:
+    @classmethod
+    def from_json(cls, raw: Json) -> "Document":
+        """The document a JSON object describes, or a DocumentError."""
+        for group in ("header", "model", "data", "method"):
+            _check(group in raw, f"missing top-level group {group!r}")
         _check(
-            section not in method,
-            f"method.{section} is real protocol surface that causalab-mini does "
-            "not implement yet; this slice is activation patching only",
+            raw["header"].get("protocol_version") == PROTOCOL_VERSION,
+            f"protocol_version must be {PROTOCOL_VERSION!r}",
         )
-    for required in ("sites", "reads", "save"):
-        _check(required in method, f"method.{required} is required")
 
-    sites = _sites(method["sites"])
-    intervened_models = _intervened_models(method.get("intervened_models", {}))
-    reads = _reads(method["reads"], sites, intervened_models)
-    writes = _writes(method.get("writes", {}), sites, reads)
-    metrics = _metrics(method.get("metrics", {}), reads, sites)
-    saves = _saves(method["save"], metrics, reads, intervened_models)
-    _cross_check(reads, writes, intervened_models, metrics, saves)
+        method = raw["method"]
+        for section in UNSUPPORTED_METHOD_SECTIONS:
+            _check(
+                section not in method,
+                f"method.{section} is real protocol surface that causalab-mini does "
+                "not implement yet; this slice is activation patching only",
+            )
+        for required in ("sites", "reads", "save"):
+            _check(required in method, f"method.{required} is required")
 
-    return Document(
-        model=model,
-        roles=roles,
-        sites=sites,
-        reads=reads,
-        writes=writes,
-        intervened_models=intervened_models,
-        metrics=metrics,
-        saves=saves,
-        digest=digest(raw),
-    )
+        roles = {name: RoleSpec.from_json(spec) for name, spec in raw["data"].items()}
+        _check("base" in roles, "data.base is required")
+        _check(set(roles) <= set(INPUTS), "only base/counterfactual roles")
+
+        sites = {
+            name: SiteSpec.from_json(name, spec) for name, spec in method["sites"].items()
+        }
+        intervened_models = {
+            name: IntervenedModelSpec.from_json(name, spec)
+            for name, spec in method.get("intervened_models", {}).items()
+        }
+        reads = {
+            name: ReadSpec.from_json(name, spec) for name, spec in method["reads"].items()
+        }
+        writes = {
+            name: WriteSpec.from_json(name, spec)
+            for name, spec in method.get("writes", {}).items()
+        }
+        metrics = {
+            name: MetricSpec.from_json(name, spec)
+            for name, spec in method.get("metrics", {}).items()
+        }
+        _check(isinstance(method["save"], list) and method["save"], "save must be a non-empty list")
+        saves = tuple(SaveSpec.from_json(entry) for entry in method["save"])
+
+        _cross_check(sites, reads, writes, intervened_models, metrics, saves)
+        return cls(
+            model=ModelSpec.from_json(raw["model"]),
+            roles=roles,
+            sites=sites,
+            reads=reads,
+            writes=writes,
+            intervened_models=intervened_models,
+            metrics=metrics,
+            saves=saves,
+            digest=digest(raw),
+        )
 
 
-def digest(raw: dict) -> str:
+def digest(raw: Json) -> str:
     """Identity of the experiment. `header.title`/`description` are authoring
     metadata and do not enter it (NOTES.md §2.2)."""
     body = {k: v for k, v in raw.items() if k != "header"}
@@ -180,173 +351,58 @@ def digest(raw: dict) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def _model(raw: dict) -> ModelSpec:
-    for key in ("key", "revision", "dtype"):
-        _check(key in raw, f"model.{key} is required")
-    _check(raw["dtype"] in DTYPES, f"model.dtype must be one of {DTYPES}")
-    unsupported = set(raw) - {"key", "revision", "dtype"}
-    _check(not unsupported, f"model.{sorted(unsupported)} is not implemented")
-    return ModelSpec(raw["key"], raw["revision"], raw["dtype"])
-
-
-def _roles(raw: dict) -> dict[str, RoleSpec]:
-    _check("base" in raw, "data.base is required")
-    _check(set(raw) <= {"base", "counterfactual"}, "only base/counterfactual roles")
-    return {name: RoleSpec(spec["dataset"], spec["field"]) for name, spec in raw.items()}
-
-
-def _sites(raw: dict) -> dict[str, SiteSpec]:
-    sites = {}
-    for name, spec in raw.items():
-        component = spec["component"]
+def _cross_check(
+    sites: dict[str, SiteSpec],
+    reads: dict[str, ReadSpec],
+    writes: dict[str, WriteSpec],
+    intervened_models: dict[str, IntervenedModelSpec],
+    metrics: dict[str, MetricSpec],
+    saves: tuple[SaveSpec, ...],
+) -> None:
+    """Everything that is about two pieces at once. No single dataclass owns
+    any of it, so none of it is a `__post_init__`."""
+    for name, read in reads.items():
+        _check(read.site in sites, f"read {name!r}: undeclared site")
         _check(
-            component in COMPONENTS,
-            f"site {name!r}: component {component!r} is not implemented "
-            f"(this slice has {COMPONENTS})",
+            read.model == "original" or read.model in intervened_models,
+            f"read {name!r}: model {read.model!r} is neither 'original' nor declared",
         )
-        _check(
-            not (set(spec) - {"component", "layers"}),
-            f"site {name!r}: only component/layers are implemented",
-        )
-        layers = spec.get("layers")
-        if component in LAYERLESS:
-            _check(layers is None, f"site {name!r}: {component} takes no layers")
-            sites[name] = SiteSpec(component, None)
-            continue
-        _check(
-            isinstance(layers, list) and len(layers) == 1,
-            f"site {name!r}: layers must be a one-element band; a band spanning "
-            "several layers is one address and is not implemented",
-        )
-        sites[name] = SiteSpec(component, int(layers[0]))
-    return sites
-
-
-def _intervened_models(raw: dict) -> dict[str, IntervenedModelSpec]:
-    models = {}
-    for name, spec in raw.items():
-        _check(name != "original", "'original' is reserved and never declared")
-        _check("input" in spec, f"intervened model {name!r}: input is mandatory")
-        models[name] = IntervenedModelSpec(spec["input"], tuple(spec.get("writes", ())))
-    return models
-
-
-def _pos(spec, where) -> int:
-    """The only position form this slice runs: `pos: -1`, sugar for
-    {"index": -1} — one token per row, counted from the end of the sequence."""
-    if isinstance(spec, dict) and set(spec) == {"index"}:
-        spec = spec["index"]
-    _check(
-        isinstance(spec, int) and not isinstance(spec, bool),
-        f"{where}: only an integer position (or {{'index': i}}) is implemented",
-    )
-    return spec
-
-
-def _reads(raw, sites, intervened_models) -> dict[str, ReadSpec]:
-    reads = {}
-    for name, spec in raw.items():
-        _check(
-            not (set(spec) - {"site", "pos", "model", "input"}),
-            f"read {name!r}: only site/pos/model/input are implemented "
-            "(no featurizer, no dims)",
-        )
-        _check(spec["site"] in sites, f"read {name!r}: undeclared site")
-        model = spec["model"]
-        _check(
-            model == "original" or model in intervened_models,
-            f"read {name!r}: model {model!r} is neither 'original' nor declared",
-        )
-        _check(
-            spec["input"] in ("base", "counterfactual"),
-            f"read {name!r}: input must be base or counterfactual",
-        )
-        if model in intervened_models:
+        if read.model in intervened_models:
             # The restated binding, cross-checked: a mismatch is a load error,
             # never a silent override.
             _check(
-                intervened_models[model].input == spec["input"],
-                f"read {name!r}: input {spec['input']!r} contradicts model "
-                f"{model!r}'s input {intervened_models[model].input!r}",
+                intervened_models[read.model].input == read.input,
+                f"read {name!r}: input {read.input!r} contradicts model "
+                f"{read.model!r}'s input {intervened_models[read.model].input!r}",
             )
-        reads[name] = ReadSpec(spec["site"], _pos(spec["pos"], f"read {name!r}"), model, spec["input"])
-    return reads
-
-
-def _writes(raw, sites, reads) -> dict[str, WriteSpec]:
-    writes = {}
-    for name, spec in raw.items():
+    for name, write in writes.items():
+        _check(write.site in sites, f"write {name!r}: undeclared site")
         _check(
-            not (set(spec) - {"site", "pos", "do"}),
-            f"write {name!r}: only site/pos/do are implemented (no featurizer)",
-        )
-        _check(spec["site"] in sites, f"write {name!r}: undeclared site")
-        do = spec["do"]
-        _check(len(do) == 1, f"write {name!r}: do has exactly one key")
-        ((mechanism, operand),) = do.items()
-        _check(
-            mechanism in MECHANISMS,
-            f"write {name!r}: mechanism {mechanism!r} is not implemented "
-            f"(this slice has {MECHANISMS})",
-        )
-        _check(
-            isinstance(operand, str) and operand in reads,
+            write.operand in reads,
             f"write {name!r}: the operand must be a read name; param and literal "
             "operands are not implemented",
         )
-        writes[name] = WriteSpec(
-            spec["site"], _pos(spec["pos"], f"write {name!r}"), mechanism, operand
-        )
-    return writes
-
-
-def _metrics(raw, reads, sites) -> dict[str, MetricSpec]:
-    metrics = {}
-    for name, spec in raw.items():
-        kind = spec["kind"]
-        _check(kind in METRIC_COLUMNS, f"metric {name!r}: kind {kind!r} is not implemented")
-        _check(spec["of"] in reads, f"metric {name!r}: 'of' must name a read")
+    for name, metric in metrics.items():
+        _check(metric.of in reads, f"metric {name!r}: 'of' must name a read")
         _check(
-            sites[reads[spec["of"]].site].component == "lm_head",
+            sites[reads[metric.of].site].component == "lm_head",
             f"metric {name!r}: a token-space kind binds to an lm_head read",
         )
-        _check(
-            spec.get("token_form") in TOKEN_FORMS,
-            f"metric {name!r}: token_form is required and only {TOKEN_FORMS} is implemented",
-        )
-        _check(
-            spec.get("mode", "exact") == "exact",
-            f"metric {name!r}: only mode 'exact' is implemented",
-        )
-        columns = tuple(spec[key] for key in METRIC_COLUMNS[kind])
-        metrics[name] = MetricSpec(kind, spec["of"], spec["token_form"], columns)
-    return metrics
 
-
-def _saves(raw, metrics, reads, intervened_models) -> tuple[SaveSpec, ...]:
-    _check(isinstance(raw, list) and raw, "save must be a non-empty list")
-    saves = []
-    for entry in raw:
-        value = entry["value"]
-        _check(value in metrics, f"save {value!r}: only metric values are implemented")
+    saved = {entry.value for entry in saves}
+    for entry in saves:
         _check(
-            entry["file_path"].endswith(".json"),
-            f"save {value!r}: a metric table is a .json file",
+            entry.value in metrics,
+            f"save {entry.value!r}: only metric values are implemented",
         )
-        read = reads[metrics[value].of]
+        read = reads[metrics[entry.value].of]
         # The restated binding is drift protection, never a second source of truth.
         _check(
-            entry.get("model") == read.model and entry.get("input") == read.input,
-            f"save {value!r}: restated binding {entry.get('model')!r}/"
-            f"{entry.get('input')!r} contradicts the declarations "
+            entry.model == read.model and entry.input == read.input,
+            f"save {entry.value!r}: restated binding {entry.model!r}/"
+            f"{entry.input!r} contradicts the declarations "
             f"({read.model!r}/{read.input!r})",
         )
-        saves.append(SaveSpec(value, entry["file_path"], entry.get("model"), entry.get("input")))
-    return tuple(saves)
-
-
-def _cross_check(reads, writes, intervened_models, metrics, saves):
-    saved = {entry.value for entry in saves}
     for name in metrics:
         _check(name in saved, f"metric {name!r} is never saved; every metric must be")
     used = {name for im in intervened_models.values() for name in im.writes}
@@ -360,8 +416,7 @@ def _cross_check(reads, writes, intervened_models, metrics, saves):
     for im_name, im in intervened_models.items():
         seen = set()
         for name in im.writes:
-            write = writes[name]
-            key = (write.site, write.pos)
+            key = (writes[name].site, writes[name].pos)
             _check(
                 key not in seen,
                 f"intervened model {im_name!r}: two absolute writes at {key}",

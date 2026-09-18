@@ -21,7 +21,7 @@ def main(argv=None) -> int:
     parser.add_argument("--device-map", default="auto")
     args = parser.parse_args(argv)
 
-    doc = document.load(args.document)
+    doc = document.Document.load(args.document)
     model = model_module.load(doc.model, device_map=args.device_map)
     plan = plan_module.build(doc, args.data_root, model)
     remote = True if args.remote == "true" else (args.remote or False)

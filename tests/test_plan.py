@@ -10,7 +10,7 @@ from causalab_mini import document, encoding, plan
 
 @pytest.fixture
 def minimal_plan(minimal_raw, data_root, model):
-    return plan.build(document.parse(minimal_raw), data_root, model)
+    return plan.build(document.Document.from_json(minimal_raw), data_root, model)
 
 
 # --------------------------------------------------------------------- #
@@ -77,7 +77,7 @@ def test_the_schedule_is_two_forwards_counterfactual_then_base(minimal_plan):
 def test_a_write_whose_operand_is_read_in_its_own_model_is_a_cycle(minimal_raw, data_root, model):
     minimal_raw["method"]["reads"]["v_cf"].update(model="patched", input="base")
     with pytest.raises(plan.PlanError, match="cycle"):
-        plan.build(document.parse(minimal_raw), data_root, model)
+        plan.build(document.Document.from_json(minimal_raw), data_root, model)
 
 
 # --------------------------------------------------------------------- #
@@ -121,4 +121,4 @@ def test_a_multi_token_answer_is_refused(model):
 def test_a_layer_the_model_does_not_have_is_a_load_error(minimal_raw, data_root, model):
     minimal_raw["method"]["sites"]["target"]["layers"] = [17]
     with pytest.raises(plan.PlanError, match="outside the model's 2 layers"):
-        plan.build(document.parse(minimal_raw), data_root, model)
+        plan.build(document.Document.from_json(minimal_raw), data_root, model)

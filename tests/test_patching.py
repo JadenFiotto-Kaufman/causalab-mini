@@ -11,7 +11,7 @@ from causalab_mini import address, cli, document, ops, output, plan, run
 
 
 def build(raw, data_root, model):
-    return plan.build(document.parse(raw), data_root, model)
+    return plan.build(document.Document.from_json(raw), data_root, model)
 
 
 @pytest.fixture
@@ -192,7 +192,7 @@ def test_the_run_writes_the_save_manifest_and_nothing_else(tmp_path, data_root, 
     assert [row["example_id"] for row in rows] == ["0", "1", "2", "3"]
     assert {row["unit"] for row in rows} == {"logit"}
     assert {row["estimand_version"] for row in rows} == {"logit_diff/v1"}
-    assert {row["produced_by"] for row in rows} == {document.parse(json.loads((data_root.parent / "minimal_cpu.json").read_text())).digest}
+    assert {row["produced_by"] for row in rows} == {document.Document.from_json(json.loads((data_root.parent / "minimal_cpu.json").read_text())).digest}
     assert [row["value"] for row in rows] == results["logit_diff"].tolist()
 
 

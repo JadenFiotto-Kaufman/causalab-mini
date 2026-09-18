@@ -8,7 +8,7 @@ REPO = __import__("pathlib").Path(__file__).resolve().parents[1]
 
 
 def test_minimal_cpu_parses_to_the_declarations_notes_describes():
-    doc = document.load(REPO / "documents" / "minimal_cpu.json")
+    doc = document.Document.load(REPO / "documents" / "minimal_cpu.json")
 
     assert doc.model.dtype == "fp32"
     assert doc.sites["target"] == document.SiteSpec("block_output", 0)
@@ -26,17 +26,17 @@ def test_minimal_cpu_parses_to_the_declarations_notes_describes():
 
 def test_the_das_document_is_refused_by_name_not_mis_run():
     with pytest.raises(document.DocumentError, match="method.featurizers"):
-        document.load(REPO / "documents" / "das_cpu_reduction.json")
+        document.Document.load(REPO / "documents" / "das_cpu_reduction.json")
 
 
 def test_the_digest_ignores_authoring_metadata_and_nothing_else(minimal_raw):
-    baseline = document.parse(minimal_raw).digest
+    baseline = document.Document.from_json(minimal_raw).digest
 
     minimal_raw["header"]["description"] = "something else entirely"
-    assert document.parse(minimal_raw).digest == baseline
+    assert document.Document.from_json(minimal_raw).digest == baseline
 
     minimal_raw["method"]["sites"]["target"]["layers"] = [1]
-    assert document.parse(minimal_raw).digest != baseline
+    assert document.Document.from_json(minimal_raw).digest != baseline
 
 
 @pytest.mark.parametrize(
@@ -61,4 +61,24 @@ def test_the_digest_ignores_authoring_metadata_and_nothing_else(minimal_raw):
 def test_a_document_this_slice_cannot_run_is_a_load_error(minimal_raw, mutate, message):
     mutate(minimal_raw)
     with pytest.raises(document.DocumentError, match=message):
-        document.parse(minimal_raw)
+        document.Document.from_json(minimal_raw)
+
+
+@pytest.mark.parametrize(
+    "build, message",
+    [
+        (lambda: document.ModelSpec("k", "r", "int8"), "model.dtype"),
+        (lambda: document.SiteSpec("attention_probs", 0), "not implemented"),
+        (lambda: document.SiteSpec("lm_head", 0), "takes no layers"),
+        (lambda: document.SiteSpec("block_output", None), "one layer"),
+        (lambda: document.ReadSpec("target", -1, "original", "cf"), "read input"),
+        (lambda: document.WriteSpec("target", -1, "add_scaled", "v_cf"), "not implemented"),
+        (lambda: document.MetricSpec("match", "logits", "bare", ("cf_answer",)), "token_form"),
+        (lambda: document.SaveSpec("iia", "iia.safetensors", "patched", "base"), ".json file"),
+    ],
+)
+def test_a_piece_built_in_code_is_refused_exactly_like_one_built_from_json(build, message):
+    """The value checks live on the piece, so they do not depend on having come
+    through `from_json`."""
+    with pytest.raises(document.DocumentError, match=message):
+        build()
