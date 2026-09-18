@@ -1,0 +1,14 @@
+# virtual environments
+.venv/
+venv/
+env/
+
+# python bytecode
+__pycache__/
+*.py[cod]
+
+# test caches
+.pytest_cache/
+
+# run outputs
+out/
