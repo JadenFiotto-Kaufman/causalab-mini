@@ -16,7 +16,7 @@ from __future__ import annotations
 import nnsight
 import torch
 
-from . import address, metrics, ops
+from . import metrics, ops
 
 
 def execute(model, plan, remote: bool | str = False) -> dict:
@@ -52,17 +52,15 @@ def apply_taps(model, forward, values) -> None:
     for tap in forward.taps:
         for write in tap.writes:
             patched = ops.apply_write(
-                address.read(model, tap.path, tap.side),
+                tap.address.read(model),
                 write.positions,
                 values[write.operand],
                 write.mechanism,
                 write.featurizer,
             )
-            address.write(model, tap.path, tap.side, patched)
+            tap.address.write(model, patched)
         for read in tap.reads:
-            values[read.name] = ops.gather(
-                address.read(model, tap.path, tap.side), read.positions
-            ).clone()
+            values[read.name] = ops.gather(tap.address.read(model), read.positions).clone()
 
 
 def score(plan, values, results) -> None:

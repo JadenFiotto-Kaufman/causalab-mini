@@ -12,7 +12,7 @@ The shape, top down:
       forwards: one per (model, input), already in execution order
         Forward(name, input, input_ids, attention_mask, taps)
           taps: one per address, in forward order
-            Tap(path, side, writes, reads)     writes run before reads at the
+            Tap(address, writes, reads)        writes run before reads at the
               WriteOp(name, positions, operand, mechanism, featurizer)  same
               ReadOp(name, positions)                                   address
       metrics: MetricOp(name, kind, of, ids)
@@ -23,7 +23,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import address, data, encoding, metrics as metrics_module
+from . import data, encoding, metrics as metrics_module
+from .address import Address
+from .shapes import ExampleIds, Positions, TokenIds, TokenRows
 
 
 class PlanError(ValueError):
@@ -33,13 +35,13 @@ class PlanError(ValueError):
 @dataclass(frozen=True)
 class ReadOp:
     name: str
-    positions: tuple[int, ...]
+    positions: Positions
 
 
 @dataclass(frozen=True)
 class WriteOp:
     name: str
-    positions: tuple[int, ...]
+    positions: Positions
     operand: str  # the name of a read, produced by an earlier forward
     mechanism: str
     featurizer: str
@@ -47,8 +49,7 @@ class WriteOp:
 
 @dataclass(frozen=True)
 class Tap:
-    path: str
-    side: str
+    address: Address
     writes: tuple[WriteOp, ...]
     reads: tuple[ReadOp, ...]
 
@@ -57,8 +58,8 @@ class Tap:
 class Forward:
     name: str  # "original" or an intervened model's name
     input: str  # the data role its rows come from
-    input_ids: tuple[tuple[int, ...], ...]
-    attention_mask: tuple[tuple[int, ...], ...]
+    input_ids: TokenRows
+    attention_mask: TokenRows
     taps: tuple[Tap, ...]
 
 
@@ -67,14 +68,14 @@ class MetricOp:
     name: str
     kind: str
     of: str  # the read it binds to
-    ids: tuple[tuple[int, ...], ...]  # one vocabulary id per row, per operand
+    ids: tuple[TokenIds, ...]  # one vocabulary id per row, per operand
 
 
 @dataclass(frozen=True)
 class SaveFile:
     file_path: str
     value: str
-    example_ids: tuple[str, ...]
+    example_ids: ExampleIds
     unit: str
     estimand_version: str
     produced_by: str
@@ -177,11 +178,11 @@ def _schedule(document) -> list[tuple[str, str]]:
 
 def _forward(name, role, document, batch) -> Forward:
     """One model pass: its taps, grouped by address and put in forward order."""
-    writes = {}
+    writes: dict[Address, list[WriteOp]] = {}
     if name in document.intervened_models:
         for write_name in document.intervened_models[name].writes:
             spec = document.writes[write_name]
-            writes.setdefault(_key(document, spec.site), []).append(
+            writes.setdefault(_address(document, spec.site), []).append(
                 WriteOp(
                     name=write_name,
                     positions=encoding.positions(batch, spec.pos),
@@ -192,25 +193,23 @@ def _forward(name, role, document, batch) -> Forward:
                     featurizer="identity",
                 )
             )
-    reads = {}
+    reads: dict[Address, list[ReadOp]] = {}
     for read_name, spec in document.reads.items():
         if (spec.model, spec.input) != (name, role):
             continue
-        reads.setdefault(_key(document, spec.site), []).append(
+        reads.setdefault(_address(document, spec.site), []).append(
             ReadOp(name=read_name, positions=encoding.positions(batch, spec.pos))
         )
 
     taps = []
-    for key in sorted(set(writes) | set(reads)):
-        _order, path, side = key
+    for tap_address in sorted(set(writes) | set(reads), key=lambda one: one.key):
         taps.append(
             Tap(
-                path=path,
-                side=side,
+                address=tap_address,
                 # A read in model M sees M's writes applied, upstream and at the
                 # same address — so at one address the writes go first.
-                writes=tuple(writes.get(key, ())),
-                reads=tuple(reads.get(key, ())),
+                writes=tuple(writes.get(tap_address, ())),
+                reads=tuple(reads.get(tap_address, ())),
             )
         )
     return Forward(
@@ -222,9 +221,8 @@ def _forward(name, role, document, batch) -> Forward:
     )
 
 
-def _key(document, site_name):
-    """(forward-order key, path, side) for a site — the only call into the one
-    file that knows about models."""
+def _address(document, site_name) -> Address:
+    """A site's address — the only call into the one file that knows about
+    models."""
     site = document.sites[site_name]
-    path, side = address.locate(site.component, site.layer)
-    return (address.order(site.component, site.layer), path, side)
+    return Address(site.component, site.layer)

@@ -18,6 +18,7 @@ def minimal_plan(minimal_raw, data_root, model):
 # --------------------------------------------------------------------- #
 
 ALLOWED = (str, int, float, bool, type(None), tuple)
+PLAN_TYPES = {"causalab_mini.plan", "causalab_mini.address"}
 
 
 def _walk(value, where="plan"):
@@ -34,7 +35,9 @@ def _walk(value, where="plan"):
 def test_a_plan_holds_strings_and_integers_and_nothing_else(minimal_plan):
     for where, value in _walk(minimal_plan):
         if dataclasses.is_dataclass(value):
-            assert type(value).__module__ == "causalab_mini.plan", where
+            # plan.py's own ops, plus Address — which is (component, layer),
+            # pure data, and the reason a tap can be sorted and printed.
+            assert type(value).__module__ in PLAN_TYPES, where
             continue
         assert isinstance(value, ALLOWED), f"{where} is a {type(value).__name__}"
         # No tensor, no envoy, no model, no tokenizer — named so a failure says
@@ -60,12 +63,14 @@ def test_the_schedule_is_two_forwards_counterfactual_then_base(minimal_plan):
     ]
 
     original, patched = minimal_plan.forwards
-    assert [(tap.path, tap.side) for tap in original.taps] == [("layers.0", "output")]
+    assert [(tap.address.path, tap.address.side) for tap in original.taps] == [
+        ("layers.0", "output")
+    ]
     assert [read.name for read in original.taps[0].reads] == ["v_cf"]
     assert original.taps[0].writes == ()
 
     # forward order: the write at layer 0 goes above the read at the head.
-    assert [(tap.path, tap.side) for tap in patched.taps] == [
+    assert [(tap.address.path, tap.address.side) for tap in patched.taps] == [
         ("layers.0", "output"),
         ("lm_head", "output"),
     ]

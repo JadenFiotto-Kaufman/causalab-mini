@@ -7,7 +7,7 @@ import nnsight
 import pytest
 import torch
 
-from causalab_mini import address, cli, document, ops, output, plan, run
+from causalab_mini import cli, document, ops, output, plan, run
 
 
 def build(raw, data_root, model):
@@ -53,16 +53,12 @@ def test_a_swap_lands_the_source_read_bit_for_bit(model, minimal_plan):
     with model.session():
         landed = nnsight.save({})
         with model.trace(run.batch(source_forward)):
-            v_cf = ops.gather(
-                address.read(model, tap.path, tap.side), read.positions
-            ).clone()
+            v_cf = ops.gather(tap.address.read(model), read.positions).clone()
         with model.trace(run.batch(patched_forward)):
-            address.write(
+            tap.address.write(
                 model,
-                tap.path,
-                tap.side,
                 ops.apply_write(
-                    address.read(model, tap.path, tap.side),
+                    tap.address.read(model),
                     write.positions,
                     v_cf,
                     write.mechanism,
@@ -70,7 +66,7 @@ def test_a_swap_lands_the_source_read_bit_for_bit(model, minimal_plan):
                 ),
             )
             landed["after"] = ops.gather(
-                address.read(model, tap.path, tap.side), write.positions
+                tap.address.read(model), write.positions
             ).clone()
             landed["source"] = v_cf
 
@@ -128,24 +124,20 @@ def test_a_write_touches_only_the_position_it_declares(model, minimal_plan):
     with model.session():
         seen = nnsight.save({})
         with model.trace(run.batch(source)):
-            v_cf = ops.gather(
-                address.read(model, tap.path, tap.side), write.positions
-            ).clone()
+            v_cf = ops.gather(tap.address.read(model), write.positions).clone()
             seen["source"] = v_cf
         with model.trace(run.batch(patched)):
             seen["clean_first"] = ops.gather(
-                address.read(model, tap.path, tap.side), first_token
+                tap.address.read(model), first_token
             ).clone()
             seen["clean_last"] = ops.gather(
-                address.read(model, tap.path, tap.side), write.positions
+                tap.address.read(model), write.positions
             ).clone()
         with model.trace(run.batch(patched)):
-            address.write(
+            tap.address.write(
                 model,
-                tap.path,
-                tap.side,
                 ops.apply_write(
-                    address.read(model, tap.path, tap.side),
+                    tap.address.read(model),
                     write.positions,
                     v_cf,
                     write.mechanism,
@@ -153,7 +145,7 @@ def test_a_write_touches_only_the_position_it_declares(model, minimal_plan):
                 ),
             )
             seen["patched_first"] = ops.gather(
-                address.read(model, tap.path, tap.side), first_token
+                tap.address.read(model), first_token
             ).clone()
 
     assert torch.equal(seen["clean_first"], seen["patched_first"])
