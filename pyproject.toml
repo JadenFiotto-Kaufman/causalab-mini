@@ -1,0 +1,40 @@
+[project]
+name = "causalab-mini"
+version = "0.0.1"
+description = "A clean-room, deliberately small reimplementation of causalab's intervention engine."
+requires-python = ">=3.10"
+dependencies = [
+    "nnsight",
+    "nnterp",
+    "torch",
+    # nnterp defaults device_map="auto", and transformers 5 refuses a device_map
+    # without accelerate installed.
+    "accelerate",
+]
+
+[project.scripts]
+causalab-mini = "causalab_mini.cli:main"
+
+[dependency-groups]
+dev = ["pytest"]
+
+# nnsight and nnterp are NOT releases here: they are the shared working
+# checkouts this machine develops against, installed editable. That means they
+# can move underneath this project without anything here changing — a `git
+# checkout` in either tree is, for us, a silent dependency upgrade. At the time
+# of writing /home/localjadenfk/wd/nnsight is detached at 524c33fc ("ndif: cache
+# the remote environment per host") and /home/localjadenfk/wd/nnterp is on
+# 334e4ef. If a run stops reproducing, check those two HEADs first.
+[tool.uv.sources]
+nnsight = { path = "/home/localjadenfk/wd/nnsight", editable = true }
+nnterp = { path = "/home/localjadenfk/wd/nnterp", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["causalab_mini*"]
