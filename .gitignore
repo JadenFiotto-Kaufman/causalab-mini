@@ -12,3 +12,6 @@ __pycache__/
 
 # run outputs
 out/
+
+# build artifacts
+*.egg-info/
