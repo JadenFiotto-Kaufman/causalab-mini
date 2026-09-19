@@ -12,6 +12,9 @@ dependencies = [
     # nnterp defaults device_map="auto", and transformers 5 refuses a device_map
     # without accelerate installed.
     "accelerate",
+    # the plan-shaped authoring format is pydantic models (nnsight already
+    # pulls it in; declared here because we import it directly).
+    "pydantic",
 ]
 
 [project.scripts]

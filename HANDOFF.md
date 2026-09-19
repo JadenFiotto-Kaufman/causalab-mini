@@ -32,16 +32,17 @@ It **imports nothing from causalab**. Only the JSON documents were copied.
 
 ## 2. State as of this handoff
 
-`master`, clean tree, no remote. **192 tests passing**
+`master`, clean tree, pushed to GitHub (private). **204 tests passing**
 (`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~8 s), `uvx pyright` at 0
-errors. **3,337 source lines** across 27 files in `causalab_mini/`.
+errors. **4,001 source lines** across 28 files in `causalab_mini/`.
 
 The package is five sub-packages and a short spine, each named for what it is
 allowed to know:
 
     __init__.py shapes.py address.py cli.py       vocabulary, the architecture
                                                   map, the entry point
-    plan/   document.py plan.py build.py write.py  the request, as pure data
+    plan/   document.py spec.py plan.py           the request, as pure data
+            build.py    write.py  sweep.py         (two authoring formats)
     data/   rows.py     encoding.py                the corpus -> padded tokens
     ops/    intervene.py metrics.py featurizer.py  agnostic: tensors only
     engine/ base.py     steps.py                   the contract, and what a
@@ -86,32 +87,38 @@ These are load-bearing. Several tests enforce them.
    `model.session(remote=remote)`. Not a session per forward, not a lazy
    per-read path. `remote=True` on that session is the *only* difference
    between local and remote — there is no second code path.
-3. **A plan is pure data; an engine turns it into tensors.** A *fresh* plan
+3. **There are two authoring formats and one compiler.** `document.py`
+   reads the protocol's JSON; `spec.py` reads a plan-shaped one whose
+   `steps` are the plan's steps and whose saves sit on the step that
+   produces them. Both reduce to `_Experiment` and share every helper below
+   it, so they cannot drift into producing different plans —
+   `tests/test_spec.py` asserts the same numbers from both.
+4. **A plan is pure data; an engine turns it into tensors.** A *fresh* plan
    holds strings, ints, tuples and dicts only — its `results` dicts are empty
    until it runs, and they are the only mutable thing in the tree. A plan has
    no `execute`: a plan that knew how to run itself would only run on one
    engine.
-4. **No trace body may reference a client object** — no executor, document,
+5. **No trace body may reference a client object** — no executor, document,
    tokenizer. `tests/test_structure.py` is an AST tripwire over every
    `with ….trace(`/`.session(` block, package-wide; it has a vacuity guard.
-5. **`address.py` is the only file that knows anything about model
+6. **`address.py` is the only file that knows anything about model
    internals**, and it says *where* only — which module path (in nnterp's
    standardized names), which side, which axis the sequence runs along, what
    order taps go in. Reaching there is the engine's
    (`engine/engines/nnterp/engine.py`'s `read`/`write`). `ops/` knows nothing
    about models at all.
-6. **An engine is seven members and no more**: `load`, then `tokenizer`,
+7. **An engine is seven members and no more**: `load`, then `tokenizer`,
    `num_layers`, `locate` and `width` — what the compiler asks of a runtime —
    then `execute` and `forward`, what the run asks.
    Everything else lives in `engine/steps.py` and is shared.
    `tests/test_engine.py` pins this: it asserts the override set is exactly
    the contract, and runs a real compiled plan on an engine that has no model
    and no session.
-7. **An engine holds its model.** `Engine.load(spec)` is how a model enters
+8. **An engine holds its model.** `Engine.load(spec)` is how a model enters
    the project, and `plan.build_request(raw, data_root, engine)` compiles
    against the engine, not against a handle — because what a tokenizer is,
    how a site is located and how wide it is are all runtime questions.
-8. **The client never decides anything from a tensor.** The plan carries a
+9. **The client never decides anything from a tensor.** The plan carries a
    spec; the block resolves it, including any dynamic case. (Nothing here needs
    a dynamic case yet. In the real engine this is how the generated frame and
    the DeltaNet fire count work.)

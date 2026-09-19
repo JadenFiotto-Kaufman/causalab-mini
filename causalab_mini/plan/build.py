@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import random
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,231 @@ from .plan import (
     Weights,
     WriteOp,
 )
+
+
+def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
+    """Compile a plan-shaped document (`spec.py`) into a plan.
+
+    Shorter than `build` below, and not because it does less: the document
+    already says what the steps are and where the saves go, so this resolves
+    what needs a model — the addresses, the widths, the tokenizer, the rows —
+    and copies the structure across. That difference *is* the argument for
+    the format.
+    """
+    for name, site in spec.sites.items():
+        if site.layers is not None and not 0 <= site.layers[0] < engine.num_layers:
+            raise PlanError(
+                f"site {name!r}: layer {site.layers[0]} is outside the model's "
+                f"{engine.num_layers} layers"
+            )
+    addresses = {
+        name: engine.locate(site.component, site.layers[0] if site.layers else None)
+        for name, site in spec.sites.items()
+    }
+    experiment = _Experiment.of_spec(spec)
+    fits = [one for one in spec.steps.values() if type(one).__name__ == "Fit"]
+    featurizers = tuple(
+        _spec_featurizer(name, one, spec, addresses, engine, fits)
+        for name, one in spec.featurizers.items()
+    )
+    widths = {one.name: one.d for one in featurizers}
+
+    def table(refs: dict[str, str]) -> dict[str, list[rows_module.Row]]:
+        loaded = {role: rows_module.load(data_root, ref) for role, ref in refs.items()}
+        counts = {role: len(one) for role, one in loaded.items()}
+        if len(set(counts.values())) != 1:
+            raise PlanError(f"roles must have the same row count, got {counts}")
+        return loaded
+
+    steps: dict[str, Step] = {}
+    if featurizers:
+        # Declaring a featurizer is what builds it; the document does not
+        # spell out a step whose whole content would be the declaration.
+        steps["featurizers"] = Featurizers(specs=featurizers)
+    for name, step in spec.steps.items():
+        kind = type(step).__name__
+        if kind == "Observe":
+            rows = table(step.rows)
+            steps[name] = replace(
+                _pass(experiment, rows, addresses, engine.tokenizer),
+                saves=_spec_saves(step.saves, spec, rows["base"], widths),
+            )
+        elif kind == "Fit":
+            steps[name] = _spec_fit(step, spec, experiment, table, addresses, engine, widths)
+        elif kind == "Weights":
+            steps[name] = Weights(
+                names=tuple(step.names),
+                saves=_spec_saves(step.saves, spec, [], widths, sites=_sites_of(spec)),
+            )
+        else:  # pragma: no cover — the discriminated union has no other arm
+            raise PlanError(f"step {name!r}: {kind} is not a step this compiler knows")
+    return Plan(steps=steps)
+
+
+def _spec_fit(
+    step: Any,
+    spec: Any,
+    experiment: _Experiment,
+    table: Any,
+    addresses: dict[str, Address],
+    engine: Any,
+    widths: dict[str, int],
+) -> Fit:
+    rows = table(step.rows)
+    evaluation_rows = table(step.eval.rows)
+    if step.rows != step.eval.rows:
+        fitted = {json.dumps(row, sort_keys=True) for row in rows["base"]}
+        shared = [one for one in evaluation_rows["base"] if json.dumps(one, sort_keys=True) in fitted]
+        if shared:
+            raise PlanError(
+                f"the eval rows share {len(shared)} row(s) with the fitted rows; "
+                "the two must be endpoint-disjoint"
+            )
+    count = len(rows["base"])
+    order = random.Random(step.seed)
+    epochs = tuple(
+        tuple(
+            _pass(experiment, _take(rows, draw[start : start + step.pairs]), addresses, engine.tokenizer)
+            for start in range(0, count, step.pairs)
+        )
+        for draw in (order.sample(range(count), count) for _ in range(step.epochs))
+    )
+    return Fit(
+        epochs=epochs,
+        evaluation=replace(
+            _pass(experiment, evaluation_rows, addresses, engine.tokenizer),
+            saves=_spec_saves(step.eval.saves, spec, evaluation_rows["base"], widths),
+        ),
+        objective=tuple((weight, term) for weight, term in step.objective),
+        params=tuple(step.params),
+        lr=step.optimizer.lr,
+        weight_decay=step.optimizer.weight_decay,
+        eval_metrics=(step.early_stop.metric,),
+        early_stop=step.early_stop.metric,
+        patience=step.early_stop.patience,
+        mode=step.early_stop.mode,
+        saves=_spec_saves(step.saves, spec, [], widths),
+    )
+
+
+def _spec_featurizer(
+    name: str, one: Any, spec: Any, addresses: dict[str, Address], engine: Any, fits: list[Any]
+) -> FeaturizerOp:
+    site = _sites_of(spec)[name]
+    d = engine.width(addresses[site])
+    if not 0 < one.k <= d:
+        raise PlanError(
+            f"featurizer {name!r}: k={one.k} is not a subspace of the {d}-wide site {site!r}"
+        )
+    trained = any(name in fit.params for fit in fits)
+    seed = one.seed
+    if seed is None:
+        seed = next((fit.seed for fit in fits if name in fit.params), 0)
+    return FeaturizerOp(
+        name=name,
+        kind=one.kind,
+        k=one.k,
+        d=d,
+        parametrization=one.parametrization,
+        seed=seed,
+        trained=trained,
+    )
+
+
+def _sites_of(spec: Any) -> dict[str, str]:
+    """Which site each featurizer acts at — derived, never authored, because
+    a featurizer name is one parameter set and the document already says
+    where it is used."""
+    found = {}
+    for name in spec.featurizers:
+        at = {read.site for read in spec.intervention.reads.values() if read.featurizer == name}
+        at |= {w.site for w in spec.intervention.writes.values() if w.featurizer == name}
+        (found[name],) = at
+    return found
+
+
+def _spec_saves(
+    saves: list[Any],
+    spec: Any,
+    base_rows: list[rows_module.Row],
+    widths: dict[str, int],
+    sites: dict[str, str] | None = None,
+) -> tuple[SaveFile, ...]:
+    """A step's saves. A metric table carries its rows' labels; a fitted
+    parameter carries the identity stamp a later run would check."""
+    built = []
+    for save in saves:
+        if sites is not None and save.value in sites:
+            site = sites[save.value]
+            one = spec.featurizers[save.value]
+            built.append(
+                SaveFile(
+                    file_path=save.file_path,
+                    value=save.value,
+                    identity={
+                        "model_key": spec.model.key,
+                        "model_revision": spec.model.revision,
+                        "model_dtype": spec.model.dtype,
+                        "site": site,
+                        "component": spec.sites[site].component,
+                        "layer": str(spec.sites[site].layers[0] if spec.sites[site].layers else None),
+                        "k": str(one.k),
+                        "d": str(widths[save.value]),
+                        "parametrization": one.parametrization,
+                        "featurizer_dtype": "fp32",
+                        "engine": "causalab-mini",
+                    },
+                )
+            )
+            continue
+        kind = spec.intervention.metrics[save.value].kind
+        built.append(
+            SaveFile(
+                file_path=save.file_path,
+                value=save.value,
+                example_ids=rows_module.example_ids(base_rows),
+                unit=metrics_module.UNITS[kind][0],
+                estimand_version=metrics_module.UNITS[kind][1],
+            )
+        )
+    return tuple(built)
+
+
+@dataclass(frozen=True)
+class _Experiment:
+    """The intervention, in the one shape the compiler works from.
+
+    Both front ends reduce to this: the protocol's flat document
+    (`document.py`) and the plan-shaped one (`spec.py`). Everything below it
+    — the schedule, the taps, the metrics — is written once and shared, so
+    the two formats cannot drift into producing different plans.
+    """
+
+    fields: dict[str, str]  # role -> which column of a row its text is
+    reads: dict[str, Any]
+    writes: dict[str, Any]
+    models: dict[str, Any]
+    metrics: dict[str, Any]
+
+    @classmethod
+    def of_document(cls, document: Document) -> "_Experiment":
+        return cls(
+            fields={role: one.field for role, one in document.roles.items()},
+            reads=dict(document.reads),
+            writes=dict(document.writes),
+            models=dict(document.intervened_models),
+            metrics=dict(document.metrics),
+        )
+
+    @classmethod
+    def of_spec(cls, spec: Any) -> "_Experiment":
+        return cls(
+            fields={role: one.field for role, one in spec.roles.items()},
+            reads=dict(spec.intervention.reads),
+            writes=dict(spec.intervention.writes),
+            models=dict(spec.intervention.models),
+            metrics=dict(spec.intervention.metrics),
+        )
 
 
 def build_request(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Plan:
@@ -96,25 +322,34 @@ def build(document: Document, data_root: str | Path, engine: Any) -> Plan:
     # The steps, in the order they run. A step that has nothing to do is not
     # there at all: a document with no featurizers has no `featurizers` step,
     # rather than one holding an empty tuple.
+    # Each save goes on the step that produces its value: a metric on the
+    # scored pass, a fitted parameter on the step that publishes it. The
+    # protocol's `save` is one flat list, so this is where the flat list
+    # becomes a tree again.
+    saves = [_save(entry, document, rows["base"], widths) for entry in document.saves]
+    weight_names = {one.name for one in featurizers}
+    metric_saves = tuple(save for save in saves if save.value not in weight_names)
+    weight_saves = tuple(save for save in saves if save.value in weight_names)
+
     steps: dict[str, Step] = {}
     if featurizers:
         steps["featurizers"] = Featurizers(specs=featurizers)
     fit = _fit(document, data_root, rows, addresses, tokenizer)
     if fit is not None:
         steps["fit"] = fit
-    steps["observe"] = _pass(document, rows, addresses, tokenizer)
-    if featurizers:
-        steps["weights"] = Weights(names=tuple(one.name for one in featurizers))
-    return Plan(
-        steps=steps,
-        saves=tuple(
-            _save(entry, document, rows["base"], widths) for entry in document.saves
-        ),
+    steps["observe"] = replace(
+        _pass(_Experiment.of_document(document), rows, addresses, tokenizer),
+        saves=metric_saves,
     )
+    if featurizers:
+        steps["weights"] = Weights(
+            names=tuple(one.name for one in featurizers), saves=weight_saves
+        )
+    return Plan(steps=steps)
 
 
 def _pass(
-    document: Document,
+    experiment: _Experiment,
     rows: dict[str, list[rows_module.Row]],
     addresses: dict[str, Address],
     tokenizer: Any,
@@ -123,12 +358,15 @@ def _pass(
     training update, an eval pass and the scored run are all this step, over
     different rows."""
     batches = {
-        role: encoding.encode(tokenizer, [rows_module.field_text(row, document.roles[role].field) for row in table])
+        role: encoding.encode(
+            tokenizer,
+            [rows_module.field_text(row, experiment.fields[role]) for row in table],
+        )
         for role, table in rows.items()
     }
     forwards = tuple(
-        _forward(name, role, document, batches[role], addresses)
-        for name, role in _schedule(document)
+        _forward(name, role, experiment, batches[role], addresses)
+        for name, role in _schedule(experiment)
     )
     base_rows = rows["base"]  # base is the schema of the pair: metrics read its columns
     metrics = tuple(
@@ -141,7 +379,7 @@ def _pass(
                 for column in spec.columns
             ),
         )
-        for name, spec in document.metrics.items()
+        for name, spec in experiment.metrics.items()
     )
     return Observe(forwards=forwards, metrics=metrics)
 
@@ -252,14 +490,19 @@ def _fit(
     order = random.Random(spec.seed)
     epochs = tuple(
         tuple(
-            _pass(document, _take(rows, draw[start : start + spec.pairs]), addresses, tokenizer)
+            _pass(
+                _Experiment.of_document(document),
+                _take(rows, draw[start : start + spec.pairs]),
+                addresses,
+                tokenizer,
+            )
             for start in range(0, count, spec.pairs)
         )
         for draw in (order.sample(range(count), count) for _ in range(spec.epochs))
     )
     return Fit(
         epochs=epochs,
-        evaluation=_pass(document, evaluation, addresses, tokenizer),
+        evaluation=_pass(_Experiment.of_document(document), evaluation, addresses, tokenizer),
         objective=spec.objective,
         params=spec.params,
         lr=spec.lr,
@@ -278,7 +521,7 @@ def _take(rows: dict[str, list[rows_module.Row]], picked: list[int]) -> dict[str
     return {role: [table[index] for index in picked] for role, table in rows.items()}
 
 
-def _schedule(document: Document) -> list[tuple[str, str]]:
+def _schedule(experiment: _Experiment) -> list[tuple[str, str]]:
     """The forwards, as (model, input) pairs, in execution order.
 
     Cross-model data flow has one channel: a read in model A may be the operand
@@ -287,14 +530,14 @@ def _schedule(document: Document) -> list[tuple[str, str]]:
     """
     units: dict[tuple[str, str], set[str]] = {}
     read_home: dict[str, tuple[str, str]] = {}
-    for name, spec in document.reads.items():
+    for name, spec in experiment.reads.items():
         unit = (spec.model, spec.input)
         units.setdefault(unit, set())
         read_home[name] = unit
-    for name, spec in document.intervened_models.items():
+    for name, spec in experiment.models.items():
         units.setdefault((name, spec.input), set())
         for write in spec.writes:
-            units[(name, spec.input)].add(document.writes[write].operand)
+            units[(name, spec.input)].add(experiment.writes[write].operand)
 
     ordered: list[tuple[str, str]] = []
     remaining = dict(units)
@@ -316,15 +559,15 @@ def _schedule(document: Document) -> list[tuple[str, str]]:
 def _forward(
     name: str,
     role: str,
-    document: Document,
+    experiment: _Experiment,
     batch: encoding.Batch,
     addresses: dict[str, Address],
 ) -> Forward:
     """One model pass: its taps, grouped by address and put in forward order."""
     writes: dict[Address, list[WriteOp]] = {}
-    if name in document.intervened_models:
-        for write_name in document.intervened_models[name].writes:
-            spec = document.writes[write_name]
+    if name in experiment.models:
+        for write_name in experiment.models[name].writes:
+            spec = experiment.writes[write_name]
             writes.setdefault(addresses[spec.site], []).append(
                 WriteOp(
                     name=write_name,
@@ -335,7 +578,7 @@ def _forward(
                 )
             )
     reads: dict[Address, list[ReadOp]] = {}
-    for read_name, spec in document.reads.items():
+    for read_name, spec in experiment.reads.items():
         if (spec.model, spec.input) != (name, role):
             continue
         reads.setdefault(addresses[spec.site], []).append(

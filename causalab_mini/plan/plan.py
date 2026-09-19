@@ -121,14 +121,21 @@ class SaveFile:
 
 @dataclass(frozen=True, kw_only=True)
 class Step:
-    """One thing that happens, and what it produced.
+    """One thing that happens, what it produced, and what of that is written.
 
     Every step is frozen except `results`, which the engine fills in as it
     runs. A step has no `execute`: what it means to run one is the engine's
     business, and a plan that knew would only work on one engine.
+
+    **`saves` is on every step, not only on a plan**, and that is what makes
+    a result addressable without a naming convention: a save names a result
+    of *the step it sits on*. A fit's held-out score and the scored run's are
+    both `iia`, and they never collide, because scope does the work that a
+    prefix would otherwise have to do.
     """
 
     results: dict[str, Any] = field(default_factory=dict)
+    saves: tuple["SaveFile", ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -187,7 +194,6 @@ class Plan(Step):
     """
 
     steps: dict[str, Step] = field(default_factory=dict)
-    saves: tuple[SaveFile, ...] = ()
 
     def step(self, name: str, kind: type[S] = Step) -> S:  # type: ignore[assignment]
         """The step called `name`, checked to be the kind you expected.
@@ -247,10 +253,27 @@ class Plan(Step):
 
 
 def steps_of(step: Step) -> tuple[Step, ...]:
-    """The steps one step contains: what a plan declares, and nothing else. A
-    `Fit`'s epochs are its own workings rather than steps of the plan, so a
-    walk stops there — see `Plan.result`."""
+    """The steps one step contains, for a *name* lookup: what a plan
+    declares, and nothing else. A `Fit`'s passes are its own workings rather
+    than steps of the plan, so a name search stops there — see
+    `Plan.result`. `children` is the wider walk, for writing.
+    """
     return tuple(step.steps.values()) if isinstance(step, Plan) else ()
+
+
+def children(step: Step) -> tuple[tuple[str, Step], ...]:
+    """Every step inside this one, named, for a walk that is about *places*
+    rather than names: writing files, or reading what a run produced.
+
+    Unlike `steps_of` this descends into a fit, because a fit's eval pass is
+    a place a save may sit. It stops at the per-update passes, which are the
+    fit's own workings and carry no saves.
+    """
+    if isinstance(step, Plan):
+        return tuple(step.steps.items())
+    if isinstance(step, Fit):
+        return (("eval", step.evaluation),)
+    return ()
 
 
 def _find(step: Step, name: str) -> list[Any]:

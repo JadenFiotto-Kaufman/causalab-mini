@@ -862,3 +862,22 @@ loosening quietly: `atol=1e-7` with the measurement in its docstring.
 The reason this matters beyond one document: **cross-engine bit-parity is a
 property of one write, not of writing.** A suite that only ever wrote once
 would have reported exact agreement and been believed.
+
+
+## 9. nnsight mounts `.save()` on `object`, and pydantic notices
+
+Naming a field `save` on a pydantic model warns:
+
+    UserWarning: Field name "save" in "Observe" shadows an attribute in
+    parent "Node"
+
+`pydantic.BaseModel` has no `save`. nnsight's C extension mounts one onto
+**`object`** — that is how `x.save()` works on anything inside a trace — so
+every class in a process that has imported nnsight inherits it, and a field
+called `save` shadows it.
+
+Harmless here (nothing calls `.save()` on a document) and the field is
+`saves` now, which matches `Step.saves` anyway. Worth knowing because the
+warning names pydantic and the cause is nnsight, and because any library
+that defines a `save` attribute on a class will silently replace nnsight's
+for instances of it.

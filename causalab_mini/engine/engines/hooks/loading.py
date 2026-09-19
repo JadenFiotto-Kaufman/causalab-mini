@@ -20,7 +20,6 @@ import torch
 from torch import nn
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from ....plan.document import ModelSpec
 
 
 class HooksEngineError(ValueError):
@@ -32,7 +31,7 @@ class HooksEngineError(ValueError):
 DTYPES = {"fp32": torch.float32, "bf16": torch.bfloat16}
 
 
-def load(spec: ModelSpec, device_map: str = "cpu") -> tuple[Any, Any]:
+def load(spec: Any, device_map: str = "cpu") -> tuple[Any, Any]:
     """The model and the tokenizer — two loads, because nothing pairs them."""
     model = AutoModelForCausalLM.from_pretrained(
         spec.key, revision=spec.revision, dtype=DTYPES[spec.dtype], device_map=device_map

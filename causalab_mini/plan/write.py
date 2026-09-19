@@ -21,23 +21,31 @@ from pathlib import Path
 
 from safetensors.torch import save_file
 
-from .plan import Plan, SaveFile
+from .plan import Plan, SaveFile, Step, children
 
 
-def write(plan: Plan, out_dir: str | Path) -> list[Path]:
+def write(step: Step, out_dir: str | Path) -> list[Path]:
+    """Every save in this subtree, written.
+
+    A **plan** gets a directory of its own, so a swept point's files land
+    under `pos=-1/`. Any other step writes into its enclosing plan's
+    directory: a fit's eval pass is a place, not a place*s*, and giving it a
+    folder would say otherwise.
+    """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    written = [_file(plan, save, out) for save in plan.saves]
-    for name, step in plan.steps.items():
-        if isinstance(step, Plan):
-            written.extend(write(step, out / name))
+    written = [_file(step, save, out) for save in step.saves]
+    for name, child in children(step):
+        written.extend(write(child, out / name if isinstance(child, Plan) else out))
     return written
 
 
-def _file(plan: Plan, save: SaveFile, out: Path) -> Path:
+def _file(step: Step, save: SaveFile, out: Path) -> Path:
     path = out / save.file_path
     path.parent.mkdir(parents=True, exist_ok=True)
-    value = plan.result(save.value)
+    # A save names a result of the step it sits on. No search, so no
+    # ambiguity: two steps may both produce `iia` and each saves its own.
+    value = step.results[save.value]
     if save.file_path.endswith(".safetensors"):
         # One auto-declared slot per featurizer, named `<featurizer>.weight`.
         save_file({"weight": value.contiguous()}, str(path), metadata=save.identity)

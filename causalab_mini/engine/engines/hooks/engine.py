@@ -22,7 +22,6 @@ import torch
 from ....address import Address, AddressError
 from ....ops import intervene
 from ....plan import Forward, Plan, Tap
-from ....plan.document import ModelSpec
 from ... import steps
 from ...base import Engine
 from .loading import HooksEngineError, load, standardized
@@ -37,7 +36,7 @@ class HooksEngine(Engine):
         self._names = standardized(model)
 
     @classmethod
-    def load(cls, spec: ModelSpec, **options: Any) -> "HooksEngine":
+    def load(cls, spec: Any, **options: Any) -> "HooksEngine":
         return cls(*load(spec, **options))
 
     # ----------------------------------------------------------------- #

@@ -7,13 +7,17 @@ import json
 from pathlib import Path
 
 from . import plan as plan_module
-from .plan import sweep
 from .engine import NNterpEngine
+from .plan import sweep
+from .plan.spec import Spec
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="causalab-mini")
-    parser.add_argument("document", help="a protocol_version 3 document")
+    parser.add_argument(
+        "document",
+        help="a protocol_version 3 document, or a plan-shaped one (it has `steps`)",
+    )
     parser.add_argument("--data-root", default="documents/data")
     parser.add_argument("--out", default="out")
     parser.add_argument(
@@ -26,11 +30,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     raw = json.loads(Path(args.document).read_text())
-    # The model is loaded once and every point of a sweep runs against it,
-    # which is why a sweep may not touch the `model` section.
-    engine = NNterpEngine.load(plan_module.Document.from_json(_first_point(raw)).model,
-                               device_map=args.device_map)
-    plan = plan_module.build_request(raw, args.data_root, engine)
+    if "steps" in raw:
+        # The plan-shaped format: the document says what the steps are.
+        spec = Spec.model_validate(raw)
+        engine = NNterpEngine.load(spec.model, device_map=args.device_map)
+        plan = plan_module.build_spec(spec, args.data_root, engine)
+    else:
+        # The protocol's format. The model is loaded once and every point of
+        # a sweep runs against it, which is why a sweep may not touch the
+        # `model` section.
+        engine = NNterpEngine.load(plan_module.Document.from_json(_first_point(raw)).model,
+                                   device_map=args.device_map)
+        plan = plan_module.build_request(raw, args.data_root, engine)
     remote = True if args.remote == "true" else (args.remote or False)
     executed = engine.execute(plan, remote=remote)
     for path in executed.write(args.out):

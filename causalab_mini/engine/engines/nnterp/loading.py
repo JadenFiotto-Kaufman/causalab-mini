@@ -7,17 +7,19 @@ the tokenizer. What it does *not* give us is written down in FINDINGS.md.
 
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 from nnterp import StandardizedTransformer
-
-from ....plan.document import ModelSpec
 
 # `model.dtype` is part of the experiment's identity, not of the run: the same
 # document at bf16 and at fp32 is two different experiments.
 DTYPES = {"fp32": torch.float32, "bf16": torch.bfloat16}
 
 
-def load(spec: ModelSpec, device_map: str = "auto") -> StandardizedTransformer:
+def load(spec: Any, device_map: str = "auto") -> StandardizedTransformer:
+    """`spec` is a model block from either authoring format: both carry
+    `key`, `revision` and `dtype`, which is all a loader needs."""
     return StandardizedTransformer(
         spec.key,
         revision=spec.revision,

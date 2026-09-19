@@ -31,7 +31,6 @@ import torch
 from ....address import Address, AddressError
 from ....ops import intervene
 from ....plan import Forward, Plan
-from ....plan.document import ModelSpec
 from ... import steps
 from ...base import Engine
 from .loading import load
@@ -42,7 +41,7 @@ class NNterpEngine(Engine):
         self.model = model
 
     @classmethod
-    def load(cls, spec: ModelSpec, **options: Any) -> "NNterpEngine":
+    def load(cls, spec: Any, **options: Any) -> "NNterpEngine":
         return cls(load(spec, **options))
 
     # ----------------------------------------------------------------- #

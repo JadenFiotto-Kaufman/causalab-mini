@@ -35,7 +35,6 @@ from typing import Any
 
 from ..address import Address
 from ..plan import Forward, Plan
-from ..plan.document import ModelSpec
 
 
 class Engine:
@@ -47,8 +46,12 @@ class Engine:
     # ----------------------------------------------------------------- #
 
     @classmethod
-    def load(cls, spec: ModelSpec, **options: Any) -> "Engine":
-        """The engine, holding the model the document named."""
+    def load(cls, spec: Any, **options: Any) -> "Engine":
+        """The engine, holding the model the document named.
+
+        `spec` is a model block from either authoring format — both carry
+        `key`, `revision` and `dtype`, and an engine needs nothing else.
+        """
         raise NotImplementedError
 
     # ----------------------------------------------------------------- #
