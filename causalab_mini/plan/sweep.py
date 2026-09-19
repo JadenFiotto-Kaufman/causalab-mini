@@ -1,0 +1,107 @@
+"""Sweeps: one document that is several experiments.
+
+`{"sweep": [a, b, c]}` at a field means the document is three **points** —
+the same experiment three times, differing in that one field. It is the
+protocol's spelling for "three experiments in a row", and the reason this
+project's plans nest: a swept document compiles to a root plan whose children
+are one plan per point.
+
+A sweep is **lowered on the client, before anything is compiled**: the wrapper
+is replaced by each of its values in turn, and each resulting document is
+compiled on its own. So a point is an ordinary document in every way — its
+own addresses, its own tokenization, its own digest — and nothing downstream
+of `build` knows a sweep ever happened. That is why the engine did not change
+to support this.
+
+Narrow on purpose, in the style of `document.py`: exactly one wrapper, at one
+field, holding a literal list. Everything else the protocol allows here
+(`{"sweep": {"range": …}}`, several swept fields and their cross product,
+`at_once`, cohorts, swept bundles) is refused by name.
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+from typing import Any
+
+Json = dict[str, Any]
+
+#: The path to a sweep wrapper, as the keys and indices that reach it.
+Path = tuple[str | int, ...]
+
+
+class SweepError(ValueError):
+    pass
+
+
+def points(raw: Json) -> tuple[tuple[str, Json], ...]:
+    """The documents one document is, as (label, document) pairs.
+
+    An unswept document is one point labelled `""`, which is how a caller
+    tells the two apart without asking.
+    """
+    found = _wrappers(raw)
+    if not found:
+        return (("", raw),)
+    if len(found) > 1:
+        raise SweepError(
+            f"{len(found)} swept fields ({', '.join(_spell(path) for path in found)}); "
+            "a cross product of sweeps is real protocol surface that is not "
+            "implemented — sweep one field"
+        )
+    path = found[0]
+    if path and path[0] in ("model", "header"):
+        # The engine loads the model once and every point runs against it, so
+        # a point may not ask for a different one.
+        raise SweepError(
+            f"{_spell(path)} is swept; a sweep may not change the model or the "
+            "header — those are the identity of the run, not a coordinate in it"
+        )
+    values = _at(raw, path)["sweep"]
+    if not isinstance(values, list):
+        raise SweepError(
+            f"{_spell(path)}: only a literal list of values is implemented; "
+            '{"sweep": {"range": …}} is not'
+        )
+    if not values:
+        raise SweepError(f"{_spell(path)}: a sweep of nothing")
+    return tuple((_label(path, value), _substitute(raw, path, value)) for value in values)
+
+
+def _wrappers(node: Any, path: Path = ()) -> list[Path]:
+    """Every `{"sweep": …}` in the document, by path, in reading order."""
+    if isinstance(node, dict):
+        if set(node) == {"sweep"}:
+            return [path]
+        return [one for key, value in node.items() for one in _wrappers(value, (*path, key))]
+    if isinstance(node, list):
+        return [one for index, value in enumerate(node) for one in _wrappers(value, (*path, index))]
+    return []
+
+
+def _at(node: Any, path: Path) -> Any:
+    for step in path:
+        node = node[step]
+    return node
+
+
+def _substitute(raw: Json, path: Path, value: Any) -> Json:
+    """`raw` with the wrapper at `path` replaced by one of its values."""
+    point = copy.deepcopy(raw)
+    parent = _at(point, path[:-1])
+    parent[path[-1]] = value
+    return point
+
+
+def _label(path: Path, value: Any) -> str:
+    """What this point is called — in the plan tree, and as a directory on
+    disk. The swept field's own name and the value it took: `pos=-1`."""
+    name = next((step for step in reversed(path) if isinstance(step, str)), "point")
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return f"{name}={value}"
+    return f"{name}={json.dumps(value, separators=(',', ':'))}"
+
+
+def _spell(path: Path) -> str:
+    return ".".join(str(step) for step in path)

@@ -15,3 +15,6 @@ out/
 
 # build artifacts
 *.egg-info/
+
+# agent worktrees
+.claude/

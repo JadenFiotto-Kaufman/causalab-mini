@@ -127,14 +127,29 @@ where it differs from the plan written here before it was built:
 - **No featurizer-isolation flag.** Each point rebuilds its own parameters
   before using them and execution is sequential, so nothing was needed yet.
 
-Still to do, and the test that decides whether nesting earned itself: **a
-sweep**. The protocol's own spelling for "three experiments in one document"
-is `{"sweep": [...]}` at a field — `featurizers.rot.seed: {"sweep": [0,1,2]}`
-with no `train` block is its random-subspace control. The agreed shape is to
-lower a sweep on the **document**, before compiling: N documents, N `build`
-calls, N child plans under one root. Nothing in the engine changes. Sweeps are
-on NOTES §8's out-of-scope list, so the slice is narrow: one wrapper at one
-field, every other sweep form refused by name.
+### The sweep, and what it proved
+
+Built, in `plan/sweep.py` and `build_request`. `documents/pos_sweep_cpu.json`
+is one document that is three experiments — the same interchange patched at
+the last token, the one before it, and the one before that.
+
+A sweep is lowered on the **raw JSON, before anything is compiled**: the
+wrapper is replaced by each value in turn and each resulting document is
+compiled on its own, so a point is an ordinary document with its own
+addresses, its own tokenization and its own digest. The slice is narrow in
+`document.py`'s style — one wrapper, at one field, holding a literal list;
+the range form, several swept fields, and a sweep of `model` or `header` are
+each refused by name.
+
+**The whole cost was 22 lines in `build.py`, one refusal in `document.py` and
+a new file that is mostly refusals.** Nothing in `engine/`, `steps.py`,
+`plan/plan.py`, `plan/write.py`, `ops/` or `address.py` changed — the engine
+walks the same tree it always walked, and the writer already recursed. That
+is the evidence that the nesting earned itself. Two behaviours fell out
+rather than being built: `root.result("iia")` refuses with "3 in this plan"
+because `iia` means three things now, and the three points write into
+`pos=-1/`, `pos=-2/` and `pos=-3/` because a plan's path in the tree is its
+path on disk.
 
 ## 5. Findings from this project worth carrying
 

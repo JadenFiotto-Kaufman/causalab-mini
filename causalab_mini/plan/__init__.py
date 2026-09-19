@@ -8,14 +8,17 @@ Two frozen descriptions and one compiler between them.
   every decision already taken.
 * `build.py` is the only thing that sits between them, and it is the only place
   in the project where the tokenizer, the rows on disk and the model's own
-  shapes are consulted.
+  shapes are consulted. `build_request` is its entry point: it lowers any
+  sweep first, so a swept document becomes a root plan with one child plan
+  per point.
+* `sweep.py` does that lowering, on the raw JSON, before anything is compiled.
 * `write.py` puts what a run produced on disk.
 
 Nothing in here knows how to execute anything: that is an engine's job, and a
 plan that knew would only work on one engine.
 """
 
-from .build import build
+from .build import build, build_request
 from .document import Document, DocumentError
 from .plan import (
     FeaturizerOp,
@@ -53,5 +56,6 @@ __all__ = [
     "Weights",
     "WriteOp",
     "build",
+    "build_request",
     "steps_of",
 ]

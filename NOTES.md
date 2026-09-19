@@ -802,10 +802,17 @@ surface that **nothing** in `documents/` needs.
 
 **Sweeps and multi-point machinery**
 
-- `{"sweep": [...]}` / `{"sweep": {"range": [...]}}` on any field.
+> Partly implemented since this was written: `{"sweep": [literal, …]}` at
+> **one** field is lowered by `plan/sweep.py` into one point per value, and a
+> swept document compiles to a root plan with one child plan per point. The
+> rest of this list still stands.
+
+- `{"sweep": {"range": [...]}}` on any field, and more than one swept field
+  (their cross product).
 - `{"at_once": [...]}` (§3.1) — N sites live in one forward, member naming
   (`a[layers=10]`), `names` templates, fan-out by reference.
-- Multi-point documents at all: all three are **one point**.
+- Multi-point documents among the three copied documents: all three are
+  **one point**. `documents/pos_sweep_cpu.json` is authored, not shipped.
 - **Cohorts** (§4) — points of one campaign that declare `train` on the same
   model and rows fitting together in one batched forward, each keeping its own
   seed, schedule, objective and early-stop decision.

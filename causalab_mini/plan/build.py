@@ -21,6 +21,7 @@ from typing import Any
 from ..address import Address
 from ..data import encoding, rows as rows_module
 from ..ops import metrics as metrics_module
+from . import sweep
 from .document import Document, SaveSpec
 from .plan import (
     FeaturizerOp,
@@ -38,6 +39,27 @@ from .plan import (
     Weights,
     WriteOp,
 )
+
+
+def build_request(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Plan:
+    """Compile a document, whatever number of experiments it is.
+
+    A plain document compiles to one plan. A document with a `{"sweep": […]}`
+    wrapper is several **points**, and compiles to a root plan holding one
+    child per point, named for the value it took — which is also the directory
+    its results are written to. Nothing else in the project knows the
+    difference: a point is an ordinary plan, and the engine that runs the root
+    is walking the same tree it always walks.
+    """
+    points = sweep.points(raw)
+    if len(points) == 1 and not points[0][0]:
+        return build(Document.from_json(raw), data_root, engine)
+    return Plan(
+        steps={
+            label: build(Document.from_json(point), data_root, engine)
+            for label, point in points
+        }
+    )
 
 
 def build(document: Document, data_root: str | Path, engine: Any) -> Plan:

@@ -495,6 +495,13 @@ class Document:
             f"protocol_version must be {PROTOCOL_VERSION!r}",
         )
 
+        _check(
+            not _swept(raw),
+            "this document has a {'sweep': …} wrapper in it. A sweep is lowered "
+            "before a document is built — use plan.build_request, which compiles "
+            "one plan per point",
+        )
+
         method = raw["method"]
         for section in UNSUPPORTED_METHOD_SECTIONS:
             _check(
@@ -551,6 +558,16 @@ class Document:
             saves=saves,
             digest=digest(raw),
         )
+
+
+def _swept(node: Any) -> bool:
+    """Whether a sweep wrapper is anywhere in the raw document. A `Document`
+    is one point, so one reaching here has not been lowered."""
+    if isinstance(node, dict):
+        return set(node) == {"sweep"} or any(_swept(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_swept(value) for value in node)
+    return False
 
 
 def digest(raw: Json) -> str:
