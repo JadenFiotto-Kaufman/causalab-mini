@@ -6,7 +6,6 @@ import argparse
 
 from . import plan as plan_module
 from .engine import NNterpEngine
-from .model import loading
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -24,10 +23,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     doc = plan_module.Document.load(args.document)
-    model = loading.load(doc.model, device_map=args.device_map)
-    plan = plan_module.build(doc, args.data_root, model)
+    engine = NNterpEngine.load(doc.model, device_map=args.device_map)
+    plan = plan_module.build(doc, args.data_root, engine)
     remote = True if args.remote == "true" else (args.remote or False)
-    executed = NNterpEngine.execute(model, plan, remote=remote)
+    executed = engine.execute(plan, remote=remote)
     for path in executed.write(args.out):
         print(path)
     return 0

@@ -28,10 +28,17 @@ def das_raw():
 
 
 @pytest.fixture(scope="session")
-def model():
-    """The tiny random Llama the document pins, on CPU in fp32."""
-    from causalab_mini.model import loading
+def model_engine():
+    """An nnterp engine holding the tiny random Llama the document pins, on
+    CPU in fp32. The engine loads the model: that is part of its contract, and
+    a second engine loads it differently."""
+    from causalab_mini.engine import NNterpEngine
     from causalab_mini.plan import document
 
-    doc = document.Document.load(MINIMAL)
-    return loading.load(doc.model, device_map="cpu")
+    return NNterpEngine.load(document.Document.load(MINIMAL).model, device_map="cpu")
+
+
+@pytest.fixture(scope="session")
+def model(model_engine):
+    """The nnterp handle itself, for tests that trace it by hand."""
+    return model_engine.model

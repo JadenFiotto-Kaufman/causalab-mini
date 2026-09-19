@@ -15,19 +15,25 @@ import torch
 
 from causalab_mini import ops, plan
 from causalab_mini.data import encoding
-from causalab_mini.model import loading as model_module
-from causalab_mini.model.address import Address
+
+from causalab_mini.address import Address
 from causalab_mini.plan import document
-from causalab_mini.engine import NNterpEngine, nnterp
+from causalab_mini.engine import NNterpEngine
+from causalab_mini.engine.engines.nnterp import engine as nnterp
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 DOCUMENT = REPO / "documents" / "gpt2_cpu.json"
 
 
 @pytest.fixture(scope="session")
-def gpt2():
-    """The tiny random GPT-2 the document pins, on CPU in fp32."""
-    return model_module.load(document.Document.load(DOCUMENT).model, device_map="cpu")
+def gpt2_engine():
+    """An nnterp engine holding the tiny random GPT-2 the document pins."""
+    return NNterpEngine.load(document.Document.load(DOCUMENT).model, device_map="cpu")
+
+
+@pytest.fixture(scope="session")
+def gpt2(gpt2_engine):
+    return gpt2_engine.model
 
 
 @pytest.fixture
@@ -35,8 +41,8 @@ def gpt2_raw():
     return json.loads(DOCUMENT.read_text())
 
 
-def _build(raw, data_root, model):
-    return plan.build(document.Document.from_json(raw), data_root, model)
+def _build(raw, data_root, engine):
+    return plan.build(document.Document.from_json(raw), data_root, engine)
 
 
 def _at(raw, component, layer):
@@ -69,11 +75,11 @@ def _identity_write(raw):
 # --------------------------------------------------------------------- #
 
 
-def test_one_address_serves_both_families(model, gpt2):
+def test_one_address_serves_both_families(model_engine, gpt2_engine, model, gpt2):
     """The same `Address` — the same component, layer and resolved operation —
     reaches both models, although the modules it lands on share no path."""
     for component, layer in (("block_output", 0), ("lm_head", None), ("attention_query", 0)):
-        assert Address.locate(model, component, layer) == Address.locate(gpt2, component, layer)
+        assert model_engine.locate(component, layer) == gpt2_engine.locate(component, layer)
 
     # What nnterp is absorbing on our behalf, spelled out: these are the real
     # paths, and nothing in the project mentions either of them.
@@ -83,14 +89,14 @@ def test_one_address_serves_both_families(model, gpt2):
     assert gpt2.layers[0].path == "model.transformer.h.0"
 
 
-def test_the_interior_operation_is_the_same_call_on_both_families(model, gpt2):
+def test_the_interior_operation_is_the_same_call_on_both_families(model_engine, gpt2_engine, model, gpt2):
     """It is the same name for the same reason — transformers 5.17 spells both
     forwards' dispatch identically — not by luck of an occurrence count: on
     GPT-2 the call sits in an `else` branch, under two more assignments and a
     second candidate implementation, and the suffix still lands on 1 because a
     call-op suffix counts calls of one symbol."""
-    assert Address.locate(gpt2, "attention_query", 0).op == "attention_interface_1"
-    assert Address.locate(model, "attention_query", 0).op == "attention_interface_1"
+    assert gpt2_engine.locate("attention_query", 0).op == "attention_interface_1"
+    assert model_engine.locate("attention_query", 0).op == "attention_interface_1"
     gpt2_ops = set(gpt2.attentions[0].source.names)
     assert "self__upcast_and_reordered_attn_0" in gpt2_ops  # the branch Llama has not
     assert "self__upcast_and_reordered_attn_0" not in set(model.attentions[0].source.names)
@@ -105,39 +111,39 @@ def test_the_interior_operation_is_the_same_call_on_both_families(model, gpt2):
     "component, layer",
     [("block_output", 2), ("lm_head", None), ("attention_query", 2)],
 )
-def test_a_write_lands_and_an_identity_write_does_not_move_anything(
+def test_a_write_lands_and_an_identity_write_does_not_move_anything(gpt2_engine, 
     gpt2_raw, data_root, gpt2, component, layer
 ):
     raw = _at(gpt2_raw, component, layer)
-    clean = NNterpEngine.execute(gpt2, _build(_no_write(raw), data_root, gpt2))
-    identity = NNterpEngine.execute(gpt2, _build(_identity_write(raw), data_root, gpt2))
-    swapped = NNterpEngine.execute(gpt2, _build(raw, data_root, gpt2))
+    clean = gpt2_engine.execute(_build(_no_write(raw), data_root, gpt2_engine))
+    identity = gpt2_engine.execute(_build(_identity_write(raw), data_root, gpt2_engine))
+    swapped = gpt2_engine.execute(_build(raw, data_root, gpt2_engine))
 
     assert torch.equal(identity.result("logit_diff"), clean.result("logit_diff"))
     assert not torch.equal(swapped.result("logit_diff"), clean.result("logit_diff"))
 
 
-def test_a_swap_at_the_head_makes_the_patched_run_score_the_counterfactual(
+def test_a_swap_at_the_head_makes_the_patched_run_score_the_counterfactual(gpt2_engine, 
     gpt2_raw, data_root, gpt2
 ):
     """The write at `lm_head` has a value we can name: the logits read in the
     patched model are, bit for bit, the counterfactual forward's."""
-    swapped = NNterpEngine.execute(gpt2, _build(_at(gpt2_raw, "lm_head", None), data_root, gpt2))
+    swapped = gpt2_engine.execute(_build(_at(gpt2_raw, "lm_head", None), data_root, gpt2_engine))
 
     # The same run with no write, over the counterfactual prompts as its base.
     counterfactual = _no_write(gpt2_raw)
     counterfactual["data"]["base"]["field"] = counterfactual["data"]["counterfactual"]["field"]
-    reference = NNterpEngine.execute(gpt2, _build(counterfactual, data_root, gpt2))
+    reference = gpt2_engine.execute(_build(counterfactual, data_root, gpt2_engine))
 
     assert torch.equal(swapped.result("logit_diff"), reference.result("logit_diff"))
 
 
-def test_the_engines_head_read_is_the_models_own_logits_here_too(gpt2_raw, data_root, gpt2):
+def test_the_engines_head_read_is_the_models_own_logits_here_too(gpt2, gpt2_raw, data_root, gpt2_engine):
     """FINDINGS §1.2: reading the head *module's* output and reading the model's
     returned logits are two taps, equal only where nothing sits between them.
     They are equal on this family as well."""
-    built = _build(gpt2_raw, data_root, gpt2)
-    results = NNterpEngine.execute(gpt2, built)
+    built = _build(gpt2_raw, data_root, gpt2_engine)
+    results = gpt2_engine.execute(built)
 
     source, patched = built.step("observe", plan.Observe).forwards
     with gpt2.trace(nnterp.batch(source)):
@@ -153,9 +159,9 @@ def test_the_engines_head_read_is_the_models_own_logits_here_too(gpt2_raw, data_
     )
 
 
-def test_the_document_runs_end_to_end(tmp_path, gpt2_raw, data_root, gpt2):
-    built = _build(gpt2_raw, data_root, gpt2)
-    written = NNterpEngine.execute(gpt2, built).write(tmp_path)
+def test_the_document_runs_end_to_end(tmp_path, gpt2_raw, data_root, gpt2_engine):
+    built = _build(gpt2_raw, data_root, gpt2_engine)
+    written = gpt2_engine.execute(built).write(tmp_path)
     assert [path.name for path in written] == ["logit_diff.json"]
     assert len(json.loads((tmp_path / "logit_diff.json").read_text())) == 4
 
@@ -165,13 +171,13 @@ def test_the_document_runs_end_to_end(tmp_path, gpt2_raw, data_root, gpt2):
 # --------------------------------------------------------------------- #
 
 
-def test_the_shipped_weekdays_answers_are_not_single_tokens_here(gpt2, minimal_raw, data_root):
+def test_the_shipped_weekdays_answers_are_not_single_tokens_here(gpt2_engine, gpt2, minimal_raw, data_root):
     """The whole reason for documents/data/counting: the engine reaches
     everything on this model, and the *metric* still cannot run on the shipped
     rows."""
     assert gpt2.tokenizer.encode(" Friday", add_special_tokens=False) == [304, 82, 271, 288]
     with pytest.raises(encoding.EncodingError, match="is 4 tokens"):
-        plan.build(document.Document.from_json(minimal_raw), data_root, gpt2)
+        plan.build(document.Document.from_json(minimal_raw), data_root, gpt2_engine)
 
 
 def test_token_form_is_load_bearing_on_this_tokenizer_and_inert_on_the_llamas(gpt2, model):
@@ -186,7 +192,7 @@ def test_token_form_is_load_bearing_on_this_tokenizer_and_inert_on_the_llamas(gp
     )[0]
 
 
-def test_the_query_at_layer_0_carries_nothing_a_prompt_pair_differs_in(
+def test_the_query_at_layer_0_carries_nothing_a_prompt_pair_differs_in(gpt2_engine, 
     gpt2_raw, data_root, gpt2
 ):
     """Not a family fact — a fact about what the address means, and a trap. The
@@ -195,11 +201,11 @@ def test_the_query_at_layer_0_carries_nothing_a_prompt_pair_differs_in(
     on every row, and an interchange there is a no-op that looks like a broken
     write. It is the reason the parametrized case above patches layer 2."""
     raw = _at(gpt2_raw, "attention_query", 0)
-    clean = NNterpEngine.execute(gpt2, _build(_no_write(raw), data_root, gpt2))
-    swapped = NNterpEngine.execute(gpt2, _build(raw, data_root, gpt2))
+    clean = gpt2_engine.execute(_build(_no_write(raw), data_root, gpt2_engine))
+    swapped = gpt2_engine.execute(_build(raw, data_root, gpt2_engine))
     assert torch.equal(swapped.result("logit_diff"), clean.result("logit_diff"))
 
-    built = _build(raw, data_root, gpt2)
+    built = _build(raw, data_root, gpt2_engine)
     source = built.step("observe", plan.Observe).forwards[0]
     tap = source.taps[0]
     with gpt2.trace(nnterp.batch(source)):

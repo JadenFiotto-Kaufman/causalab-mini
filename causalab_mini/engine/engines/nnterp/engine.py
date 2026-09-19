@@ -13,46 +13,93 @@ nothing has to be reattached afterwards and nothing is lost by filling in the
 wrong copy.
 
 Everything inside a traced block is a module-level function taking plan data
-and tensors. No `self`, no document, no tokenizer: nnsight ships every name a
+and tensors. No document, no tokenizer, no `self`: nnsight ships every name a
 block loads as a whole pickled object, so a block that reads one of those
-ships it. `cls` is allowed — an engine is a stateless class and pickles by
-reference out of a registered package.
+ships it. The engine is bound to a local first and passed explicitly — it is
+the one object the block genuinely needs, and all it carries is the model,
+which ships as a reference to the loaded module either way.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import nnsight
 import torch
 
-from ..model.address import Address, AddressError
-from ..ops import intervene
-from ..plan import Forward, Plan
-from . import steps
-from .base import Engine
+from ....address import Address, AddressError
+from ....ops import intervene
+from ....plan import Forward, Plan
+from ....plan.document import ModelSpec
+from ... import steps
+from ...base import Engine
+from .loading import load
 
 
 class NNterpEngine(Engine):
+    def __init__(self, model: Any) -> None:
+        self.model = model
+
     @classmethod
-    def execute(cls, model: Any, plan: Plan, remote: bool | str = False) -> Plan:
+    def load(cls, spec: ModelSpec, **options: Any) -> "NNterpEngine":
+        return cls(load(spec, **options))
+
+    # ----------------------------------------------------------------- #
+    # what the compiler asks
+    # ----------------------------------------------------------------- #
+
+    @property
+    def tokenizer(self) -> Any:
+        return self.model.tokenizer
+
+    @property
+    def num_layers(self) -> int:
+        return self.model.num_layers
+
+    def locate(self, component: str, layer: int | None = None) -> Address:
+        """The address, with an interior's operation resolved here on the
+        client: it is named by the loaded checkpoint's forward, so a document
+        that cannot be addressed should fail at compile time and not inside
+        someone else's process."""
+        address = Address(component, layer)
+        if address.call_site is None:
+            return address
+        source = address.resolve(self.model).source
+        return replace(address, op=find_op(source, address.call_site))
+
+    def width(self, address: Address) -> int:
+        attribute = address.width_attribute
+        if attribute is None:
+            raise AddressError(
+                f"the width of {address.component!r} is not derivable here; "
+                "nnterp publishes hidden_size and vocab_size on the handle and "
+                "nothing for an attention interior"
+            )
+        return int(getattr(self.model, attribute))
+
+    # ----------------------------------------------------------------- #
+    # what the run asks
+    # ----------------------------------------------------------------- #
+
+    def execute(self, plan: Plan, remote: bool | str = False) -> Plan:
         if remote:
             # Our own package is not installed on an NDIF server, so the
             # functions the block calls have to ship by value.
             nnsight.register("causalab_mini")
+        engine, model = self, self.model
         with model.session(remote=remote):
             executed = nnsight.save(plan)
-            steps.run(cls, model, executed)
+            steps.run(engine, executed)
         return executed
 
-    @classmethod
     def forward(
-        cls,
-        model: Any,
+        self,
         forward: Forward,
         values: dict[str, Any],
         featurizers: dict[str, Any],
     ) -> None:
+        model = self.model
         with model.trace(batch(forward)):
             apply_taps(model, forward, values, featurizers)
 
@@ -94,6 +141,28 @@ def apply_taps(
             values[read_op.name] = featurizers[read_op.featurizer].featurize(gathered)[0].clone()
 
 
+def find_op(source: Any, call_site: str) -> str:
+    """The single operation of a module's `.source` whose call site contains
+    `call_site`, or a refusal naming everything the forward does have.
+
+    Matching the *source line* rather than the operation's name is the whole
+    point. nnsight names an operation `{callable}_{occurrence}` and gives
+    assignments the same namespace as calls, so on transformers 5.17 the
+    attention forward has both `attention_interface_0` (the assignment
+    `attention_interface = ALL_ATTENTION_FUNCTIONS.get_interface(...)`) and
+    `attention_interface_1` (the call). A name match on "attention_interface"
+    hits both; the needle `"attention_interface("` is call-shaped and hits one.
+    """
+    hits = [op.name for op in source if call_site in op.text.split("\n")[op.line - 1]]
+    if len(hits) != 1:
+        raise AddressError(
+            f"{call_site!r} matches {len(hits)} operations {hits} of this forward; "
+            f"an address serves exactly one. The forward's operations are: "
+            f"{list(source.names)}"
+        )
+    return hits[0]
+
+
 def read(model: Any, address: Address) -> Any:
     """The tensor at `address`, during a trace.
 
@@ -108,7 +177,7 @@ def read(model: Any, address: Address) -> Any:
     nnsight. A different engine says it differently.
     """
     if not address.interior:
-        value = getattr(address.envoy(model), address.side)
+        value = getattr(address.resolve(model), address.side)
         return value[0] if isinstance(value, tuple) else value
     args, _ = operation(model, address).inputs
     return args[address.arg]
@@ -118,7 +187,7 @@ def write(model: Any, address: Address, tensor: Any) -> None:
     """Put a tensor back: rebuilding the tuple if there was one, or rebuilding
     the call's arguments around the new one."""
     if not address.interior:
-        envoy = address.envoy(model)
+        envoy = address.resolve(model)
         current = getattr(envoy, address.side)
         setattr(
             envoy,
@@ -137,6 +206,6 @@ def operation(model: Any, address: Address) -> Any:
     if address.op is None:
         raise AddressError(
             f"component {address.component!r} is an interior; build its address "
-            "with Address.locate(model, ...) so the operation is resolved"
+            "with engine.locate(...) so the operation is resolved"
         )
-    return getattr(address.envoy(model).source, address.op)
+    return getattr(address.resolve(model).source, address.op)

@@ -10,73 +10,89 @@ from typing import Any
 import pytest
 import torch
 
+from causalab_mini.address import Address
 from causalab_mini.engine import Engine, NNterpEngine, steps
 from causalab_mini.plan import Forward, Plan, build, document
+from causalab_mini.plan.document import ModelSpec
 
 
 class FakeEngine(Engine):
     """An engine for a runtime that does not exist: it opens nothing and its
-    forwards are made up. It implements the whole contract, which is the
-    point — two methods, and one of them is three lines."""
+    forwards are made up. It implements the whole run half of the contract,
+    which is the point — two methods, and one of them is two lines."""
 
     VOCAB = 32000  # the metrics index by token id, so the width has to be real
-    calls: list[str] = []
 
-    @classmethod
-    def execute(cls, model: Any, plan: Plan, remote: bool | str = False) -> Plan:
-        steps.run(cls, model, plan)
+    def __init__(self) -> None:
+        self.model = None
+        self.calls: list[str] = []
+
+    def execute(self, plan: Plan, remote: bool | str = False) -> Plan:
+        steps.run(self, plan)
         return plan
 
-    @classmethod
     def forward(
-        cls,
-        model: Any,
+        self,
         forward: Forward,
         values: dict[str, Any],
         featurizers: dict[str, Any],
     ) -> None:
-        cls.calls.append(forward.name)
+        self.calls.append(forward.name)
         rows = len(forward.input_ids)
         for tap in forward.taps:
             for read in tap.reads:
                 # One row per input row, wide enough to be logits. A real
                 # engine would take this off a model; nothing downstream can
                 # tell the difference.
-                values[read.name] = torch.arange(rows * cls.VOCAB, dtype=torch.float32).reshape(
-                    rows, cls.VOCAB
+                values[read.name] = torch.arange(rows * self.VOCAB, dtype=torch.float32).reshape(
+                    rows, self.VOCAB
                 )
 
 
 def test_the_base_engine_has_no_implementation():
-    """`Engine` is the contract. An engine that opens nothing still has to say
-    what running a request means for it, rather than inheriting a session it
-    does not want."""
+    """`Engine` is the contract and nothing else. An engine that opens nothing
+    still has to say what running a request means for it, rather than
+    inheriting a session it does not want."""
+    bare = Engine()
     with pytest.raises(NotImplementedError):
-        Engine.execute(None, Plan())
+        Engine.load(ModelSpec("k", "r", "fp32"))
     with pytest.raises(NotImplementedError):
-        Engine.forward(None, None, {}, {})  # type: ignore[arg-type]
+        bare.execute(Plan())
+    with pytest.raises(NotImplementedError):
+        bare.forward(None, {}, {})  # type: ignore[arg-type]
+    with pytest.raises(NotImplementedError):
+        bare.locate("block_output", 0)
+    with pytest.raises(NotImplementedError):
+        bare.width(Address("block_output", 0))
+    with pytest.raises(NotImplementedError):
+        bare.tokenizer
+    with pytest.raises(NotImplementedError):
+        bare.num_layers
 
 
-def test_the_engine_specific_surface_is_exactly_two_methods():
-    """The finding this project exists to produce: everything else — the walk
-    over steps, the fit loop, the metrics, the write algebra — is shared."""
-    overridden = {name for name in vars(NNterpEngine) if not name.startswith("__")}
-    assert overridden == {"execute", "forward"}
+def test_the_engine_specific_surface_is_exactly_the_contract():
+    """The finding this project exists to produce: an engine is how you load a
+    model, how you address it and how you run one forward — six members. The
+    walk over steps, the fit loop, the metrics and the write algebra are
+    shared, and an engine adds nothing of its own to them."""
+    overridden = {name for name in vars(NNterpEngine) if not name.startswith("_")}
+    assert overridden == {"load", "tokenizer", "num_layers", "locate", "width",
+                          "execute", "forward"}
 
 
 @pytest.fixture
-def minimal_plan(minimal_raw, data_root, model):
-    return build(document.Document.from_json(minimal_raw), data_root, model)
+def minimal_plan(minimal_raw, data_root, model_engine):
+    return build(document.Document.from_json(minimal_raw), data_root, model_engine)
 
 
 def test_an_engine_with_no_model_and_no_session_runs_the_same_plan(minimal_plan, tmp_path):
     """The plan does not know which engine is running it, and a plan compiled
     for the nnterp engine runs unchanged on one that has never heard of
     nnsight."""
-    FakeEngine.calls = []
-    executed = FakeEngine.execute(None, minimal_plan)
+    engine = FakeEngine()
+    executed = engine.execute(minimal_plan)
 
-    assert FakeEngine.calls == ["original", "patched"]
+    assert engine.calls == ["original", "patched"]
     assert sorted(executed.all_results()) == ["iia", "logit_diff"]
     assert executed.result("iia").shape == (4,)
 

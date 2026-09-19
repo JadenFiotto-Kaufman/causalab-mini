@@ -43,7 +43,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
 
-from ..model.address import Address
+from ..address import Address
 from ..shapes import ExampleIds, Positions, TokenIds, TokenRows
 
 

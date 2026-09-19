@@ -9,16 +9,17 @@ import torch
 
 from causalab_mini import cli, ops, plan
 from causalab_mini.plan import document
-from causalab_mini.engine import NNterpEngine, nnterp
+from causalab_mini.engine import NNterpEngine
+from causalab_mini.engine.engines.nnterp import engine as nnterp
 
 
-def build(raw, data_root, model):
-    return plan.build(document.Document.from_json(raw), data_root, model)
+def build(raw, data_root, engine):
+    return plan.build(document.Document.from_json(raw), data_root, engine)
 
 
 @pytest.fixture
-def minimal_plan(minimal_raw, data_root, model):
-    return build(minimal_raw, data_root, model)
+def minimal_plan(minimal_raw, data_root, model_engine):
+    return build(minimal_raw, data_root, model_engine)
 
 
 def no_write(raw):
@@ -77,10 +78,10 @@ def test_a_swap_lands_the_source_read_bit_for_bit(model, minimal_plan):
     assert torch.equal(landed["after"], landed["source"])
 
 
-def test_the_engines_metrics_equal_hand_computed_ones(model, minimal_plan, data_root):
+def test_the_engines_metrics_equal_hand_computed_ones(model_engine, model, minimal_plan, data_root):
     """The same experiment written by hand with nnterp's own accessors — a
     different way to reach every tensor — down to the last bit."""
-    results = NNterpEngine.execute(model, minimal_plan)
+    results = model_engine.execute(minimal_plan)
 
     source, patched = minimal_plan.step("observe", plan.Observe).forwards
     with model.trace(nnterp.batch(source)):
@@ -107,10 +108,10 @@ def test_the_engines_metrics_equal_hand_computed_ones(model, minimal_plan, data_
 # --------------------------------------------------------------------- #
 
 
-def test_a_swap_moves_the_logits_and_an_identity_write_does_not(minimal_raw, data_root, model):
-    clean = NNterpEngine.execute(model, build(no_write(minimal_raw), data_root, model))
-    identity = NNterpEngine.execute(model, build(identity_write(minimal_raw), data_root, model))
-    swapped = NNterpEngine.execute(model, build(minimal_raw, data_root, model))
+def test_a_swap_moves_the_logits_and_an_identity_write_does_not(minimal_raw, data_root, model_engine):
+    clean = model_engine.execute(build(no_write(minimal_raw), data_root, model_engine))
+    identity = model_engine.execute(build(identity_write(minimal_raw), data_root, model_engine))
+    swapped = model_engine.execute(build(minimal_raw, data_root, model_engine))
 
     assert torch.equal(identity.result("logit_diff"), clean.result("logit_diff"))
     assert not torch.equal(swapped.result("logit_diff"), clean.result("logit_diff"))
@@ -161,12 +162,12 @@ def test_a_write_touches_only_the_position_it_declares(model, minimal_plan):
 # --------------------------------------------------------------------- #
 
 
-def test_remote_local_runs_the_same_plan_and_gets_the_same_numbers(model, minimal_plan):
+def test_remote_local_runs_the_same_plan_and_gets_the_same_numbers(model_engine, model, minimal_plan):
     """`remote="local"` serializes the session exactly as a remote run would and
     deserializes it with this project's modules hidden, then runs it. Same
     plan, same numbers, no second code path."""
-    here = NNterpEngine.execute(model, minimal_plan)
-    shipped = NNterpEngine.execute(model, minimal_plan, remote="local")
+    here = model_engine.execute(minimal_plan)
+    shipped = model_engine.execute(minimal_plan, remote="local")
     assert set(here.all_results()) == set(shipped.all_results())
     for name, values in here.all_results().items():
         assert torch.equal(values, shipped.result(name))
@@ -177,8 +178,8 @@ def test_remote_local_runs_the_same_plan_and_gets_the_same_numbers(model, minima
 # --------------------------------------------------------------------- #
 
 
-def test_the_run_writes_the_save_manifest_and_nothing_else(tmp_path, data_root, model, minimal_plan):
-    results = NNterpEngine.execute(model, minimal_plan)
+def test_the_run_writes_the_save_manifest_and_nothing_else(model_engine, tmp_path, data_root, model, minimal_plan):
+    results = model_engine.execute(minimal_plan)
     written = results.write(tmp_path)
 
     assert sorted(path.name for path in tmp_path.iterdir()) == ["iia.json", "logit_diff.json"]

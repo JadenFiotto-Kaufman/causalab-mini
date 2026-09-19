@@ -18,8 +18,8 @@ import random
 from pathlib import Path
 from typing import Any
 
+from ..address import Address
 from ..data import encoding, rows as rows_module
-from ..model.address import Address
 from ..ops import metrics as metrics_module
 from .document import Document, SaveSpec
 from .plan import (
@@ -40,24 +40,25 @@ from .plan import (
 )
 
 
-def build(document: Document, data_root: str | Path, model: Any) -> Plan:
-    """Compile a document into a plan. Takes the loaded model because two
-    things have to be decided against it on the client: the tokenizer resolves
-    prompts and answer columns, and `num_layers` bounds the layer band — a site
-    naming a layer the model does not have should be a load error here, not an
-    IndexError inside someone else's process."""
-    tokenizer = model.tokenizer
+def build(document: Document, data_root: str | Path, engine: Any) -> Plan:
+    """Compile a document into a plan. Takes the **engine**, because four
+    things have to be decided against the loaded model here on the client: the
+    tokenizer resolves prompts and answer columns, `num_layers` bounds the
+    layer band, every site is resolved to an address, and every featurizer's
+    width comes from the site it acts at. A document that cannot be compiled
+    should fail here, not with an IndexError inside someone else's process."""
+    tokenizer = engine.tokenizer
     for name, site in document.sites.items():
-        if site.layer is not None and not 0 <= site.layer < model.num_layers:
+        if site.layer is not None and not 0 <= site.layer < engine.num_layers:
             raise PlanError(
                 f"site {name!r}: layer {site.layer} is outside the model's "
-                f"{model.num_layers} layers"
+                f"{engine.num_layers} layers"
             )
-    # One address per site, resolved against the model now: an interior's
-    # `.source` operation is named by the loaded checkpoint's forward, so a
-    # document that cannot be addressed is a load error here, on the client.
+    # One address per site, resolved by the engine now: an interior's
+    # operation is named by the loaded checkpoint's forward, so a document
+    # that cannot be addressed is a load error here, on the client.
     addresses = {
-        name: Address.locate(model, site.component, site.layer)
+        name: engine.locate(site.component, site.layer)
         for name, site in document.sites.items()
     }
     rows = {role: rows_module.load(data_root, spec.dataset) for role, spec in document.roles.items()}
@@ -66,7 +67,7 @@ def build(document: Document, data_root: str | Path, model: Any) -> Plan:
         raise PlanError(f"roles must have the same row count, got {counts}")
 
     featurizers = tuple(
-        _featurizer(name, document, addresses, model) for name in document.featurizers
+        _featurizer(name, document, addresses, engine) for name in document.featurizers
     )
     widths = {one.name: one.d for one in featurizers}
 
@@ -124,7 +125,7 @@ def _pass(
 
 
 def _featurizer(
-    name: str, document: Document, addresses: dict[str, Address], model: Any
+    name: str, document: Document, addresses: dict[str, Address], engine: Any
 ) -> FeaturizerOp:
     """One declared featurizer, with its width filled in from the model.
 
@@ -136,7 +137,7 @@ def _featurizer(
     at = {read.site for read in document.reads.values() if read.featurizer == name}
     at |= {write.site for write in document.writes.values() if write.featurizer == name}
     (site,) = at  # the document refuses one name at two sites
-    d = addresses[site].width(model)
+    d = engine.width(addresses[site])
     if not 0 < spec.k <= d:
         raise PlanError(
             f"featurizer {name!r}: k={spec.k} is not a subspace of the {d}-wide "

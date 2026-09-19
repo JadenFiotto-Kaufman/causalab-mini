@@ -76,28 +76,6 @@ class AddressError(ValueError):
     pass
 
 
-def find_op(source: Any, call_site: str) -> str:
-    """The single operation of a module's `.source` whose call site contains
-    `call_site`, or a refusal naming everything the forward does have.
-
-    Matching the *source line* rather than the operation's name is the whole
-    point. nnsight names an operation `{callable}_{occurrence}` and gives
-    assignments the same namespace as calls, so on transformers 5.17 the
-    attention forward has both `attention_interface_0` (the assignment
-    `attention_interface = ALL_ATTENTION_FUNCTIONS.get_interface(...)`) and
-    `attention_interface_1` (the call). A name match on "attention_interface"
-    hits both; the needle `"attention_interface("` is call-shaped and hits one.
-    """
-    hits = [op.name for op in source if call_site in op.text.split("\n")[op.line - 1]]
-    if len(hits) != 1:
-        raise AddressError(
-            f"{call_site!r} matches {len(hits)} operations {hits} of this forward; "
-            f"an address serves exactly one. The forward's operations are: "
-            f"{list(source.names)}"
-        )
-    return hits[0]
-
-
 @dataclass(frozen=True)
 class Address:
     """One tap, as the document named it — plus, for an interior, the operation
@@ -116,6 +94,19 @@ class Address:
     @property
     def _entry(self) -> _Component:
         return _COMPONENTS[self.component]
+
+    @property
+    def call_site(self) -> str | None:
+        """For an interior: the source text an engine matches to find the
+        operation this address is about. `None` at a module boundary."""
+        return self._entry.op
+
+    @property
+    def width_attribute(self) -> str | None:
+        """The nnterp handle attribute holding this tap's width, if it has
+        one. Names an attribute rather than reading it, because reading is the
+        engine's job."""
+        return self._entry.width
 
     @property
     def path(self) -> str:
@@ -153,36 +144,15 @@ class Address:
         it."""
         return (0 if self.layer is not None else 1, self.layer or 0, self._entry.stage)
 
-    def width(self, model: Any) -> int:
-        """The size of the tap's last axis — the `d` a featurizer's `k` is a
-        subspace of. It is derived from (model, site) and may never be authored,
-        which is exactly why it is asked of an address and not of a document."""
-        attribute = self._entry.width
-        if attribute is None:
-            raise AddressError(
-                f"the width of {self.component!r} is not derivable here; nnterp "
-                "publishes hidden_size and vocab_size on the handle and nothing "
-                "for an attention interior"
-            )
-        return int(getattr(model, attribute))
+    def resolve(self, root: Any) -> Any:
+        """Walk this address's path against `root`, by getattr, taking a
+        numeric segment as an index: "layers.0" is `root.layers[0]`.
 
-    @classmethod
-    def locate(cls, model: Any, component: str, layer: int | None = None) -> "Address":
-        """The address of `(component, layer)` against a loaded model.
-
-        For a module boundary that is just the pair. For an interior it also
-        resolves the `.source` operation, here on the client, so the plan
-        carries a name and a refusal happens before anything runs.
+        The path is written in nnterp's standardized names. An engine that
+        does not have those names translates first — how much translating that
+        takes is a measurement of what the standardization is worth.
         """
-        one = cls(component, layer)
-        if one._entry.op is None:
-            return one
-        return replace(one, op=find_op(one.envoy(model).source, one._entry.op))
-
-    def envoy(self, model: Any) -> Any:
-        """The envoy this address names, by getattr walking. Numeric segments
-        index."""
-        target = model
+        target = root
         for segment in self.path.split("."):
             target = target[int(segment)] if segment.isdigit() else getattr(target, segment)
         return target

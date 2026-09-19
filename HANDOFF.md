@@ -29,17 +29,19 @@ It **imports nothing from causalab**. Only the JSON documents were copied.
 
 `master`, clean tree, no remote. **124 tests passing**
 (`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~6 s), `uvx pyright` at 0
-errors. **2,555 source lines** across 23 files in `causalab_mini/`.
+errors. **2,649 source lines** across 24 files in `causalab_mini/`.
 
 The package is five sub-packages and a short spine, each named for what it is
 allowed to know:
 
-    __init__.py  shapes.py  cli.py                vocabulary + spine
+    __init__.py shapes.py address.py cli.py       vocabulary, the architecture
+                                                  map, the entry point
     plan/   document.py plan.py build.py write.py  the request, as pure data
     data/   rows.py     encoding.py                the corpus -> padded tokens
-    model/  loading.py  address.py                 the ONLY model-aware code
     ops/    intervene.py metrics.py featurizer.py  agnostic: tensors only
-    engine/ base.py     steps.py    nnterp.py      how a plan reaches tensors
+    engine/ base.py     steps.py                   the contract, and what a
+                                                   plan means on any runtime
+      engines/nnterp/   engine.py  loading.py      one directory per runtime
 
 `plan/document.py` is 702 of those lines and was deliberately left whole: it is
 one concept (the protocol surface) and splitting it would need a third file for
@@ -72,16 +74,23 @@ These are load-bearing. Several tests enforce them.
 4. **No trace body may reference a client object** — no executor, document,
    tokenizer. `tests/test_structure.py` is an AST tripwire over every
    `with ….trace(`/`.session(` block, package-wide; it has a vacuity guard.
-5. **`model/` is the only package that knows anything about models**, and
-   `model/address.py` the only file that knows their internals. `ops/` knows
-   nothing about them and may not import `model/`. No file sits on both sides.
-   An address says *where*; reaching there is the engine's
-   (`engine/nnterp.py`'s `read`/`write`).
-6. **The engine-specific surface is two classmethods**, `execute` and
-   `forward`. Everything else lives in `engine/steps.py` and is shared.
+5. **`address.py` is the only file that knows anything about model
+   internals**, and it says *where* only — which module path (in nnterp's
+   standardized names), which side, which axis the sequence runs along, what
+   order taps go in. Reaching there is the engine's
+   (`engine/engines/nnterp/engine.py`'s `read`/`write`). `ops/` knows nothing
+   about models at all.
+6. **An engine is six members and no more**: `load`, `tokenizer`,
+   `num_layers`, `locate`, `width`, `execute`, `forward` — the first four are
+   what the compiler asks of a runtime, the last two what the run asks.
+   Everything else lives in `engine/steps.py` and is shared.
    `tests/test_engine.py` pins this: it asserts the override set is exactly
-   those two, and runs a real plan on an engine that has no model and no
-   session.
+   the contract, and runs a real compiled plan on an engine that has no model
+   and no session.
+7. **An engine holds its model.** `Engine.load(spec)` is how a model enters
+   the project, and `plan.build(document, data_root, engine)` compiles
+   against the engine, not against a handle — because what a tokenizer is,
+   how a site is located and how wide it is are all runtime questions.
 6. **The client never decides anything from a tensor.** The plan carries a
    spec; the block resolves it, including any dynamic case. (Nothing here needs
    a dynamic case yet. In the real engine this is how the generated frame and

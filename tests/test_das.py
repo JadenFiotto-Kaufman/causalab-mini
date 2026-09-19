@@ -22,8 +22,8 @@ def rotation(d=16, k=8, seed=0):
 
 
 @pytest.fixture
-def das_plan(das_raw, data_root, model):
-    return plan.build(document.Document.from_json(das_raw), data_root, model)
+def das_plan(das_raw, data_root, model_engine):
+    return plan.build(document.Document.from_json(das_raw), data_root, model_engine)
 
 
 # --------------------------------------------------------------------- #
@@ -146,21 +146,21 @@ def test_the_rotation_reaches_the_read_and_the_write_and_not_the_head(das_plan):
     assert [read.featurizer for read in patched.taps[1].reads] == ["identity"]
 
 
-def test_a_k_wider_than_the_site_is_a_load_error(das_raw, data_root, model):
+def test_a_k_wider_than_the_site_is_a_load_error(das_raw, data_root, model_engine):
     das_raw["method"]["featurizers"]["rot"]["k"] = 17
     with pytest.raises(plan.PlanError, match="not a subspace of the 16-wide site"):
-        plan.build(document.Document.from_json(das_raw), data_root, model)
+        plan.build(document.Document.from_json(das_raw), data_root, model_engine)
 
 
-def test_an_eval_split_sharing_rows_with_the_fit_is_a_load_error(das_raw, data_root, model):
+def test_an_eval_split_sharing_rows_with_the_fit_is_a_load_error(das_raw, data_root, model_engine):
     das_raw["method"]["train"]["eval"]["split"] = "weekdays/data"  # train + test
     with pytest.raises(plan.PlanError, match="endpoint-disjoint"):
-        plan.build(document.Document.from_json(das_raw), data_root, model)
+        plan.build(document.Document.from_json(das_raw), data_root, model_engine)
 
 
-def test_the_same_ref_for_both_is_the_visible_train_equals_test_ablation(das_raw, data_root, model):
+def test_the_same_ref_for_both_is_the_visible_train_equals_test_ablation(das_raw, data_root, model_engine):
     das_raw["method"]["train"]["eval"]["split"] = "weekdays/data#train"
-    fitted = plan.build(document.Document.from_json(das_raw), data_root, model)
+    fitted = plan.build(document.Document.from_json(das_raw), data_root, model_engine)
     assert fitted.step("fit", plan.Fit).evaluation.forwards[0].input_ids == (
         fitted.step("observe", plan.Observe).forwards[0].input_ids
     )
@@ -172,8 +172,8 @@ def test_the_same_ref_for_both_is_the_visible_train_equals_test_ablation(das_raw
 
 
 @pytest.fixture
-def fitted(das_plan, model):
-    return NNterpEngine.execute(model, das_plan)
+def fitted(model_engine, das_plan, model):
+    return model_engine.execute(das_plan)
 
 
 def test_the_fit_reduces_its_own_objective(fitted):
@@ -219,40 +219,40 @@ def test_early_stopping_ends_the_fit_before_its_epoch_budget(fitted):
     assert (evaluated[1:] < evaluated[:-1]).all(), evaluated
 
 
-def test_the_same_seed_fits_the_same_rotation_and_another_seed_does_not(das_raw, data_root, model):
+def test_the_same_seed_fits_the_same_rotation_and_another_seed_does_not(das_raw, data_root, model_engine):
     def fit(seed):
         das_raw["method"]["train"]["seed"] = seed
-        built = plan.build(document.Document.from_json(das_raw), data_root, model)
-        return NNterpEngine.execute(model, built).result("rot")
+        built = plan.build(document.Document.from_json(das_raw), data_root, model_engine)
+        return model_engine.execute(built).result("rot")
 
     assert torch.equal(fit(0), fit(0))
     assert not torch.equal(fit(0), fit(1))
 
 
-def test_a_full_width_rotation_is_a_plain_swap_end_to_end(das_raw, data_root, model):
+def test_a_full_width_rotation_is_a_plain_swap_end_to_end(das_raw, data_root, model_engine):
     """The bridge between the two methods, through the whole engine: at `k = d`
     the complement is empty, so DAS's write lands the counterfactual activation
     entire — whatever the rotation is, trained or not — and the run's metrics are
     the identity featurizer's to five decimals."""
     das_raw["method"]["featurizers"]["rot"]["k"] = 16
-    rotated = NNterpEngine.execute(model, plan.build(document.Document.from_json(das_raw), data_root, model))
+    rotated = model_engine.execute(plan.build(document.Document.from_json(das_raw), data_root, model_engine))
 
     del das_raw["method"]["featurizers"], das_raw["method"]["train"]
     del das_raw["method"]["reads"]["v_cf"]["featurizer"]
     del das_raw["method"]["writes"]["patch"]["featurizer"]
     das_raw["method"]["save"] = das_raw["method"]["save"][:2]
-    plain = NNterpEngine.execute(model, plan.build(document.Document.from_json(das_raw), data_root, model))
+    plain = model_engine.execute(plan.build(document.Document.from_json(das_raw), data_root, model_engine))
 
     for name in ("iia", "ce"):
         assert torch.allclose(rotated.result(name), plain.result(name), atol=1e-5), name
 
 
-def test_remote_local_fits_the_same_rotation_and_gets_the_same_numbers(model, das_plan):
+def test_remote_local_fits_the_same_rotation_and_gets_the_same_numbers(model_engine, model, das_plan):
     """The single-path claim, under training: `remote="local"` serializes the
     session — the loop, the optimizer and the backward with it — and runs it with
     this project's modules hidden. Same plan, same numbers."""
-    here = NNterpEngine.execute(model, das_plan)
-    shipped = NNterpEngine.execute(model, das_plan, remote="local")
+    here = model_engine.execute(das_plan)
+    shipped = model_engine.execute(das_plan, remote="local")
     assert set(here.all_results()) == set(shipped.all_results())
     for name, values in here.all_results().items():
         assert torch.equal(values, shipped.result(name)), name
@@ -263,10 +263,10 @@ def test_remote_local_fits_the_same_rotation_and_gets_the_same_numbers(model, da
 # --------------------------------------------------------------------- #
 
 
-def test_the_artifact_is_written_stamped_and_reloads_to_the_trained_values(
+def test_the_artifact_is_written_stamped_and_reloads_to_the_trained_values(model_engine, 
     tmp_path, data_root, model, das_plan
 ):
-    results = NNterpEngine.execute(model, das_plan)
+    results = model_engine.execute(das_plan)
     written = results.write(tmp_path)
 
     assert sorted(path.name for path in written) == ["ce.json", "iia.json", "rot.safetensors"]

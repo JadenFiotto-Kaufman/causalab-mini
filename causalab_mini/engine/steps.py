@@ -1,7 +1,8 @@
 """What each step means — the part no engine gets to have an opinion about.
 
 Every function here takes the engine as its first argument and calls it for
-exactly one thing: running a forward. The dispatch, the order, the optimizer,
+exactly one thing: running a forward. It never touches the model — the engine
+holds that, and what kind of object it is, is the engine's business. The dispatch, the order, the optimizer,
 the early stop, the metrics and the results are the same on every runtime, so
 they are written once, here, as plain functions.
 
@@ -29,7 +30,7 @@ from ..ops import featurizer as featurizer_module, intervene, metrics
 from ..plan import Featurizers, Fit, Observe, Plan, Step, Weights
 
 
-def run(engine: Any, model: Any, step: Step, featurizers: dict[str, Any] | None = None) -> None:
+def run(engine: Any, step: Step, featurizers: dict[str, Any] | None = None) -> None:
     """Execute one step. A `Plan` is a step, so this is the whole walk."""
     if featurizers is None:
         # The stateless featurizers exist before any document declares
@@ -38,13 +39,13 @@ def run(engine: Any, model: Any, step: Step, featurizers: dict[str, Any] | None 
         featurizers = dict(intervene.FEATURIZERS)
     if isinstance(step, Plan):
         for child in step.steps.values():
-            run(engine, model, child, featurizers)
+            run(engine, child, featurizers)
     elif isinstance(step, Featurizers):
         build(step, featurizers)
     elif isinstance(step, Observe):
-        observe(engine, model, step, featurizers)
+        observe(engine, step, featurizers)
     elif isinstance(step, Fit):
-        fit(engine, model, step, featurizers)
+        fit(engine, step, featurizers)
     elif isinstance(step, Weights):
         weights(step, featurizers)
     else:
@@ -66,7 +67,7 @@ def build(step: Featurizers, featurizers: dict[str, Any]) -> None:
         )
 
 
-def observe(engine: Any, model: Any, step: Observe, featurizers: dict[str, Any]) -> dict[str, Any]:
+def observe(engine: Any, step: Observe, featurizers: dict[str, Any]) -> dict[str, Any]:
     """One pass: the forwards in order, then the metrics over what they read.
 
     Returns the metrics live, because a fit differentiates them; records them
@@ -74,7 +75,7 @@ def observe(engine: Any, model: Any, step: Observe, featurizers: dict[str, Any])
     """
     values: dict[str, Any] = {}
     for forward in step.forwards:
-        engine.forward(model, forward, values, featurizers)
+        engine.forward(forward, values, featurizers)
     scored = {
         metric.name: metrics.compute(metric.kind, values[metric.of], metric.ids)
         for metric in step.metrics
@@ -83,7 +84,7 @@ def observe(engine: Any, model: Any, step: Observe, featurizers: dict[str, Any])
     return scored
 
 
-def fit(engine: Any, model: Any, step: Fit, featurizers: dict[str, Any]) -> None:
+def fit(engine: Any, step: Fit, featurizers: dict[str, Any]) -> None:
     """The same pass, N times, with an optimizer between.
 
     Nothing about this loop is a second engine: an update is `observe` over one
@@ -101,7 +102,7 @@ def fit(engine: Any, model: Any, step: Fit, featurizers: dict[str, Any]) -> None
     best, waited = None, 0
     for epoch in step.epochs:
         for update in epoch:
-            loss = objective(step.objective, observe(engine, model, update, featurizers))
+            loss = objective(step.objective, observe(engine, update, featurizers))
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -109,7 +110,7 @@ def fit(engine: Any, model: Any, step: Fit, featurizers: dict[str, Any]) -> None
         # The eval pass runs in eval mode: no gradients, and on rows the fit
         # never saw.
         with torch.no_grad():
-            evaluated = observe(engine, model, step.evaluation, featurizers)
+            evaluated = observe(engine, step.evaluation, featurizers)
         scores.append(torch.stack([evaluated[name].mean() for name in step.eval_metrics]))
         watched = float(evaluated[step.early_stop].mean())
         # `mode` is "max"; the document refuses the other one.

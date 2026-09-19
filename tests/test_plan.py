@@ -11,13 +11,13 @@ from causalab_mini.plan import document
 
 
 @pytest.fixture
-def minimal_plan(minimal_raw, data_root, model):
-    return plan.build(document.Document.from_json(minimal_raw), data_root, model)
+def minimal_plan(minimal_raw, data_root, model_engine):
+    return plan.build(document.Document.from_json(minimal_raw), data_root, model_engine)
 
 
 @pytest.fixture
-def das_plan(das_raw, data_root, model):
-    return plan.build(document.Document.from_json(das_raw), data_root, model)
+def das_plan(das_raw, data_root, model_engine):
+    return plan.build(document.Document.from_json(das_raw), data_root, model_engine)
 
 
 @pytest.fixture(params=["minimal_plan", "das_plan"])
@@ -32,7 +32,7 @@ def any_plan(request):
 # --------------------------------------------------------------------- #
 
 ALLOWED = (str, int, float, bool, type(None), tuple, dict)
-PLAN_TYPES = {"causalab_mini.plan.plan", "causalab_mini.model.address"}
+PLAN_TYPES = {"causalab_mini.plan.plan", "causalab_mini.address"}
 
 
 def _walk(value, where="plan"):
@@ -99,10 +99,10 @@ def test_the_schedule_is_two_forwards_counterfactual_then_base(minimal_plan):
     assert [read.name for read in patched.taps[1].reads] == ["logits"]
 
 
-def test_a_write_whose_operand_is_read_in_its_own_model_is_a_cycle(minimal_raw, data_root, model):
+def test_a_write_whose_operand_is_read_in_its_own_model_is_a_cycle(minimal_raw, data_root, model_engine):
     minimal_raw["method"]["reads"]["v_cf"].update(model="patched", input="base")
     with pytest.raises(plan.PlanError, match="cycle"):
-        plan.build(document.Document.from_json(minimal_raw), data_root, model)
+        plan.build(document.Document.from_json(minimal_raw), data_root, model_engine)
 
 
 # --------------------------------------------------------------------- #
@@ -143,7 +143,7 @@ def test_a_multi_token_answer_is_refused(model):
         encoding.token_id(model.tokenizer, "Thursday afternoon", "space_prefixed")
 
 
-def test_a_layer_the_model_does_not_have_is_a_load_error(minimal_raw, data_root, model):
+def test_a_layer_the_model_does_not_have_is_a_load_error(minimal_raw, data_root, model_engine):
     minimal_raw["method"]["sites"]["target"]["layers"] = [17]
     with pytest.raises(plan.PlanError, match="outside the model's 2 layers"):
-        plan.build(document.Document.from_json(minimal_raw), data_root, model)
+        plan.build(document.Document.from_json(minimal_raw), data_root, model_engine)
