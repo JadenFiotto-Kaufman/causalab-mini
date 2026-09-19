@@ -299,10 +299,37 @@ non-finite metric was written as a bare `NaN`, which is not JSON.
   `sha256(f"{seed}:{purpose}")`. One stream was decorrelated and two were not.
   The comment is explicit about being *local* and silent about being
   *correlated*.
+- **The remote version guard omits `transformers`.** causalab's `GUARDED`
+  (`nnterp_engine/versions.py:38`) is `("causalab", "nnterp", "nnsight",
+  "torch")`. nnsight's own `CRITICAL_PACKAGES` (`ndif.py:26`) is `{"nnsight",
+  "transformers", "torch"}` — so the one package nnsight flags that causalab
+  does not guard is the one the `.source` address table is most exposed to.
+  `sources.py:29-33` says it outright: "the suffix moves when a transformers
+  release adds or removes a line — that is how transformers 5 broke nnterp's
+  GPT-2 dropout address", and the table is stamped to transformers 5.16.1.
+  Partly mitigated: a skew that *moves* an op name surfaces as `match_op`'s
+  inventory-bearing error, wrapped with the server's `transformers.__version__`.
+  Not covered: a release that keeps the names and changes the semantics — the
+  pre-mask/post-mask `attn_weights_1` distinction is exactly that kind of fact
+  — and a module-boundary-only run never calls `match_op` at all. One token.
 - **`{"span": [a,b], "relative_to": …}` parses and silently means something
   else** (`schema.py:2915-2954`): the resolver offsets an `index` only, so a
   span spelled that way falls through to the content frame. The document says
   one address and the run uses another, with no refusal.
+
+### Why a remote payload carries ~85 KB of nnterp
+
+nnsight's `_hide_local_modules` (`intervention/backends/local.py:83`) pops
+every loaded module whose root is not in `_SERVER_MODULES` — `{torch, numpy,
+transformers, accelerate, diffusers, einops, peft, nnsight}` — and strips
+non-`site-packages` entries from `sys.path`. Neither `causalab` nor `nnterp`
+is in that set, so a remote `StandardizedTransformer` registers itself for
+by-value pickling and its classes ride in every payload. `nnsight.register`
+is a thin wrapper over `cloudpickle.register_pickle_by_value`, which covers a
+module's plain functions but still pickles an `lru_cache` wrapper by
+reference to its defining module — so registration is **not** a substitute
+for installing the package server-side, and that is why `versions.py` exists
+at all. Scale only; nothing about it changes a value.
 
 ## 10. What the survey did not settle
 
