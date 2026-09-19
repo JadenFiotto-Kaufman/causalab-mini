@@ -85,6 +85,25 @@ def minimal_plan(minimal_raw, data_root, model_engine):
     return build(document.Document.from_json(minimal_raw), data_root, model_engine)
 
 
+def test_an_engine_that_ships_holds_nothing_but_its_model(model_engine):
+    """A traced block ships every name it loads, and the engine is one of
+    those names — so whatever the engine holds rides along with it.
+
+    Measured on the `remote="local"` path with the tiny Llama: the whole
+    session payload is 115,746 bytes, the engine class alone is 77,736 (our
+    package ships by value once registered), the instance is 86,227, and the
+    model it holds is 7,079 of that. So the object costs about 1.4 KB over
+    passing the class and the model separately — which is why `execute` may
+    pass `self` rather than `type(self)`.
+
+    That stays true only while the engine holds the model and nothing else.
+    An engine that also held a tokenizer, a dataset or a document would ship
+    it. (The hooks engine does hold a tokenizer, and refuses `remote`
+    outright, which is the other way to be safe.)
+    """
+    assert set(vars(model_engine)) == {"model"}
+
+
 def test_an_engine_with_no_model_and_no_session_runs_the_same_plan(minimal_plan, tmp_path):
     """The plan does not know which engine is running it, and a plan compiled
     for the nnterp engine runs unchanged on one that has never heard of
