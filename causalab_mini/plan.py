@@ -36,7 +36,7 @@ from typing import Any
 
 from . import data, encoding, metrics as metrics_module
 from .address import Address
-from .document import Document
+from .document import Document, SaveSpec
 from .shapes import ExampleIds, Positions, TokenIds, TokenRows
 
 
@@ -249,7 +249,7 @@ def _featurizer(
 
 
 def _save(
-    entry: Any, document: Document, base_rows: list[data.Row], widths: dict[str, int]
+    entry: SaveSpec, document: Document, base_rows: list[data.Row], widths: dict[str, int]
 ) -> SaveFile:
     if entry.site is not None:
         spec = document.featurizers[entry.value]

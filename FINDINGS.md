@@ -535,6 +535,13 @@ falls monotonically on the term the document named, the rotation is still
 orthonormal afterwards, the same seed gives the same weights to the bit, the
 fitted artifact reloads, and `remote="local"` reproduces all of it.
 
+One reproducibility caveat, measured: the same fit run locally and run through
+`--remote local` produces **the same weights and the same metadata** but not the
+same `rot.safetensors` bytes. safetensors serializes its header map in
+non-deterministic order (the first differing byte is 27, inside the JSON
+header), so an artifact is content-reproducible and not byte-reproducible, and
+anything that hashes the file rather than its contents will see spurious drift.
+
 It also shows one thing worth knowing that a good fit would have hidden: the
 objective (`ce`) and the watched metric (`iia`, a `logit_diff`, mode `max`)
 *disagree* here — `ce` falls while `iia` also falls — so early stopping fires
