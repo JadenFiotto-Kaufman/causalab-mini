@@ -57,6 +57,22 @@ METRIC_COLUMNS = {
 # Named here so the refusal can say which one.
 UNSUPPORTED_METHOD_SECTIONS = ("segments", "positions", "params", "code")
 
+#: The groups a document may have at the top level, and the sections `method`
+#: may have. Anything else is refused — a named refusal list can only ever be
+#: a snapshot of the protocol, and what it misses would otherwise load, do
+#: nothing, and still change the digest.
+TOP_LEVEL = ("header", "model", "data", "method")
+METHOD_SECTIONS = (
+    "sites",
+    "reads",
+    "writes",
+    "intervened_models",
+    "featurizers",
+    "metrics",
+    "train",
+    "save",
+)
+
 
 class DocumentError(ValueError):
     """A load error: the document is refused, nothing runs."""
@@ -115,6 +131,19 @@ class RoleSpec:
 
     @classmethod
     def from_json(cls, raw: Json) -> "RoleSpec":
+        for key in ("dataset", "field"):
+            _check(key in raw, f"data role: {key} is required")
+        # `shuffle` and `draw` live here in the protocol, and `shuffle` is the
+        # shuffled-source *control*: a role that quietly dropped it would run
+        # the target experiment while stamping the control's digest.
+        unsupported = set(raw) - {"dataset", "field"}
+        _check(
+            not unsupported,
+            f"data role: {sorted(unsupported)} is not implemented — and "
+            "`shuffle` in particular is the shuffled-source control, so "
+            "ignoring it would run a different experiment than the one the "
+            "digest names",
+        )
         return cls(raw["dataset"], raw["field"])
 
 
@@ -488,8 +517,16 @@ class Document:
     @classmethod
     def from_json(cls, raw: Json) -> "Document":
         """The document a JSON object describes, or a DocumentError."""
-        for group in ("header", "model", "data", "method"):
+        for group in TOP_LEVEL:
             _check(group in raw, f"missing top-level group {group!r}")
+        unknown = [key for key in raw if key not in TOP_LEVEL]
+        _check(
+            not unknown,
+            f"unknown top-level group(s) {sorted(unknown)}. The protocol has more "
+            f"than {list(TOP_LEVEL)} — `axes` among them — and causalab-mini "
+            "implements none of them; a group it ignored would still change this "
+            "document's digest",
+        )
         _check(
             raw["header"].get("protocol_version") == PROTOCOL_VERSION,
             f"protocol_version must be {PROTOCOL_VERSION!r}",
@@ -509,6 +546,13 @@ class Document:
                 f"method.{section} is real protocol surface that causalab-mini does "
                 "not implement yet; this slice is activation patching only",
             )
+        unknown = [key for key in method if key not in METHOD_SECTIONS]
+        _check(
+            not unknown,
+            f"unknown method section(s) {sorted(unknown)}; causalab-mini implements "
+            f"{list(METHOD_SECTIONS)}. `path_patching` and `at_once` are real "
+            "protocol surface that would otherwise load and do nothing",
+        )
         for required in ("sites", "reads", "save"):
             _check(required in method, f"method.{required} is required")
 

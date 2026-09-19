@@ -1,5 +1,7 @@
 """Loading a document: what is accepted, and what is refused by name."""
 
+import json
+
 import pytest
 
 from causalab_mini.plan import document
@@ -130,3 +132,47 @@ def test_a_das_document_this_slice_cannot_run_is_a_load_error(das_raw, mutate, m
     mutate(das_raw)
     with pytest.raises(document.DocumentError, match=message):
         document.Document.from_json(das_raw)
+
+
+# --------------------------------------------------------------------- #
+# what a document may not quietly contain
+# --------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "edit, message",
+    [
+        (lambda raw: raw.update(axes={"layer": {"values": [0, 1]}}), "unknown top-level group"),
+        (lambda raw: raw["method"].update(path_patching={}), "unknown method section"),
+        (lambda raw: raw["data"]["base"].update(shuffle={"seed": 1}), "shuffled-source control"),
+        (lambda raw: raw["data"]["base"].update(draw={"kind": "uniform"}), "not implemented"),
+    ],
+    ids=["a real fifth top-level group", "a real method section", "the shuffle control", "a draw spec"],
+)
+def test_surface_this_slice_does_not_implement_is_refused_rather_than_ignored(
+    minimal_raw, edit, message
+):
+    """The digest is over the raw document, so anything accepted and ignored
+    is stamped into an artifact identity that names an experiment which did
+    not run. A named refusal list is only ever a snapshot of the protocol;
+    these catch-alls are what make the snapshot safe."""
+    edit(minimal_raw)
+    with pytest.raises(document.DocumentError, match=message):
+        document.Document.from_json(minimal_raw)
+
+
+def test_a_non_finite_metric_is_written_as_null(tmp_path):
+    """JSON has no NaN. `json.dumps` emits a bare `NaN`, which Python reads
+    back and a strict parser refuses — so a run that produced one would write
+    a file that is not JSON."""
+    import torch
+
+    from causalab_mini.plan import Plan, SaveFile
+
+    plan = Plan(saves=(SaveFile(file_path="m.json", value="m", example_ids=("0", "1")),))
+    plan.results["m"] = torch.tensor([float("nan"), 1.0])
+    (path,) = plan.write(tmp_path)
+
+    text = path.read_text()
+    assert "NaN" not in text
+    assert [row["value"] for row in json.loads(text)] == [None, 1.0]

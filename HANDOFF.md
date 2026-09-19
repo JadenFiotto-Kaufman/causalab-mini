@@ -177,14 +177,27 @@ Full detail in `FINDINGS.md`; these are the ones that reach past mini.
   module boundaries, and the interior's op is resolved per model at load time
   rather than tabulated. The real engine carries a family-keyed table; this
   suggests it may not need one.
-- **Binding-suffix addressing is a demonstrated bug, twice.** On GPT-2,
-  `query_states_0` is the cross-attention query on a branch that never runs and
-  `query_states_1` is the real one; Llama has only `query_states_0`. An address
-  written as a variable-binding suffix reads a dead branch on one family and the
-  right tensor on the other, silently. Independently, the nnterp design work
-  measured the same class of failure on `attn_weights_1/2`. **The real
-  causalab's `sources.py` addresses scores and probabilities this way.** Address
-  the *call*, not the binding. This should be fixed on causalab PR #4.
+- **Binding-suffix addressing is a real trap, and mini measured it — but the
+  claim about causalab was overstated and is corrected here.** On GPT-2,
+  `query_states_0` is the cross-attention query on a branch that never runs
+  and `query_states_1` is the real one; Llama has only `query_states_0`. An
+  address written as a variable-binding suffix reads a dead branch on one
+  family and the right tensor on the other, silently. That measurement
+  stands, and it is why mini addresses the *call*.
+  **What was wrong:** an earlier version of this note said the real
+  causalab's `sources.py` addresses scores and probabilities this way and
+  that it works by luck. It does not. Its documented rule is a substring
+  match with refusal on ambiguity and a preference for the hit whose own
+  source line *calls* the symbol — the same fix `find_op` uses — and it says
+  "NEVER a hardcoded `_n` suffix for a symbol that appears once". A suffix is
+  spelled only where two *live* ops share a symbol. Checked against
+  transformers 5.17: llama and gpt2 bind `attn_weights` in the same order, so
+  `_1` is the post-mask softmax input and `_2` the softmax output on both;
+  GPT-2's extra `.type(value.dtype)` line lands at `_3`, downstream of both.
+  The residual risk is narrower than claimed: a release that inserts another
+  `attn_weights` assignment *upstream* of the softmax moves both silently,
+  because the substring still matches exactly one name and the
+  refuse-on-ambiguity guard never fires.
 - **The clone in `ops.scatter` is load-bearing under gradients**, not hygiene.
   The in-place spelling raises the moment you differentiate, and activation
   patching never tells you because it never differentiates.

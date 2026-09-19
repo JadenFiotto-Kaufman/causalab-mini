@@ -16,6 +16,7 @@ cost the existing documents nothing.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 from safetensors.torch import save_file
@@ -45,7 +46,9 @@ def _file(plan: Plan, save: SaveFile, out: Path) -> Path:
         {
             "example_id": example_id,
             "metric": save.value,
-            "value": float(number),
+            # JSON has no NaN or Infinity: `json.dumps` would emit a bare
+            # `NaN`, which Python reads back and a strict parser refuses.
+            "value": float(number) if math.isfinite(number) else None,
             "eligible": True,
             "unit": save.unit,
             "estimand_version": save.estimand_version,
