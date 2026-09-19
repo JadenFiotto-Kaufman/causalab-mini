@@ -11,7 +11,10 @@ import pytest
 import safetensors
 import torch
 
-from causalab_mini import cli, document, featurizer, ops, output, plan, run
+from causalab_mini import cli, ops, output, plan
+from causalab_mini.ops import featurizer
+from causalab_mini.plan import document
+from causalab_mini.session import run
 
 
 def rotation(d=16, k=8, seed=0):

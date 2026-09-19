@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 
-from . import document, model as model_module, output, plan as plan_module, run
+from . import output, plan as plan_module
+from .model import loading
+from .session import run
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -21,8 +23,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--device-map", default="auto")
     args = parser.parse_args(argv)
 
-    doc = document.Document.load(args.document)
-    model = model_module.load(doc.model, device_map=args.device_map)
+    doc = plan_module.Document.load(args.document)
+    model = loading.load(doc.model, device_map=args.device_map)
     plan = plan_module.build(doc, args.data_root, model)
     remote = True if args.remote == "true" else (args.remote or False)
     results = run.execute(model, plan, remote=remote)

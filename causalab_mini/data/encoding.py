@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .shapes import Positions, TokenRows
+from ..shapes import Positions, TokenRows
 
 
 class EncodingError(ValueError):

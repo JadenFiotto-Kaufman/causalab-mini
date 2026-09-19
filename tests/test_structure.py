@@ -26,8 +26,8 @@ RUN_METHODS = {"trace", "session", "generate"}
 # The client side: the modules that turn documents into plans and plans into
 # files. A block that loads one of them has a client-side object in it.
 # `plan` is deliberately absent — the plan is pure data and is the one thing a
-# block is meant to carry; `address`, `ops` and `metrics` are block-side code.
-CLIENT_SIDE = {"document", "data", "encoding", "output", "cli"}
+# block is meant to carry; `address`, `intervene` and `metrics` are block-side code.
+CLIENT_SIDE = {"document", "build", "rows", "encoding", "output", "cli"}
 
 
 def _is_block(node):
@@ -43,14 +43,14 @@ def _blocks():
     """Every `with ….trace(/.session(` block in the package, with its file,
     its enclosing function, and the module it sits in."""
     found = []
-    for path in sorted(PACKAGE.glob("*.py")):
+    for path in sorted(PACKAGE.rglob("*.py")):
         tree = ast.parse(path.read_text())
         for function in ast.walk(tree):
             if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             for node in ast.walk(function):
                 if _is_block(node):
-                    found.append((path.name, tree, function, node))
+                    found.append((f"{path.parent.name}/{path.name}", tree, function, node))
     return found
 
 

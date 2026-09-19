@@ -10,7 +10,7 @@ from __future__ import annotations
 import torch
 from nnterp import StandardizedTransformer
 
-from .document import ModelSpec
+from ..plan.document import ModelSpec
 
 # `model.dtype` is part of the experiment's identity, not of the run: the same
 # document at bf16 and at fp32 is two different experiments.

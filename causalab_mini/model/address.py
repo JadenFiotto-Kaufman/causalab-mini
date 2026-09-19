@@ -1,10 +1,11 @@
 """ENGINE: a component -> where that tensor lives.
 
-This is the only file in the project that knows anything about models, and
-`Address` is why that is structural rather than a convention: a tap holds an
-`Address`, and an `Address` is the only thing with a `read`/`write` that takes a
-model. Every model fact we had to encode ourselves is in the table below, and
-each one is an entry in FINDINGS.md.
+This is the only file in the project that knows anything about a model's
+*internals* — `loading.py` beside it knows how to build the handle and
+nothing else — and `Address` is why that is structural rather than a
+convention: a tap holds an `Address`, and an `Address` is the only thing with a
+`read`/`write` that takes a model. Every model fact we had to encode
+ourselves is in the table below, and each one is an entry in FINDINGS.md.
 
 An `Address` stays pure data — the document's `(component, layer)`, plus, for an
 interior, the name of one `.source` operation — so it pickles, sorts, prints and

@@ -4,7 +4,7 @@ import pickle
 
 import pytest
 
-from causalab_mini.address import Address, AddressError
+from causalab_mini.model.address import Address, AddressError
 
 
 def test_an_address_is_the_documents_words_and_pickles_as_such():

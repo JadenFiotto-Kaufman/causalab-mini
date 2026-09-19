@@ -2,7 +2,7 @@
 
 import pytest
 
-from causalab_mini import document
+from causalab_mini.plan import document
 
 REPO = __import__("pathlib").Path(__file__).resolve().parents[1]
 

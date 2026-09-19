@@ -27,9 +27,23 @@ It **imports nothing from causalab**. Only the JSON documents were copied.
 
 ## 2. State as of this handoff
 
-`master`, 20 commits, clean tree, no remote. **120 tests passing**
+`master`, clean tree, no remote. **120 tests passing**
 (`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~6 s), `uvx pyright` at 0
-errors. **2,091 source lines** across 14 files in `causalab_mini/`.
+errors. **2,300 source lines** across 22 files in `causalab_mini/`.
+
+The package is five sub-packages and a short spine, each named for what it is
+allowed to know:
+
+    __init__.py  shapes.py  cli.py  output.py      vocabulary + spine
+    plan/     document.py  plan.py  build.py       the request, as pure data
+    data/     rows.py      encoding.py             the corpus -> padded tokens
+    model/    loading.py   address.py              the ONLY model-aware code
+    ops/      intervene.py metrics.py featurizer.py   agnostic: tensors only
+    session/  run.py       observe.py  train.py    the one nnsight session
+
+`plan/document.py` is 702 of those lines and was deliberately left whole: it is
+one concept (the protocol surface) and splitting it would need a third file for
+the shared refusal helpers, which is more concepts, not fewer.
 
 Working end to end: activation patching, one `.source` interior
 (`attention_query`), GPT-2 as a reach-only probe, and a DAS fit — all inside
@@ -54,9 +68,10 @@ These are load-bearing. Several tests enforce them.
    strings, ints and tuples only (see §4 for how this changes).
 4. **No trace body may reference a client object** — no executor, document,
    tokenizer. `tests/test_structure.py` is an AST tripwire over every
-   `with ….trace(`/`.session(` block; it has a vacuity guard.
-5. **`address.py` is the only file that knows anything about models.**
-   `ops.py` knows nothing about them. No file sits on both sides.
+   `with ….trace(`/`.session(` block, package-wide; it has a vacuity guard.
+5. **`model/` is the only package that knows anything about models**, and
+   `model/address.py` the only file that knows their internals. `ops/` knows
+   nothing about them and may not import `model/`. No file sits on both sides.
 6. **The client never decides anything from a tensor.** The plan carries a
    spec; the block resolves it, including any dynamic case. (Nothing here needs
    a dynamic case yet. In the real engine this is how the generated frame and
@@ -68,7 +83,7 @@ This was settled in discussion with the owner at the very end of the session and
 **no code has been written for it**. It is the next task.
 
 ### The problem
-`run.execute` hardcodes a workflow: build featurizers → maybe fit → observe →
+`session/run.py`'s `execute` hardcodes a workflow: build featurizers → maybe fit → observe →
 save weights, with an `if plan.train is not None` in the middle. That
 conditional is the executor knowing about document shape. The sequence is code
 when it should be data.
@@ -150,7 +165,7 @@ Full detail in `FINDINGS.md`; these are the ones that reach past mini.
 - **A subspace swap leaves the complement untouched only as arithmetic** — in
   fp32 it moves by up to ~4e-7, because the complement is reconstructed by a
   projection rather than copied. Bit-identity needs an axis-aligned write.
-- **`document.py` is a third of the project** (702 of 2,091 lines), almost all
+- **`document.py` is a third of the project** (702 of 2,300 lines), almost all
   refusals. The weight of causalab is in its document surface, not its
   execution.
 - **A layer-0 query interchange is a no-op** when the two prompts share a length

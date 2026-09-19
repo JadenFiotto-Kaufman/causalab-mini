@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 import torch
 
-from .shapes import TokenIds
+from ..shapes import TokenIds
 
 
 def _rows(logits: Any, ids: TokenIds) -> tuple[Any, Any]:

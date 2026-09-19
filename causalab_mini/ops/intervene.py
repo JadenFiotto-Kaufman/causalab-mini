@@ -28,7 +28,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import torch
 
-from .shapes import Positions
+from ..shapes import Positions
 
 
 @runtime_checkable

@@ -1,146 +1,40 @@
-"""The frozen plan: ops in forward order, and the compiler that produces it.
+"""The compiler: a document becomes a plan.
 
-A plan holds strings, integers and nothing else — no envoys, no tensors, no
-tokenizer, no document. It pickles with plain `pickle`, which is the test that
-keeps it honest. Everything that needed a decision (which rows, which tokens,
-which position, which module path, which order) was decided here, on the
-client, before the session opened.
+Everything that has to be decided against something the block will not have —
+the tokenizer, the rows on disk, the model's layer count and hidden width, the
+shuffle a seed defines — is decided here, once, on the client. What comes out
+the other side is `plan.Plan`: strings and integers.
 
-The shape, top down:
-
-    Plan
-      forwards: one per (model, input), already in execution order
-        Forward(name, input, input_ids, attention_mask, taps)
-          taps: one per address, in forward order
-            Tap(address, writes, reads)        writes run before reads at the
-              WriteOp(name, positions, operand, mechanism, featurizer)  same
-              ReadOp(name, positions, featurizer)                       address
-      metrics:     MetricOp(name, kind, of, ids)
-      featurizers: FeaturizerOp(name, kind, k, d, parametrization, seed, trained)
-      train:       TrainPlan(epochs, evaluation, objective, …) or None
-      saves:       SaveFile(file_path, value, example_ids, unit, …)
-
-A fit is a request, so a fit is one plan: `TrainPlan` holds the rows of every
-update it will make, already batched, already tokenized, already in the order
-the seed puts them in — as **plans**, because a training step is this same plan
-over different rows, and a twin type beside `Plan` would be a lie about that.
+The order of the work is the order of the file: resolve every site to an
+`Address`, load every role's rows, derive each featurizer's width, compile one
+`_pass` per set of rows (the scored run, and one per training update), and
+finally the save manifest.
 """
 
 from __future__ import annotations
 
 import json
 import random
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from . import data, encoding, metrics as metrics_module
-from .address import Address
+from ..data import encoding, rows as rows_module
+from ..model.address import Address
+from ..ops import metrics as metrics_module
 from .document import Document, SaveSpec
-from .shapes import ExampleIds, Positions, TokenIds, TokenRows
-
-
-class PlanError(ValueError):
-    pass
-
-
-@dataclass(frozen=True)
-class ReadOp:
-    name: str
-    positions: Positions
-    featurizer: str = "identity"
-
-
-@dataclass(frozen=True)
-class WriteOp:
-    name: str
-    positions: Positions
-    operand: str  # the name of a read, produced by an earlier forward
-    mechanism: str
-    featurizer: str
-
-
-@dataclass(frozen=True)
-class Tap:
-    address: Address
-    writes: tuple[WriteOp, ...]
-    reads: tuple[ReadOp, ...]
-
-
-@dataclass(frozen=True)
-class Forward:
-    name: str  # "original" or an intervened model's name
-    input: str  # the data role its rows come from
-    input_ids: TokenRows
-    attention_mask: TokenRows
-    taps: tuple[Tap, ...]
-
-
-@dataclass(frozen=True)
-class MetricOp:
-    name: str
-    kind: str
-    of: str  # the read it binds to
-    ids: tuple[TokenIds, ...]  # one vocabulary id per row, per operand
-
-
-@dataclass(frozen=True)
-class FeaturizerOp:
-    """One parameter set. `d` is derived from (model, site) here on the client,
-    because the block may not decide anything from a tensor — including how wide
-    the tensor it is about to rotate is."""
-
-    name: str
-    kind: str
-    k: int
-    d: int
-    parametrization: str
-    seed: int
-    trained: bool
-
-
-@dataclass(frozen=True)
-class SaveFile:
-    file_path: str
-    value: str
-    example_ids: ExampleIds = ()
-    unit: str = ""
-    estimand_version: str = ""
-    produced_by: str = ""
-    #: For a `.safetensors` bundle: the ArtifactIdentity stamped into its header,
-    #: as pairs because a plan holds no dicts. Empty for a metric table.
-    identity: tuple[tuple[str, str], ...] = ()
-
-
-@dataclass(frozen=True)
-class TrainPlan:
-    """Every update the fit will make, as plans over the rows of that update.
-
-    `epochs` is already shuffled: the seed covers data order, and data order
-    decides which rows share a padded batch, which is a tokenizer question and
-    therefore a client-side one. The *parameter* seed travels as data and is
-    drawn inside the session.
-    """
-
-    epochs: tuple[tuple["Plan", ...], ...]
-    evaluation: "Plan"
-    objective: tuple[tuple[float, str], ...]
-    params: tuple[str, ...]
-    lr: float
-    weight_decay: float
-    eval_metrics: tuple[str, ...]
-    early_stop: str
-    patience: int
-    mode: str
-
-
-@dataclass(frozen=True)
-class Plan:
-    forwards: tuple[Forward, ...]
-    metrics: tuple[MetricOp, ...]
-    saves: tuple[SaveFile, ...] = ()
-    featurizers: tuple[FeaturizerOp, ...] = ()
-    train: TrainPlan | None = None
+from .plan import (
+    FeaturizerOp,
+    Forward,
+    MetricOp,
+    Plan,
+    PlanError,
+    ReadOp,
+    SaveFile,
+    Tap,
+    TrainPlan,
+    WriteOp,
+)
 
 
 def build(document: Document, data_root: str | Path, model: Any) -> Plan:
@@ -163,7 +57,7 @@ def build(document: Document, data_root: str | Path, model: Any) -> Plan:
         name: Address.locate(model, site.component, site.layer)
         for name, site in document.sites.items()
     }
-    rows = {role: data.load_rows(data_root, spec.dataset) for role, spec in document.roles.items()}
+    rows = {role: rows_module.load(data_root, spec.dataset) for role, spec in document.roles.items()}
     counts = {role: len(table) for role, table in rows.items()}
     if len(set(counts.values())) != 1:
         raise PlanError(f"roles must have the same row count, got {counts}")
@@ -184,7 +78,7 @@ def build(document: Document, data_root: str | Path, model: Any) -> Plan:
 
 def _pass(
     document: Document,
-    rows: dict[str, list[data.Row]],
+    rows: dict[str, list[rows_module.Row]],
     addresses: dict[str, Address],
     tokenizer: Any,
 ) -> Plan:
@@ -192,7 +86,7 @@ def _pass(
     plan except what is about the fit and about the files. A training update, an
     eval pass and the scored run are all this, over different rows."""
     batches = {
-        role: encoding.encode(tokenizer, [data.field_text(row, document.roles[role].field) for row in table])
+        role: encoding.encode(tokenizer, [rows_module.field_text(row, document.roles[role].field) for row in table])
         for role, table in rows.items()
     }
     forwards = tuple(
@@ -206,7 +100,7 @@ def _pass(
             kind=spec.kind,
             of=spec.of,
             ids=tuple(
-                tuple(encoding.token_id(tokenizer, value, spec.token_form) for value in data.column(base_rows, column))
+                tuple(encoding.token_id(tokenizer, value, spec.token_form) for value in rows_module.column(base_rows, column))
                 for column in spec.columns
             ),
         )
@@ -249,7 +143,7 @@ def _featurizer(
 
 
 def _save(
-    entry: SaveSpec, document: Document, base_rows: list[data.Row], widths: dict[str, int]
+    entry: SaveSpec, document: Document, base_rows: list[rows_module.Row], widths: dict[str, int]
 ) -> SaveFile:
     if entry.site is not None:
         spec = document.featurizers[entry.value]
@@ -272,7 +166,7 @@ def _save(
                 ("parametrization", spec.parametrization),
                 ("featurizer_dtype", "fp32"),
                 ("trained_on", document.roles["base"].dataset),
-                ("trained_on_digest", data.digest(base_rows)),
+                ("trained_on_digest", rows_module.digest(base_rows)),
                 ("engine", "causalab-mini"),
             ),
         )
@@ -280,7 +174,7 @@ def _save(
     return SaveFile(
         file_path=entry.file_path,
         value=entry.value,
-        example_ids=data.example_ids(base_rows),
+        example_ids=rows_module.example_ids(base_rows),
         unit=metrics_module.UNITS[kind][0],
         estimand_version=metrics_module.UNITS[kind][1],
         produced_by=document.digest,
@@ -290,7 +184,7 @@ def _save(
 def _train(
     document: Document,
     data_root: str | Path,
-    rows: dict[str, list[data.Row]],
+    rows: dict[str, list[rows_module.Row]],
     addresses: dict[str, Address],
     tokenizer: Any,
 ) -> TrainPlan | None:
@@ -299,7 +193,7 @@ def _train(
         return None
     # The eval split is a dataset ref exactly like a `data` entry's, and each
     # role reads its own field off it.
-    evaluation = {role: data.load_rows(data_root, spec.eval_split) for role in rows}
+    evaluation = {role: rows_module.load(data_root, spec.eval_split) for role in rows}
     if spec.eval_split != document.roles["base"].dataset:
         # Two different refs must be endpoint-disjoint. The same ref for both is
         # the visible train-equals-test ablation, and is allowed.
@@ -335,7 +229,7 @@ def _train(
     )
 
 
-def _take(rows: dict[str, list[data.Row]], picked: list[int]) -> dict[str, list[data.Row]]:
+def _take(rows: dict[str, list[rows_module.Row]], picked: list[int]) -> dict[str, list[rows_module.Row]]:
     """One minibatch. Every role is indexed the same way, because rows are
     paired by index and a shuffle that broke the pairing would silently fit a
     rotation against mismatched counterfactuals."""

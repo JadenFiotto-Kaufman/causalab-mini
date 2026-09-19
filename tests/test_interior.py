@@ -12,8 +12,10 @@ import pathlib
 import pytest
 import torch
 
-from causalab_mini import document, ops, plan, run
-from causalab_mini.address import Address, AddressError, find_op
+from causalab_mini import ops, plan
+from causalab_mini.model.address import Address, AddressError, find_op
+from causalab_mini.plan import document
+from causalab_mini.session import observe, run
 
 DOCUMENT = pathlib.Path(__file__).resolve().parents[1] / "documents" / "attention_query_cpu.json"
 
@@ -100,7 +102,7 @@ def test_the_query_is_head_shaped_and_already_rotated(model, data_root, interior
     source_forward = built.forwards[0]
     tap = source_forward.taps[0]
 
-    with model.trace(run.batch(source_forward)):
+    with model.trace(observe.batch(source_forward)):
         # q_proj first: nnsight enforces forward order inside a module's forward
         # exactly as it does between modules, and the projection runs before the
         # call that consumes it.
@@ -142,11 +144,11 @@ def test_a_swap_at_the_interior_lands_bit_for_bit(model, data_root, interior_raw
 
     with model.session():
         landed = run.nnsight.save({})
-        with model.trace(run.batch(source_forward)):
+        with model.trace(observe.batch(source_forward)):
             v_cf = ops.gather(
                 tap.address.read(model), read.positions, tap.address.seq_axis
             ).clone()
-        with model.trace(run.batch(patched_forward)):
+        with model.trace(observe.batch(patched_forward)):
             tap.address.write(
                 model,
                 ops.apply_write(
@@ -188,15 +190,15 @@ def test_only_the_declared_position_of_the_query_changes(model, data_root, inter
 
     with model.session():
         seen = run.nnsight.save({})
-        with model.trace(run.batch(source_forward)):
+        with model.trace(observe.batch(source_forward)):
             v_cf = ops.gather(
                 tap.address.read(model), write.positions, tap.address.seq_axis
             ).clone()
-        with model.trace(run.batch(patched_forward)):
+        with model.trace(observe.batch(patched_forward)):
             seen["clean_first"] = ops.gather(
                 tap.address.read(model), first_token, tap.address.seq_axis
             ).clone()
-        with model.trace(run.batch(patched_forward)):
+        with model.trace(observe.batch(patched_forward)):
             tap.address.write(
                 model,
                 ops.apply_write(

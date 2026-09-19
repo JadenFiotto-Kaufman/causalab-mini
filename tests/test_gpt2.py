@@ -13,8 +13,12 @@ import pathlib
 import pytest
 import torch
 
-from causalab_mini import document, encoding, model as model_module, ops, output, plan, run
-from causalab_mini.address import Address
+from causalab_mini import ops, output, plan
+from causalab_mini.data import encoding
+from causalab_mini.model import loading as model_module
+from causalab_mini.model.address import Address
+from causalab_mini.plan import document
+from causalab_mini.session import observe, run
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 DOCUMENT = REPO / "documents" / "gpt2_cpu.json"
@@ -136,9 +140,9 @@ def test_the_engines_head_read_is_the_models_own_logits_here_too(gpt2_raw, data_
     results = run.execute(gpt2, built)
 
     source, patched = built.forwards
-    with gpt2.trace(run.batch(source)):
+    with gpt2.trace(observe.batch(source)):
         v_cf = gpt2.layers_output[2][:, -1, :].clone().save()
-    with gpt2.trace(run.batch(patched)):
+    with gpt2.trace(observe.batch(patched)):
         gpt2.layers_output[2][:, -1, :] = v_cf
         logits = gpt2.logits[:, -1, :].clone().save()
 
@@ -198,7 +202,7 @@ def test_the_query_at_layer_0_carries_nothing_a_prompt_pair_differs_in(
     built = _build(raw, data_root, gpt2)
     source = built.forwards[0]
     tap = source.taps[0]
-    with gpt2.trace(run.batch(source)):
+    with gpt2.trace(observe.batch(source)):
         query = ops.gather(
             tap.address.read(gpt2), tap.reads[0].positions, tap.address.seq_axis
         ).clone().save()

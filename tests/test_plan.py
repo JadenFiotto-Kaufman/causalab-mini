@@ -5,7 +5,9 @@ import pickle
 
 import pytest
 
-from causalab_mini import document, encoding, plan
+from causalab_mini import plan
+from causalab_mini.data import encoding
+from causalab_mini.plan import document
 
 
 @pytest.fixture
@@ -30,7 +32,7 @@ def any_plan(request):
 # --------------------------------------------------------------------- #
 
 ALLOWED = (str, int, float, bool, type(None), tuple)
-PLAN_TYPES = {"causalab_mini.plan", "causalab_mini.address"}
+PLAN_TYPES = {"causalab_mini.plan.plan", "causalab_mini.model.address"}
 
 
 def _walk(value, where="plan"):

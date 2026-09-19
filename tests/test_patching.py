@@ -7,7 +7,9 @@ import nnsight
 import pytest
 import torch
 
-from causalab_mini import cli, document, ops, output, plan, run
+from causalab_mini import cli, ops, output, plan
+from causalab_mini.plan import document
+from causalab_mini.session import observe, run
 
 
 def build(raw, data_root, model):
@@ -52,9 +54,9 @@ def test_a_swap_lands_the_source_read_bit_for_bit(model, minimal_plan):
 
     with model.session():
         landed = nnsight.save({})
-        with model.trace(run.batch(source_forward)):
+        with model.trace(observe.batch(source_forward)):
             v_cf = ops.gather(tap.address.read(model), read.positions).clone()
-        with model.trace(run.batch(patched_forward)):
+        with model.trace(observe.batch(patched_forward)):
             tap.address.write(
                 model,
                 ops.apply_write(
@@ -80,9 +82,9 @@ def test_the_engines_metrics_equal_hand_computed_ones(model, minimal_plan, data_
     results = run.execute(model, minimal_plan)
 
     source, patched = minimal_plan.forwards
-    with model.trace(run.batch(source)):
+    with model.trace(observe.batch(source)):
         v_cf = model.layers_output[0][:, -1, :].clone().save()
-    with model.trace(run.batch(patched)):
+    with model.trace(observe.batch(patched)):
         model.layers_output[0][:, -1, :] = v_cf
         logits = model.logits[:, -1, :].clone().save()
 
@@ -123,17 +125,17 @@ def test_a_write_touches_only_the_position_it_declares(model, minimal_plan):
 
     with model.session():
         seen = nnsight.save({})
-        with model.trace(run.batch(source)):
+        with model.trace(observe.batch(source)):
             v_cf = ops.gather(tap.address.read(model), write.positions).clone()
             seen["source"] = v_cf
-        with model.trace(run.batch(patched)):
+        with model.trace(observe.batch(patched)):
             seen["clean_first"] = ops.gather(
                 tap.address.read(model), first_token
             ).clone()
             seen["clean_last"] = ops.gather(
                 tap.address.read(model), write.positions
             ).clone()
-        with model.trace(run.batch(patched)):
+        with model.trace(observe.batch(patched)):
             tap.address.write(
                 model,
                 ops.apply_write(

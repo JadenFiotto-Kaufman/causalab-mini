@@ -30,7 +30,8 @@ def das_raw():
 @pytest.fixture(scope="session")
 def model():
     """The tiny random Llama the document pins, on CPU in fp32."""
-    from causalab_mini import document, model as model_module
+    from causalab_mini.model import loading
+    from causalab_mini.plan import document
 
     doc = document.Document.load(MINIMAL)
-    return model_module.load(doc.model, device_map="cpu")
+    return loading.load(doc.model, device_map="cpu")

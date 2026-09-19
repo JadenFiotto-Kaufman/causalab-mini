@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .shapes import ExampleIds
+from ..shapes import ExampleIds
 
 Row = dict[str, Any]
 
@@ -24,7 +24,7 @@ class DataError(ValueError):
     pass
 
 
-def load_rows(data_root: str | Path, ref: str) -> list[Row]:
+def load(data_root: str | Path, ref: str) -> list[Row]:
     """`weekdays/data#train` -> the rows of <root>/weekdays/data.json whose
     `split` column is "train"."""
     path, _, split = ref.partition("#")

@@ -5,10 +5,10 @@ itself** — every module path, side, tuple index, operation name and shape
 assumption that nnterp did not hand us as data — plus what the document format
 made us implement twice.
 
-All of it is in one file, `causalab_mini/address.py`, with the
-padding-dependent part in `causalab_mini/encoding.py` and one autograd fact in
-`causalab_mini/ops.py`. That concentration is the result this slice was built to
-produce: if the facts below moved into nnterp, `address.py` would be a lookup
+All of it is in one file, `causalab_mini/model/address.py`, with the
+padding-dependent part in `causalab_mini/data/encoding.py` and one autograd fact in
+`causalab_mini/ops/intervene.py`. That concentration is the result this slice was built to
+produce: if the facts below moved into nnterp, `model/address.py` would be a lookup
 and nothing else in the project would change. Adding DAS — a rotation, a fit,
 and a training loop inside the session — added **no** new module path, side,
 tuple index or operation name; §1.13–§1.15 are the three things it did add, and
@@ -131,7 +131,7 @@ far too late. It exists only as an argument of one call inside
                                             26         query_states,
 ```
 
-Four facts had to be written down, and `causalab_mini/address.py`'s
+Four facts had to be written down, and `causalab_mini/model/address.py`'s
 `_COMPONENTS["attention_query"]` is exactly those four:
 
 1. **The module is `attentions.{layer}`** — nnterp's accessor, not a real module
@@ -248,7 +248,7 @@ and `"two"` are different ids, so `token_form: space_prefixed` is load-bearing
 here and inert on the tiny Llama. A `token_form` test that passes only on the
 sentencepiece model proves nothing; this is the model that can prove it.
 
-### 1.11 Family axes: where they were needed, and why not in `address.py`
+### 1.11 Family axes: where they were needed, and why not in `model/address.py`
 
 **This is the headline of the GPT-2 slice: no entry in `_COMPONENTS` needed a
 family axis.** One table, three components, two families, and
@@ -370,7 +370,7 @@ which tensors the optimizer was given, not a property of the model.
 
 ### 1.9 dtype names
 
-`{"fp32": torch.float32, "bf16": torch.bfloat16}` in `model.py`. Small, but it is
+`{"fp32": torch.float32, "bf16": torch.bfloat16}` in `model/loading.py`. Small, but it is
 the document's vocabulary mapped onto torch's by hand, and `model.dtype` is part
 of the experiment's identity, so getting it wrong silently produces a different
 experiment.
@@ -420,7 +420,7 @@ standardized accessors (`layers`, `attentions`, `lm_head`) already absorb the
 family axis, so an address written in accessor spellings needs no family column
 at all (§1.11). The gap is that they are live accessors and not a table.
 
-(1)–(3) are `address.py` in its entirety. (4) is half of `encoding.py`.
+(1)–(3) are `model/address.py` in its entirety. (4) is half of `data/encoding.py`.
 
 ---
 
