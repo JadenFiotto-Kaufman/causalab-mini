@@ -30,8 +30,20 @@ Json = dict[str, Any]
 PROTOCOL_VERSION = "3"
 
 DTYPES = ("fp32", "bf16")
-COMPONENTS = ("block_output", "lm_head", "attention_query")
-LAYERLESS = ("lm_head",)
+COMPONENTS = (
+    "embeddings",
+    "block_input",
+    "attention_query",
+    "attention_key",
+    "attention_z",
+    "attention_output",
+    "mlp_input",
+    "mlp_output",
+    "block_output",
+    "ln_final",
+    "lm_head",
+)
+LAYERLESS = ("embeddings", "ln_final", "lm_head")
 MECHANISMS = ("swap",)
 TOKEN_FORMS = ("space_prefixed",)
 INPUTS = ("base", "counterfactual")

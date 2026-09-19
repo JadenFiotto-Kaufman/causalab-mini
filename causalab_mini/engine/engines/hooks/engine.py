@@ -75,13 +75,6 @@ class HooksEngine(Engine):
                 "which has no hooks equivalent; run this document on the nnterp "
                 "engine."
             )
-        if address.side != "output":
-            raise AddressError(
-                f"component {component!r} is addressed on its {address.side}, and this "
-                "engine only hooks outputs. An input-side module boundary is "
-                "`register_forward_pre_hook` and the same body; no component in "
-                "`address.py` needs one yet."
-            )
         return address
 
     def width(self, address: Address) -> int:
@@ -128,12 +121,7 @@ class HooksEngine(Engine):
         is removed — a leaked hook would intervene on the *next* forward,
         which is a silently wrong number rather than an error.
         """
-        handles = [
-            tap.address.resolve(self._names).register_forward_hook(
-                intervene_at(tap, values, featurizers)
-            )
-            for tap in forward.taps
-        ]
+        handles = [_install(self._names, tap, values, featurizers) for tap in forward.taps]
         try:
             self.model(**batch(forward))
         finally:
@@ -147,6 +135,69 @@ def batch(forward: Forward) -> dict[str, Any]:
         "input_ids": torch.tensor(forward.input_ids),
         "attention_mask": torch.tensor(forward.attention_mask),
     }
+
+
+def _install(names: Any, tap: Tap, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
+    """Hook one address, on the side it is addressed on."""
+    module = tap.address.resolve(names)
+    if tap.address.side == "output":
+        return module.register_forward_hook(intervene_at(tap, values, featurizers))
+    return module.register_forward_pre_hook(
+        intervene_before(tap, values, featurizers), with_kwargs=True
+    )
+
+
+def intervene_before(
+    tap: Tap, values: dict[str, Any], featurizers: dict[str, Any]
+) -> Callable[[Any, Any, Any], Any]:
+    """The same body, on the way *in*.
+
+    A pre-hook is handed the call's arguments and may return replacements.
+    Which argument is the activation is the thing nnsight never has to ask:
+    an envoy's `.input` knows, and here the block may be called positionally
+    or by keyword depending on the family's own loop, so this finds the one
+    tensor argument and refuses if there is not exactly one. FINDINGS §6.
+    """
+
+    def hook(module: Any, args: Any, kwargs: Any) -> Any:
+        if args:
+            activation, where = args[0], None
+        else:
+            tensors = [key for key, value in kwargs.items() if torch.is_tensor(value)]
+            if len(tensors) != 1:
+                raise HooksEngineError(
+                    f"{type(module).__name__} was called with no positional argument "
+                    f"and {len(tensors)} tensor keyword arguments {tensors}, so which "
+                    "one the activation is cannot be decided here"
+                )
+            where = tensors[0]
+            activation = kwargs[where]
+        activation = _apply(tap, activation, values, featurizers)
+        if where is None:
+            return (activation, *args[1:]), kwargs
+        return args, {**kwargs, where: activation}
+
+    return hook
+
+
+def _apply(
+    tap: Tap, activation: Any, values: dict[str, Any], featurizers: dict[str, Any]
+) -> Any:
+    """This address's writes, then its reads. A read in a model sees that
+    model's writes, so at one address the writes go first."""
+    for write in tap.writes:
+        activation = intervene.apply_write(
+            activation,
+            write.positions,
+            values[write.operand],
+            write.mechanism,
+            featurizers[write.featurizer],
+            tap.address.seq_axis,
+        )
+    for read in tap.reads:
+        gathered = intervene.gather(activation, read.positions, tap.address.seq_axis)
+        values[read.name] = featurizers[read.featurizer].featurize(gathered)[0].clone()
+    return activation
 
 
 def intervene_at(
@@ -168,18 +219,7 @@ def intervene_at(
 
     def hook(module: Any, args: Any, output: Any) -> Any:
         activation = output[0] if isinstance(output, tuple) else output
-        for write in tap.writes:
-            activation = intervene.apply_write(
-                activation,
-                write.positions,
-                values[write.operand],
-                write.mechanism,
-                featurizers[write.featurizer],
-                tap.address.seq_axis,
-            )
-        for read in tap.reads:
-            gathered = intervene.gather(activation, read.positions, tap.address.seq_axis)
-            values[read.name] = featurizers[read.featurizer].featurize(gathered)[0].clone()
+        activation = _apply(tap, activation, values, featurizers)
         return (activation, *output[1:]) if isinstance(output, tuple) else activation
 
     return hook

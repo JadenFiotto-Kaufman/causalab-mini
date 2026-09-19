@@ -759,3 +759,74 @@ loop is therefore wrapped in `try/finally`, and a test asserts the module's
 `_forward_hooks` count is unchanged afterwards. It is four lines, and it is the
 only place where hooks are more *dangerous* than tracing rather than merely
 more limited.
+
+
+## 7. Eleven components, and what the second engine had to guess
+
+`address.py` grew from three components to eleven: `embeddings`,
+`block_input`, `attention_query`, `attention_key`, `attention_z`,
+`attention_output`, `mlp_input`, `mlp_output`, `block_output`, `ln_final`,
+`lm_head`. Three facts came out of doing it.
+
+### 7.1 The sort key needed a third band
+
+The old key was "everything inside the layer stack, by depth and by stage,
+before everything after it" — because every layerless tap it knew
+(`lm_head`) was downstream of every layer. `embeddings` is upstream of all of
+them, so `_Component` grew a `band` (0 before the stack, 1 inside, 2 after)
+and the key became `(band, layer, stage)`. nnsight enforces the order, so
+this is checkable rather than notional: `test_components.py` reads all eleven
+in one trace in sorted order, and a wrong key raises rather than returning a
+wrong number.
+
+### 7.2 An interior is not one shape
+
+`attention_query` and `attention_key` are arguments 1 and 2 of the same call.
+`attention_z` is that call's **return**. So an interior address needs to say
+*which handle* — `inputs` or `output` — and `_Component` grew a `handle`
+field and the engine a two-line branch. A table of `(path, side, seq_axis)`
+could not have expressed the third one; this is a concrete instance of what
+FINDINGS §2 asks nnterp to carry as data.
+
+### 7.3 Of six standardized names, transformers publishes three
+
+The hooks engine has to translate nnterp's names against a raw tree. The
+split is exactly half:
+
+| standardized | published by transformers | how the hooks engine finds it |
+| --- | --- | --- |
+| `embed_tokens` | ✅ `get_input_embeddings()` | published |
+| `lm_head` | ✅ `get_output_embeddings()` | published |
+| the decoder | ✅ `base_model` / `base_model_prefix` | published |
+| `layers` | ❌ | the decoder's only `nn.ModuleList` |
+| `attentions` / `mlps` | ❌ | the block's child whose class name ends in `Attention` / `MLP` |
+| `ln_final` | ❌ | the decoder's only normalization child outside the stack |
+
+The three guesses are conventions, not contracts. `LlamaAttention`/`GPT2Attention`
+and `LlamaMLP`/`GPT2MLP` happen to agree on a suffix; nothing requires that,
+and a family that names its mixer `Mixer` breaks it. Each guess raises rather
+than picking a first match, because the failure mode is reading a real tensor
+from the wrong module, which nothing downstream could detect.
+
+The resulting translation, which is what nnterp is worth for these two
+families, is pinned in `tests/test_components.py::RAW_PATHS`:
+
+| standardized | raw Llama | raw GPT-2 |
+| --- | --- | --- |
+| `embed_tokens` | `model.embed_tokens` | `transformer.wte` |
+| `layers.0` | `model.layers.0` | `transformer.h.0` |
+| `attentions.0` | `model.layers.0.self_attn` | `transformer.h.0.attn` |
+| `mlps.0` | `model.layers.0.mlp` | `transformer.h.0.mlp` |
+| `ln_final` | `model.norm` | `transformer.ln_f` |
+| `lm_head` | `lm_head` | `lm_head` |
+
+### 7.4 An input-side tap needs to know an argument's *name*
+
+`block_input` and `mlp_input` are the first input-side components. In nnsight
+that is `envoy.input` and the envoy knows which argument that is. With hooks
+it is `register_forward_pre_hook`, which is handed `(args, kwargs)` — and a
+decoder layer may be called positionally or by keyword depending on the
+family's own loop. The engine takes `args[0]` when there is one and otherwise
+the single tensor-valued keyword, refusing if there is not exactly one. That
+"which argument is the activation" question is a third thing nnsight answers
+for free.

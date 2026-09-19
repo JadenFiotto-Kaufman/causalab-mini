@@ -169,8 +169,8 @@ def read(model: Any, address: Address) -> Any:
     At a module boundary the output may be a bare tensor or a tuple whose
     first element is the hidden state, and which one it is depends on the
     transformers version, not on anything we can see in the document — so it
-    is decided from the value. Inside a forward the value is one argument of
-    one call, and nothing is ambiguous.
+    is decided from the value. Inside a forward the tensor is one argument of
+    one call, or one element of its return, and the address says which.
 
     This is the engine's half of an address: `address` says *where*, in terms
     that are true of the architecture, and this says how to reach there with
@@ -179,7 +179,10 @@ def read(model: Any, address: Address) -> Any:
     if not address.interior:
         value = getattr(address.resolve(model), address.side)
         return value[0] if isinstance(value, tuple) else value
-    args, _ = operation(model, address).inputs
+    call = operation(model, address)
+    if address.handle == "output":
+        return call.output[address.arg]
+    args, _ = call.inputs
     return args[address.arg]
 
 
@@ -196,8 +199,12 @@ def write(model: Any, address: Address, tensor: Any) -> None:
         )
         return
     call = operation(model, address)
-    args, kwargs = call.inputs
     index = address.arg
+    if address.handle == "output":
+        current = call.output
+        call.output = (*current[:index], tensor, *current[index + 1 :])
+        return
+    args, kwargs = call.inputs
     call.inputs = ((*args[:index], tensor, *args[index + 1 :]), kwargs)
 
 

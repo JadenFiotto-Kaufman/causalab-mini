@@ -55,19 +55,64 @@ def standardized(model: Any) -> Any:
     This returns an object carrying those spellings, so `Address.resolve` walks
     it unchanged and no other line of this engine has to know the difference.
 
-    Neither lookup needed a family table, which is the finding: transformers
-    publishes the decoder under `base_model_prefix` and the head under
-    `get_output_embeddings`. What it does not publish is the layer stack, so
-    that one is "the decoder's only `ModuleList`" — true of every decoder-only
-    family here, and exactly the guess nnterp replaces with a maintained list
-    of names. `attentions` is absent because this engine refuses the one
-    component that would reach through it; see `engine.locate`.
+    Three of the six are published by transformers and needed no family
+    knowledge at all — the decoder under `base_model_prefix`, the head under
+    `get_output_embeddings`, the embeddings under `get_input_embeddings`. The
+    other three are guesses, and that split is the measurement (FINDINGS §6):
+
+    * `layers` — the decoder's only `nn.ModuleList`.
+    * `attentions` / `mlps` — the block's child whose class name ends in
+      `Attention` / `MLP`. True of `LlamaAttention`/`LlamaMLP` and
+      `GPT2Attention`/`GPT2MLP`; a convention, not a contract.
+    * `ln_final` — the decoder's only normalization child.
+
+    Each guess raises rather than picking a first match, because a wrong
+    module here reads a real tensor from the wrong place and nothing
+    downstream could tell.
     """
-    stacks = [child for child in model.base_model.children() if isinstance(child, nn.ModuleList)]
+    decoder = model.base_model
+    stacks = [child for child in decoder.children() if isinstance(child, nn.ModuleList)]
     if len(stacks) != 1:
         raise HooksEngineError(
             f"{type(model).__name__}: its decoder has {len(stacks)} ModuleList children, "
             "so which one is the layer stack is not decidable here. nnterp's rename "
             "table names it per family; this engine guesses."
         )
-    return SimpleNamespace(layers=stacks[0], lm_head=model.get_output_embeddings())
+    layers = stacks[0]
+    return SimpleNamespace(
+        layers=layers,
+        attentions=[_by_class(block, "Attention", "attentions") for block in layers],
+        mlps=[_by_class(block, "MLP", "mlps") for block in layers],
+        ln_final=_norm(decoder),
+        embed_tokens=model.get_input_embeddings(),
+        lm_head=model.get_output_embeddings(),
+    )
+
+
+def _by_class(block: nn.Module, suffix: str, name: str) -> nn.Module:
+    """The block's one child whose class name ends in `suffix`."""
+    found = [child for child in block.children() if type(child).__name__.endswith(suffix)]
+    if len(found) != 1:
+        raise HooksEngineError(
+            f"{type(block).__name__}: {len(found)} children have a class name ending "
+            f"in {suffix!r}, so {name!r} is not decidable here — transformers "
+            "publishes no accessor for it and this engine matches on the naming "
+            f"convention. Children: {[type(c).__name__ for c in block.children()]}"
+        )
+    return found[0]
+
+
+def _norm(decoder: nn.Module) -> nn.Module:
+    """The decoder's one normalization child, outside the layer stack."""
+    found = [
+        child
+        for name, child in decoder.named_children()
+        if not isinstance(child, nn.ModuleList) and "norm" in type(child).__name__.lower()
+    ]
+    if len(found) != 1:
+        raise HooksEngineError(
+            f"{type(decoder).__name__}: {len(found)} normalization children outside the "
+            "layer stack, so 'ln_final' is not decidable here. Children: "
+            f"{[type(c).__name__ for c in decoder.children()]}"
+        )
+    return found[0]
