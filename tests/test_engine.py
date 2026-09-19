@@ -72,7 +72,7 @@ def test_the_base_engine_has_no_implementation():
 
 def test_the_engine_specific_surface_is_exactly_the_contract():
     """The finding this project exists to produce: an engine is how you load a
-    model, how you address it and how you run one forward — six members. The
+    model, how you address it and how you run one forward — seven members. The
     walk over steps, the fit loop, the metrics and the write algebra are
     shared, and an engine adds nothing of its own to them."""
     overridden = {name for name in vars(NNterpEngine) if not name.startswith("_")}

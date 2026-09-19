@@ -29,7 +29,7 @@ It **imports nothing from causalab**. Only the JSON documents were copied.
 
 `master`, clean tree, no remote. **151 tests passing**
 (`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~8 s), `uvx pyright` at 0
-errors. **3,085 source lines** across 27 files in `causalab_mini/`.
+errors. **3,086 source lines** across 27 files in `causalab_mini/`.
 
 The package is five sub-packages and a short spine, each named for what it is
 allowed to know:
