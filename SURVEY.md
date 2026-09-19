@@ -101,7 +101,9 @@ three scale subsystems above.
 
 ## 3. Do first — cheap and broad
 
-Merged across the five surveys, in order of what each buys.
+Merged across the five surveys, in order of what each buys. **Status as of
+2026-09-19**: rows 8 and 11 are done and row 6 was a survey error; the rest
+stand.
 
 | # | do this | cost | why now |
 |---|---|---|---|
@@ -110,18 +112,33 @@ Merged across the five surveys, in order of what each buys.
 | 3 | **Real eligibility columns** | 2 | `"eligible": True` is a literal in `write.py`. An excluded measurement and a genuine zero are indistinguishable in mini's output today. |
 | 4 | **Freeze the model at load** (`eval()`, `requires_grad_(False)`) | 1 | Two lines per loader. `FINDINGS.md` §1.15 already diagnoses this and mini declined to fix it; every backward accumulates `.grad` on model weights for no reason. |
 | 5 | **Record engine, dependency versions, and a code digest** | 2 | ~20 lines. nnsight and nnterp are editable checkouts that move underneath the project, and two engines exist whose attention defaults are known to differ. |
-| 6 | **Endpoint-disjoint fit splits** | 2 | A client-side set intersection. Without it a leak reports a training score under a held-out name. |
+| ~~6~~ | ~~**Endpoint-disjoint fit splits**~~ | — | **SURVEY ERROR — already implemented.** `plan/build.py:239` refuses two refs that share a row, by name ("the two must be endpoint-disjoint"), and deliberately permits one ref named twice as the visible train-equals-test ablation. The learning survey reported this absent; it is not. |
 | 7 | **`fit_diagnostics.json`** | 2 | Two numbers for a subspace, computed where `Weights` already stands — and what stops a meaningless fit reporting a perfect score. |
 | 8 | ~~**The nine module-boundary components**~~ | 1 | **DONE.** Eight added (`embeddings`, `block_input`, `attention_output`, `mlp_input`, `mlp_output`, `ln_final`, plus the interiors `attention_key` and `attention_z`); eleven now. `input_ids` and `attention_probs` were left — see FINDINGS §7. |
 | 9 | **Literal scalar operands** (`{"swap": 0.0}`) | 1–2 | Zero ablation, the cheapest baseline there is, is a type widening on `WriteOp.operand`. |
 | 10 | **`add_scaled`, `lerp`, `clamp`, `gaussian`** | 1–2 | One function each behind the existing `Mechanism` protocol. (`renormalize` is cost 3 — it needs the ordering rule.) |
-| 11 | **Authorable `subspace.seed`** ✓, `pca` kind, `early_stop.mode: "min"` | 1–2 | The seed is **DONE** and bought `random_subspace_cpu.json`. `pca` and the minimizing objective remain. |
+| 11 | ~~Authorable `subspace.seed`~~ ✓, `pca` kind, `early_stop.mode: "min"` | 1–2 | The seed is **DONE** and bought `random_subspace_cpu.json`. `pca` and the minimizing objective remain. |
 | 12 | **Per-head feature slice on an address** | 2 | One field plus a slice in `gather`/`scatter`. Head-level work is a large share of real interpretability. |
 | 13 | **Sweep `{"range": …}` and multi-field cross products** | 1–2 | The two commonest sweep spellings; the plan tree already carries the results. |
 | 14 | **Refuse a non-differentiable metric in an objective** | 1 | Mini will happily put `match` in a loss and train on a zero gradient. |
 | 15 | **Microbatching by row window inside `forward`** | 2 | Entirely behind the existing seam, and the precondition for running anything bigger than a tiny model. |
 | 16 | **The faithful-server harness** (test-only) | 2 | Mini's whole remote claim rests on `remote="local"`, which causalab documents as checking "pickling and imports, and nothing past them". |
 | 17 | **`validate` / `explain` / `digest` verbs, `--set`, `--engine`, CI** | 1–2 | Mini already computes everything these print. `--engine` is unwired rather than unwanted. |
+
+### What is done, and what it cost
+
+| item | landed | what it actually took |
+|---|---|---|
+| The component vocabulary (row 8) | `1d0835b` | Eleven components, not nine: `attention_key` and `attention_z` came along because they are the same call as `attention_query`. Three things the table did not anticipate — the sort key needed a third band for `embeddings`, an interior needed to say whether it means a call's argument or its return, and the hooks engine needed pre-hooks plus a rule for which argument is the activation. FINDINGS §7. |
+| Authorable featurizer seed (row 11) | `0c5cb1e` | One field; the plumbing was already there. |
+| Three documents (§7) | `0c5cb1e` | `multi_position_patch` needed no code, `hydra_effect` needed `token_logit`, `random_subspace_control` needed the seed. |
+| Refusals for unimplemented surface | `4bf0f96` | Four silent-acceptance bugs, §9. |
+
+**And one finding that came only from porting a document**: the two engines
+are *not* bit-identical when several writes are installed at one address —
+1.49e-08 on one row. Cross-engine bit-parity was a property of one write, not
+of writing (FINDINGS §8). It is not on any to-do list here because it is
+inside nnsight, but it changes what "the engines agree" means.
 
 ## 4. Expensive but broad — plan for these
 
