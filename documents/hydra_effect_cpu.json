@@ -1,0 +1,228 @@
+{
+  "header": {
+    "protocol_version": "3",
+    "description": "AUTHORED FOR causalab-mini from causalab's configs/protocols/hydra_effect.json (McGrath et al. 2023, arXiv:2307.15771), retargeted to the tiny CPU Llama: two layers instead of 32, so the ablated mixer is layer 0 and the probes are layers 0 and 1. Resample-ablate an attention layer at the final token, then measure two downstream layers' direct effects by injecting each layer's mixer output as the final residual and reading the head. Five intervened models, and reads taken INSIDE one intervened model are the operands of writes in another \u2014 the only cross-model operand chain in causalab's corpus."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "data": {
+    "base": {
+      "dataset": "pile/data/sample",
+      "field": "input"
+    },
+    "counterfactual": {
+      "dataset": "pile/data/sample",
+      "field": "resample_input"
+    }
+  },
+  "method": {
+    "sites": {
+      "abl": {
+        "component": "attention_output",
+        "layers": [
+          0
+        ]
+      },
+      "probe0": {
+        "component": "attention_output",
+        "layers": [
+          0
+        ]
+      },
+      "probe1": {
+        "component": "attention_output",
+        "layers": [
+          1
+        ]
+      },
+      "resid_final": {
+        "component": "block_output",
+        "layers": [
+          1
+        ]
+      },
+      "lm_head": {
+        "component": "lm_head"
+      }
+    },
+    "reads": {
+      "v_noise": {
+        "site": "abl",
+        "pos": -1,
+        "model": "original",
+        "input": "counterfactual"
+      },
+      "logits_clean": {
+        "site": "lm_head",
+        "pos": -1,
+        "model": "original",
+        "input": "base"
+      },
+      "logits_abl": {
+        "site": "lm_head",
+        "pos": -1,
+        "model": "ablated",
+        "input": "base"
+      },
+      "a0_clean": {
+        "site": "probe0",
+        "pos": -1,
+        "model": "original",
+        "input": "base"
+      },
+      "a1_clean": {
+        "site": "probe1",
+        "pos": -1,
+        "model": "original",
+        "input": "base"
+      },
+      "a1_abl": {
+        "site": "probe1",
+        "pos": -1,
+        "model": "ablated",
+        "input": "base"
+      },
+      "de0_clean": {
+        "site": "lm_head",
+        "pos": -1,
+        "model": "with_inj0_clean",
+        "input": "base"
+      },
+      "de1_clean": {
+        "site": "lm_head",
+        "pos": -1,
+        "model": "with_inj1_clean",
+        "input": "base"
+      },
+      "de1_abl": {
+        "site": "lm_head",
+        "pos": -1,
+        "model": "with_inj1_abl",
+        "input": "base"
+      }
+    },
+    "writes": {
+      "resample": {
+        "site": "abl",
+        "pos": -1,
+        "do": {
+          "swap": "v_noise"
+        }
+      },
+      "inj0_clean": {
+        "site": "resid_final",
+        "pos": -1,
+        "do": {
+          "swap": "a0_clean"
+        }
+      },
+      "inj1_clean": {
+        "site": "resid_final",
+        "pos": -1,
+        "do": {
+          "swap": "a1_clean"
+        }
+      },
+      "inj1_abl": {
+        "site": "resid_final",
+        "pos": -1,
+        "do": {
+          "swap": "a1_abl"
+        }
+      }
+    },
+    "intervened_models": {
+      "ablated": {
+        "input": "base",
+        "writes": [
+          "resample"
+        ]
+      },
+      "with_inj0_clean": {
+        "input": "base",
+        "writes": [
+          "inj0_clean"
+        ]
+      },
+      "with_inj1_clean": {
+        "input": "base",
+        "writes": [
+          "inj1_clean"
+        ]
+      },
+      "with_inj1_abl": {
+        "input": "base",
+        "writes": [
+          "inj1_abl"
+        ]
+      }
+    },
+    "metrics": {
+      "te_clean": {
+        "kind": "token_logit",
+        "of": "logits_clean",
+        "token": "ml_token",
+        "token_form": "space_prefixed"
+      },
+      "te_abl": {
+        "kind": "token_logit",
+        "of": "logits_abl",
+        "token": "ml_token",
+        "token_form": "space_prefixed"
+      },
+      "de0_c": {
+        "kind": "token_logit",
+        "of": "de0_clean",
+        "token": "ml_token",
+        "token_form": "space_prefixed"
+      },
+      "de1_c": {
+        "kind": "token_logit",
+        "of": "de1_clean",
+        "token": "ml_token",
+        "token_form": "space_prefixed"
+      },
+      "de1_a": {
+        "kind": "token_logit",
+        "of": "de1_abl",
+        "token": "ml_token",
+        "token_form": "space_prefixed"
+      }
+    },
+    "save": [
+      {
+        "value": "te_clean",
+        "model": "original",
+        "input": "base",
+        "file_path": "te_clean.json"
+      },
+      {
+        "value": "te_abl",
+        "model": "ablated",
+        "input": "base",
+        "file_path": "te_abl.json"
+      },
+      {
+        "value": "de0_c",
+        "model": "with_inj0_clean",
+        "input": "base",
+        "file_path": "de0_clean.json"
+      },
+      {
+        "value": "de1_c",
+        "model": "with_inj1_clean",
+        "input": "base",
+        "file_path": "de1_clean.json"
+      },
+      {
+        "value": "de1_a",
+        "model": "with_inj1_abl",
+        "input": "base",
+        "file_path": "de1_abl.json"
+      }
+    ]
+  }
+}

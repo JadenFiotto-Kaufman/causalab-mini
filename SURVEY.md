@@ -112,10 +112,10 @@ Merged across the five surveys, in order of what each buys.
 | 5 | **Record engine, dependency versions, and a code digest** | 2 | ~20 lines. nnsight and nnterp are editable checkouts that move underneath the project, and two engines exist whose attention defaults are known to differ. |
 | 6 | **Endpoint-disjoint fit splits** | 2 | A client-side set intersection. Without it a leak reports a training score under a held-out name. |
 | 7 | **`fit_diagnostics.json`** | 2 | Two numbers for a subspace, computed where `Weights` already stands — and what stops a meaningless fit reporting a perfect score. |
-| 8 | **The nine module-boundary components** (`block_input`, `attention_output`, `mlp_output`, `ln_final`, …) | 1 | One `_Component` row each; nnterp already names them. `attention_output` alone unlocks three documents. |
+| 8 | ~~**The nine module-boundary components**~~ | 1 | **DONE.** Eight added (`embeddings`, `block_input`, `attention_output`, `mlp_input`, `mlp_output`, `ln_final`, plus the interiors `attention_key` and `attention_z`); eleven now. `input_ids` and `attention_probs` were left — see FINDINGS §7. |
 | 9 | **Literal scalar operands** (`{"swap": 0.0}`) | 1–2 | Zero ablation, the cheapest baseline there is, is a type widening on `WriteOp.operand`. |
 | 10 | **`add_scaled`, `lerp`, `clamp`, `gaussian`** | 1–2 | One function each behind the existing `Mechanism` protocol. (`renormalize` is cost 3 — it needs the ordering rule.) |
-| 11 | **Authorable `subspace.seed`, `pca` kind, `early_stop.mode: "min"`** | 1–2 | Between them: the matched-k random-subspace control, the PCA control, and any minimizing objective. The seed plumbing already exists. |
+| 11 | **Authorable `subspace.seed`** ✓, `pca` kind, `early_stop.mode: "min"` | 1–2 | The seed is **DONE** and bought `random_subspace_cpu.json`. `pca` and the minimizing objective remain. |
 | 12 | **Per-head feature slice on an address** | 2 | One field plus a slice in `gather`/`scatter`. Head-level work is a large share of real interpretability. |
 | 13 | **Sweep `{"range": …}` and multi-field cross products** | 1–2 | The two commonest sweep spellings; the plan tree already carries the results. |
 | 14 | **Refuse a non-differentiable metric in an objective** | 1 | Mini will happily put `match` in a loss and train on a zero gradient. |
@@ -205,6 +205,13 @@ Distances use the same scale. Every dataset these need ships with causalab in
 exactly the shape `data/rows.py` reads, so data is never the blocker; 19 of 24
 name Llama-3.1-8B and 4 name Qwen3.6-35B-A3B, which is a practical blocker on
 this CPU box, not a design one.
+
+> **Three of these are now ported** — `multi_position_patch_cpu.json`,
+> `hydra_effect_cpu.json` and `random_subspace_cpu.json` — with the
+> `token_logit` metric and an authorable featurizer seed that the latter two
+> needed. `interchange` and `weekdays_8b_interchange` were deliberately not:
+> they are `minimal_cpu` at another layer, so they would add a file and no
+> coverage.
 
 **Distance 1 — runs today, or after a mechanical retarget (5).**
 `minimal_cpu`, `das`, `weekdays_8b_interchange`, `interchange`,

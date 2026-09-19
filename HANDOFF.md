@@ -32,9 +32,9 @@ It **imports nothing from causalab**. Only the JSON documents were copied.
 
 ## 2. State as of this handoff
 
-`master`, clean tree, no remote. **151 tests passing**
+`master`, clean tree, no remote. **192 tests passing**
 (`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~8 s), `uvx pyright` at 0
-errors. **3,086 source lines** across 27 files in `causalab_mini/`.
+errors. **3,337 source lines** across 27 files in `causalab_mini/`.
 
 The package is five sub-packages and a short spine, each named for what it is
 allowed to know:
@@ -65,7 +65,13 @@ change to `steps.py`, `ops/`, `plan/` or `address.py`. What it had to supply by
 hand — and what turned out to be free — is FINDINGS §6. It is not wired into
 the CLI: `--engine` is a flag nobody has needed yet.
 
-Documents in `documents/`: `minimal_cpu.json` (patching, shipped),
+Documents in `documents/`: nine. Ported from causalab's own corpus:
+`multi_position_patch_cpu.json` (three disjoint absolute writes in one
+intervened model), `hydra_effect_cpu.json` (five intervened models, and a
+read taken inside one that is the operand of a write in another — the only
+cross-model operand chain in causalab's corpus), and
+`random_subspace_cpu.json` (the matched-k control: three untrained seeded
+rotations, no fit at all). The rest: `minimal_cpu.json` (patching, shipped),
 `das.json` (shipped, unrunnable here — Llama-3.1-8B), `das_cpu_reduction.json`
 (authored, four changes from `das.json`), `attention_query_cpu.json` (authored,
 the interior), `gpt2_cpu.json` (authored, the reach probe). Authored documents

@@ -171,10 +171,15 @@ def _featurizer(
         k=spec.k,
         d=d,
         parametrization=spec.parametrization,
-        # A subspace with no seed of its own takes the fit's, or 0 when there is
-        # no fit at all — which is what makes an untrained subspace a
-        # reproducible random rank-k basis.
-        seed=document.train.seed if document.train is not None else 0,
+        # A subspace with no seed of its own takes the fit's, or 0 when there
+        # is no fit at all — which is what makes an untrained subspace a
+        # reproducible random rank-k basis. Authoring one is how a document
+        # sweeps the draw.
+        seed=(
+            spec.seed
+            if spec.seed is not None
+            else (document.train.seed if document.train is not None else 0)
+        ),
         trained=document.train is not None and name in document.train.params,
     )
 

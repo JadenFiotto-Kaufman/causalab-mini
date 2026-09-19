@@ -37,16 +37,32 @@ def cross_entropy(logits: Any, target: TokenIds) -> Any:
     return -logits.log_softmax(dim=-1)[rows, ids]
 
 
-KINDS: dict[str, Callable[..., Any]] = {"match": match, "logit_diff": logit_diff, "cross_entropy": cross_entropy}
+def token_logit(logits: Any, token: TokenIds) -> Any:
+    """The raw logit of one token, per row. Not a difference and not a
+    probability: the Hydra-effect experiments measure a *direct effect* as a
+    logit moved by an intervention, and a difference would hide which side
+    moved."""
+    rows, ids = _rows(logits, token)
+    return logits[rows, ids]
+
+
+KINDS: dict[str, Callable[..., Any]] = {
+    "match": match,
+    "logit_diff": logit_diff,
+    "cross_entropy": cross_entropy,
+    "token_logit": token_logit,
+}
 
 UNITS: dict[str, tuple[str, str]] = {
     "match": ("fraction", "match/v1"),
     "logit_diff": ("logit", "logit_diff/v1"),
     "cross_entropy": ("nat", "cross_entropy/v1"),
+    "token_logit": ("logit", "token_logit/v1"),
 }
 
 
 def compute(kind: str, logits: Any, ids: tuple[TokenIds, ...]) -> Any:
     """`ids` is the kind's operands in order: match takes (expected,),
-    logit_diff takes (a, b), cross_entropy takes (target,)."""
+    logit_diff takes (a, b), cross_entropy takes (target,), token_logit
+    takes (token,)."""
     return KINDS[kind](logits, *ids)

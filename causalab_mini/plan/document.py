@@ -63,6 +63,7 @@ METRIC_COLUMNS = {
     "match": ("expected",),
     "logit_diff": ("a", "b"),
     "cross_entropy": ("target",),
+    "token_logit": ("token",),
 }
 
 # Sections that exist in the protocol and that this slice does not implement.
@@ -204,6 +205,12 @@ class FeaturizerSpec:
     kind: str
     k: int
     parametrization: str
+    #: The draw this featurizer's *initial* basis comes from. Absent, it is
+    #: the document's seed (`train.seed`, or 0 with no fit). Authoring it is
+    #: what makes an **untrained** subspace a first-class random rank-k basis
+    #: rather than a fit implementation detail — sweep it and the document is
+    #: the matched-k random-subspace control.
+    seed: int | None = None
 
     def __post_init__(self) -> None:
         _check(
@@ -217,15 +224,19 @@ class FeaturizerSpec:
             f"(this slice has {PARAMETRIZATIONS})",
         )
         _check(isinstance(self.k, int) and self.k > 0, "featurizer k is a positive width")
+        _check(
+            self.seed is None or (isinstance(self.seed, int) and not isinstance(self.seed, bool)),
+            "featurizer seed is an integer",
+        )
 
     @classmethod
     def from_json(cls, name: str, raw: Json) -> "FeaturizerSpec":
         _check(
-            not (set(raw) - {"kind", "k", "parametrization"}),
-            f"featurizer {name!r}: only kind/k/parametrization are implemented — in "
-            "particular `d` is derived from (model, site) and may never be authored",
+            not (set(raw) - {"kind", "k", "parametrization", "seed"}),
+            f"featurizer {name!r}: only kind/k/parametrization/seed are implemented — "
+            "in particular `d` is derived from (model, site) and may never be authored",
         )
-        return cls(raw["kind"], raw["k"], raw["parametrization"])
+        return cls(raw["kind"], raw["k"], raw["parametrization"], raw.get("seed"))
 
 
 @dataclass(frozen=True)

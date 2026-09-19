@@ -830,3 +830,35 @@ family's own loop. The engine takes `args[0]` when there is one and otherwise
 the single tensor-valued keyword, refusing if there is not exactly one. That
 "which argument is the activation" question is a third thing nnsight answers
 for free.
+
+
+## 8. Several writes at one address cost one ulp across engines
+
+`documents/multi_position_patch_cpu.json` installs three absolute writes at
+one address, at positions −4, −3 and −2. It is the only document in the suite
+where the nnterp and hooks engines do not agree to the bit: `logit_diff`
+differs by **1.49e-08 on one of four rows**, one ulp at fp32. Every
+single-write document still asserts `torch.equal`.
+
+Ruled out, each by its own probe:
+
+- the operands the three writes consume — bit-identical;
+- the activation the three writes compute — bit-identical;
+- the tensor actually installed at the address, **including its strides and
+  contiguity** — bit-identical;
+- the weights — identical tensors;
+- the attention implementation — `sdpa` on both sides;
+- the KV cache — forcing `use_cache=False` on the hooks side changes nothing
+  (this was the leading hypothesis, from the 1-ulp `DynamicCache` re-layout
+  the real causalab hit);
+- tracing itself — an un-intervened forward through both engines on the same
+  batch is bit-identical.
+
+So it enters *after* the replacement is installed, in how nnsight continues a
+forward whose intermediate value has been assigned. That is nnsight's
+internals rather than mini's, and the test records the number rather than
+loosening quietly: `atol=1e-7` with the measurement in its docstring.
+
+The reason this matters beyond one document: **cross-engine bit-parity is a
+property of one write, not of writing.** A suite that only ever wrote once
+would have reported exact agreement and been believed.

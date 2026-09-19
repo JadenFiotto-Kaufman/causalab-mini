@@ -1,0 +1,23 @@
+[
+ {
+  "example_id": "0",
+  "input": "The capital of France is",
+  "resample_input": "The capital of Spain is",
+  "ml_token": " Paris",
+  "split": "sample"
+ },
+ {
+  "example_id": "1",
+  "input": "The capital of Japan is",
+  "resample_input": "The capital of Italy is",
+  "ml_token": " Tokyo",
+  "split": "sample"
+ },
+ {
+  "example_id": "2",
+  "input": "The capital of Germany is",
+  "resample_input": "The capital of Russia is",
+  "ml_token": " Berlin",
+  "split": "sample"
+ }
+]
