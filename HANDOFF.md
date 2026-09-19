@@ -3,6 +3,11 @@
 Written 2026-09-19 at the end of a long session, for whoever picks this up next.
 Three files carry state here and they are different things:
 
+- **`SURVEY.md`** — the gap. Every feature the real causalab has that mini
+  does not, rated by what it would cost mini and by how many experiments
+  want it, with the corpus of 24 shipped documents triaged one by one. Read
+  §2 (five architectural verdicts) and §3 (what to do first) even if you read
+  nothing else.
 - **`NOTES.md`** — ground truth. What the copied documents contain, field by
   field, and the exhaustive minimum feature set. It is the spec; trust it.
 - **`FINDINGS.md`** — evidence. Every fact about model internals this project
