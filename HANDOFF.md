@@ -27,19 +27,19 @@ It **imports nothing from causalab**. Only the JSON documents were copied.
 
 ## 2. State as of this handoff
 
-`master`, clean tree, no remote. **120 tests passing**
+`master`, clean tree, no remote. **124 tests passing**
 (`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~6 s), `uvx pyright` at 0
-errors. **2,300 source lines** across 22 files in `causalab_mini/`.
+errors. **2,555 source lines** across 23 files in `causalab_mini/`.
 
 The package is five sub-packages and a short spine, each named for what it is
 allowed to know:
 
-    __init__.py  shapes.py  cli.py  output.py      vocabulary + spine
-    plan/     document.py  plan.py  build.py       the request, as pure data
-    data/     rows.py      encoding.py             the corpus -> padded tokens
-    model/    loading.py   address.py              the ONLY model-aware code
-    ops/      intervene.py metrics.py featurizer.py   agnostic: tensors only
-    session/  run.py       observe.py  train.py    the one nnsight session
+    __init__.py  shapes.py  cli.py                vocabulary + spine
+    plan/   document.py plan.py build.py write.py  the request, as pure data
+    data/   rows.py     encoding.py                the corpus -> padded tokens
+    model/  loading.py  address.py                 the ONLY model-aware code
+    ops/    intervene.py metrics.py featurizer.py  agnostic: tensors only
+    engine/ base.py     steps.py    nnterp.py      how a plan reaches tensors
 
 `plan/document.py` is 702 of those lines and was deliberately left whole: it is
 one concept (the protocol surface) and splitting it would need a third file for
@@ -64,78 +64,68 @@ These are load-bearing. Several tests enforce them.
    `model.session(remote=remote)`. Not a session per forward, not a lazy
    per-read path. `remote=True` on that session is the *only* difference
    between local and remote — there is no second code path.
-3. **A plan is pure data; a block turns it into tensors.** A *fresh* plan holds
-   strings, ints and tuples only (see §4 for how this changes).
+3. **A plan is pure data; an engine turns it into tensors.** A *fresh* plan
+   holds strings, ints, tuples and dicts only — its `results` dicts are empty
+   until it runs, and they are the only mutable thing in the tree. A plan has
+   no `execute`: a plan that knew how to run itself would only run on one
+   engine.
 4. **No trace body may reference a client object** — no executor, document,
    tokenizer. `tests/test_structure.py` is an AST tripwire over every
    `with ….trace(`/`.session(` block, package-wide; it has a vacuity guard.
 5. **`model/` is the only package that knows anything about models**, and
    `model/address.py` the only file that knows their internals. `ops/` knows
    nothing about them and may not import `model/`. No file sits on both sides.
+   An address says *where*; reaching there is the engine's
+   (`engine/nnterp.py`'s `read`/`write`).
+6. **The engine-specific surface is two classmethods**, `execute` and
+   `forward`. Everything else lives in `engine/steps.py` and is shared.
+   `tests/test_engine.py` pins this: it asserts the override set is exactly
+   those two, and runs a real plan on an engine that has no model and no
+   session.
 6. **The client never decides anything from a tensor.** The plan carries a
    spec; the block resolves it, including any dynamic case. (Nothing here needs
    a dynamic case yet. In the real engine this is how the generated frame and
    the DeltaNet fire count work.)
 
-## 4. DECIDED BUT NOT BUILT — the step/plan refactor
+## 4. The step/plan refactor — BUILT
 
-This was settled in discussion with the owner at the very end of the session and
-**no code has been written for it**. It is the next task.
+What §4 used to describe as decided-but-unbuilt is in. How it landed, and
+where it differs from the plan written here before it was built:
 
-### The problem
-`session/run.py`'s `execute` hardcodes a workflow: build featurizers → maybe fit → observe →
-save weights, with an `if plan.train is not None` in the middle. That
-conditional is the executor knowing about document shape. The sequence is code
-when it should be data.
+- **`Plan` is a step and plans nest.** `Plan.steps` is an ordered
+  `{name: Step}` dict; the leaves are `Featurizers`, `Observe`, `Fit`,
+  `Weights`. A document compiles to a root plan with two to four steps.
+- **A plan carries its own results**, at the node that produced them.
+  `root.step("fit", Fit).epochs[0][0].results["ce"]` is the metric of one
+  training update. `Plan.result(name)` is the flat lookup; it descends through
+  steps but **stops before a fit's internal passes**, or every fitted document
+  would have six ambiguous `iia`s.
+- **`nnsight.save(plan)` at the top of the session is how results come home**,
+  exactly as predicted. Verified with a probe before anything was built: a
+  frozen dataclass with nested children and mutable `results` dicts round-trips
+  on both the local and the serialized path, tensors landing at every depth.
+- **`Plan.write(out_dir)` writes the manifest**, recursing: a nested plan
+  writes into a directory named by its step name, so a plan's path in the tree
+  is its path on disk. A one-plan document writes into `out` exactly as before.
+- **Steps have no `execute` method.** This is the owner's correction and it is
+  the load-bearing one: an `Engine` classmethod executes a step, so a second
+  engine (torch hooks, vLLM) is possible and `plan/` stays free of torch and
+  nnsight. `Engine` itself has **no implementation** — an engine that opens
+  nothing should not inherit a session.
+- **There is no run state object.** `values` — the activations a write's
+  operand names — are born and die inside one `Observe`, so the only thing
+  crossing steps is the live featurizer dict.
+- **No featurizer-isolation flag.** Each point rebuilds its own parameters
+  before using them and execution is sequential, so nothing was needed yet.
 
-### The design
-
-- **`Plan` becomes a step, and plans nest.** The composite is `Plan` itself:
-  `Plan.execute(model, state)` is `for step in self.steps: step.execute(...)`.
-  Three experiments in a row is a root plan whose three steps are plans. A fit's
-  per-minibatch sub-plan is the same mechanism.
-- **Leaves stay at roughly the four kinds we already have** (build featurizers,
-  fit, observe, save weights). **No registry, no plugin protocol, no generic
-  composite tower beyond `Plan`.** If eight step types appear to express two
-  document shapes, the abstraction has cost more than it bought.
-- **A plan carries its own results**, so they are navigable at any depth:
-  `root.experiments[1].observe.results["iia"]` rather than a flat dict with
-  qualified string keys. The owner argued this and is right; an earlier
-  proposal of mine (flat dict + graft by path) was worse.
-- **How results come home: `nnsight.save(plan)` at the root of the session.**
-  This is the owner's solution and it is the correct mechanism. A save on a
-  container pushes the server's copy home and *replaces* the client's binding;
-  locally the block and caller share the object so it is a no-op. One line, one
-  code path, nothing to reattach. `.save()` is mounted onto every object, not
-  just tensors, so a dataclass works.
-  - **Do not** rely on the block mutating the client's plan across the wire.
-    That silently works locally and silently does nothing remotely. It is
-    exactly the bug the real engine hit with its fire tally.
-- **Run state is separate from the plan during execution**: a small mutable
-  object holding **values** (activations moving between forwards, never leave)
-  and **featurizers** (stateful, possibly trained, never leave). Results live on
-  the plan nodes, not here.
-- **Values scope per sub-plan.** Three experiments must not see each other's
-  activations.
-- **Featurizer inheritance is declared by the enclosing plan.** Both "three
-  experiments each training a rotation" (isolated) and "one rotation evaluated
-  three ways" (shared) are real experiments, so this cannot be decided once by
-  the framework; it belongs in the data.
-
-### Known costs, accepted
-- A plan that has been run holds tensors, so it is no longer shippable as-is.
-  Re-running means clearing results or copying first.
-- The purity test changes from "a plan holds only strings and integers" to
-  "a **fresh** plan does". That is a more honest statement of the property.
-- Saving the plan round-trips the whole thing, including token ids. A few KB
-  here. If plans ever get large, save a results sub-tree instead; the design
-  does not have to change to allow that.
-
-### The test that decides whether it earned itself
-Write a document that is three experiments, and see whether it needs anything
-beyond a root plan with three children. All 120 existing tests should still
-pass, with only the purity test's wording changing. If it is a refactor rather
-than a redesign, that is the proof.
+Still to do, and the test that decides whether nesting earned itself: **a
+sweep**. The protocol's own spelling for "three experiments in one document"
+is `{"sweep": [...]}` at a field — `featurizers.rot.seed: {"sweep": [0,1,2]}`
+with no `train` block is its random-subspace control. The agreed shape is to
+lower a sweep on the **document**, before compiling: N documents, N `build`
+calls, N child plans under one root. Nothing in the engine changes. Sweeps are
+on NOTES §8's out-of-scope list, so the slice is narrow: one wrapper at one
+field, every other sweep form refused by name.
 
 ## 5. Findings from this project worth carrying
 
@@ -165,11 +155,16 @@ Full detail in `FINDINGS.md`; these are the ones that reach past mini.
 - **A subspace swap leaves the complement untouched only as arithmetic** — in
   fp32 it moves by up to ~4e-7, because the complement is reconstructed by a
   projection rather than copied. Bit-identity needs an axis-aligned write.
-- **`document.py` is a third of the project** (702 of 2,300 lines), almost all
+- **`document.py` is a third of the project** (702 of 2,555 lines), almost all
   refusals. The weight of causalab is in its document surface, not its
   execution.
 - **A layer-0 query interchange is a no-op** when the two prompts share a length
   and a last token. It looks exactly like a broken write.
+- **A `yield` cannot appear inside an nnsight block.** nnsight recompiles a
+  `with model.session(...)` body as a standalone function, so a
+  `@contextmanager` whose body opens a session is a `SyntaxError: 'yield'
+  outside function` at call time. This killed an `Engine.open` hook and forced
+  the better design: `execute` owns the whole session literally.
 - **There is no machine-readable protocol schema.** `docs/intervention_protocol.md`
   is 372 KB of authoritative prose and the Python implements it.
 

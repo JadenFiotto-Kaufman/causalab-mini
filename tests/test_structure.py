@@ -11,6 +11,10 @@ Two properties are pinned here:
    binds, and module-level names of the file it lives in;
 2. a trace body never reaches the client side of the project — no document, no
    dataset, no tokenizer, no `self`. The block gets the plan and the model.
+
+`cls` is allowed where `self` is not: an engine is a stateless class, and a
+class pickles by reference out of a registered package, where an instance
+would drag its attributes along with it.
 """
 
 import ast
@@ -106,7 +110,7 @@ def test_a_trace_body_loads_only_its_functions_own_data(case):
 @pytest.mark.parametrize("case", _blocks(), ids=lambda case: f"{case[0]}:{case[2].name}")
 def test_a_trace_body_never_reaches_the_client_side(case):
     filename, _tree, function, block = case
-    forbidden = _loaded(block) & (CLIENT_SIDE | {"self", "cls", "tokenizer", "document"})
+    forbidden = _loaded(block) & (CLIENT_SIDE | {"self", "tokenizer", "document"})
     assert not forbidden, (
         f"{filename}:{function.name} loads {sorted(forbidden)} inside a trace "
         "body — that object would ship whole"

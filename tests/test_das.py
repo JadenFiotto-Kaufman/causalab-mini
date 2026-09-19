@@ -11,10 +11,10 @@ import pytest
 import safetensors
 import torch
 
-from causalab_mini import cli, ops, output, plan
+from causalab_mini import cli, ops, plan
 from causalab_mini.ops import featurizer
 from causalab_mini.plan import document
-from causalab_mini.session import run
+from causalab_mini.engine import NNterpEngine
 
 
 def rotation(d=16, k=8, seed=0):
@@ -123,9 +123,8 @@ def test_the_read_and_the_write_are_one_parameter_set():
 def test_the_fit_is_compiled_into_the_plan_rows_and_all(das_plan):
     """Every update the fit will make is in the plan, as a plan: which rows,
     already tokenized, already in the order the seed put them in."""
-    fit = das_plan.train
-    assert fit is not None
-    assert das_plan.featurizers == (
+    fit = das_plan.step("fit", plan.Fit)
+    assert das_plan.step("featurizers", plan.Featurizers).specs == (
         plan.FeaturizerOp("rot", "subspace", k=8, d=16, parametrization="cayley", seed=0, trained=True),
     )
     # d is derived from (model, site) and is never authored: this model is 16 wide.
@@ -140,7 +139,7 @@ def test_the_fit_is_compiled_into_the_plan_rows_and_all(das_plan):
 
 
 def test_the_rotation_reaches_the_read_and_the_write_and_not_the_head(das_plan):
-    source, patched = das_plan.forwards
+    source, patched = das_plan.step("observe", plan.Observe).forwards
     assert [read.featurizer for read in source.taps[0].reads] == ["rot"]
     assert [write.featurizer for write in patched.taps[0].writes] == ["rot"]
     # the metric's read is a *plain* lm_head read; the document refuses any other.
@@ -162,8 +161,9 @@ def test_an_eval_split_sharing_rows_with_the_fit_is_a_load_error(das_raw, data_r
 def test_the_same_ref_for_both_is_the_visible_train_equals_test_ablation(das_raw, data_root, model):
     das_raw["method"]["train"]["eval"]["split"] = "weekdays/data#train"
     fitted = plan.build(document.Document.from_json(das_raw), data_root, model)
-    assert fitted.train is not None
-    assert fitted.train.evaluation.forwards[0].input_ids == fitted.forwards[0].input_ids
+    assert fitted.step("fit", plan.Fit).evaluation.forwards[0].input_ids == (
+        fitted.step("observe", plan.Observe).forwards[0].input_ids
+    )
 
 
 # --------------------------------------------------------------------- #
@@ -173,26 +173,40 @@ def test_the_same_ref_for_both_is_the_visible_train_equals_test_ablation(das_raw
 
 @pytest.fixture
 def fitted(das_plan, model):
-    return run.execute(model, das_plan)
+    return NNterpEngine.execute(model, das_plan)
 
 
 def test_the_fit_reduces_its_own_objective(fitted):
     """Measured at step 0 and at the end, on the thing the document said to
     minimize — `[[1.0, "ce"]]` — and not on anything else."""
-    losses = fitted["train/loss"]
+    losses = fitted.result("train/loss")
     assert losses[-1] < losses[0]
     assert (losses[1:] < losses[:-1]).all(), losses
+
+
+def test_the_fit_records_every_pass_where_it_happened(fitted):
+    """A plan carries its own results, so a fit is not a black box that emits
+    two curves: every update and every eval pass is still there, on the step
+    that scored it. The flat search deliberately stops before them — six `iia`
+    in one document would make every lookup ambiguous — so they are reached by
+    saying where."""
+    fit = fitted.step("fit", plan.Fit)
+    assert sorted(fit.epochs[0][0].results) == ["ce", "iia"]
+    assert sorted(fit.evaluation.results) == ["ce", "iia"]
+    assert torch.equal(
+        fitted.result("iia"), fitted.step("observe", plan.Observe).results["iia"]
+    )
 
 
 def test_the_rotation_is_still_orthonormal_after_training(fitted):
     """The Cayley parametrization's whole claim: no retraction step, no penalty
     term, no projection after the update, and `QᵀQ` is still `I`."""
-    basis = featurizer.cayley(fitted["rot"])
+    basis = featurizer.cayley(fitted.result("rot"))
     assert (basis.T @ basis - torch.eye(8)).abs().max() < 1e-5
 
 
 def test_the_fit_moved_the_rotation_off_its_start(fitted):
-    assert not torch.equal(fitted["rot"], featurizer.start_weight(16, 8, 0))
+    assert not torch.equal(fitted.result("rot"), featurizer.start_weight(16, 8, 0))
 
 
 def test_early_stopping_ends_the_fit_before_its_epoch_budget(fitted):
@@ -200,8 +214,8 @@ def test_early_stopping_ends_the_fit_before_its_epoch_budget(fitted):
     to the budget would leave 10 losses. The watched metric (`iia`, mode max)
     *falls* on every pass — the objective is `ce`, and on this model the two
     disagree — so the first pass is the best and patience 3 ends it at 4."""
-    assert len(fitted["train/loss"]) == 4
-    evaluated = fitted["train/eval"][:, 0]
+    assert len(fitted.result("train/loss")) == 4
+    evaluated = fitted.result("train/eval")[:, 0]
     assert (evaluated[1:] < evaluated[:-1]).all(), evaluated
 
 
@@ -209,7 +223,7 @@ def test_the_same_seed_fits_the_same_rotation_and_another_seed_does_not(das_raw,
     def fit(seed):
         das_raw["method"]["train"]["seed"] = seed
         built = plan.build(document.Document.from_json(das_raw), data_root, model)
-        return run.execute(model, built)["rot"]
+        return NNterpEngine.execute(model, built).result("rot")
 
     assert torch.equal(fit(0), fit(0))
     assert not torch.equal(fit(0), fit(1))
@@ -221,27 +235,27 @@ def test_a_full_width_rotation_is_a_plain_swap_end_to_end(das_raw, data_root, mo
     entire — whatever the rotation is, trained or not — and the run's metrics are
     the identity featurizer's to five decimals."""
     das_raw["method"]["featurizers"]["rot"]["k"] = 16
-    rotated = run.execute(model, plan.build(document.Document.from_json(das_raw), data_root, model))
+    rotated = NNterpEngine.execute(model, plan.build(document.Document.from_json(das_raw), data_root, model))
 
     del das_raw["method"]["featurizers"], das_raw["method"]["train"]
     del das_raw["method"]["reads"]["v_cf"]["featurizer"]
     del das_raw["method"]["writes"]["patch"]["featurizer"]
     das_raw["method"]["save"] = das_raw["method"]["save"][:2]
-    plain = run.execute(model, plan.build(document.Document.from_json(das_raw), data_root, model))
+    plain = NNterpEngine.execute(model, plan.build(document.Document.from_json(das_raw), data_root, model))
 
     for name in ("iia", "ce"):
-        assert torch.allclose(rotated[name], plain[name], atol=1e-5), name
+        assert torch.allclose(rotated.result(name), plain.result(name), atol=1e-5), name
 
 
 def test_remote_local_fits_the_same_rotation_and_gets_the_same_numbers(model, das_plan):
     """The single-path claim, under training: `remote="local"` serializes the
     session — the loop, the optimizer and the backward with it — and runs it with
     this project's modules hidden. Same plan, same numbers."""
-    here = run.execute(model, das_plan)
-    shipped = run.execute(model, das_plan, remote="local")
-    assert set(here) == set(shipped)
-    for name, values in here.items():
-        assert torch.equal(values, shipped[name]), name
+    here = NNterpEngine.execute(model, das_plan)
+    shipped = NNterpEngine.execute(model, das_plan, remote="local")
+    assert set(here.all_results()) == set(shipped.all_results())
+    for name, values in here.all_results().items():
+        assert torch.equal(values, shipped.result(name)), name
 
 
 # --------------------------------------------------------------------- #
@@ -252,8 +266,8 @@ def test_remote_local_fits_the_same_rotation_and_gets_the_same_numbers(model, da
 def test_the_artifact_is_written_stamped_and_reloads_to_the_trained_values(
     tmp_path, data_root, model, das_plan
 ):
-    results = run.execute(model, das_plan)
-    written = output.write_results(tmp_path, das_plan, results)
+    results = NNterpEngine.execute(model, das_plan)
+    written = results.write(tmp_path)
 
     assert sorted(path.name for path in written) == ["ce.json", "iia.json", "rot.safetensors"]
     assert sorted(path.name for path in tmp_path.iterdir()) == [
@@ -263,7 +277,7 @@ def test_the_artifact_is_written_stamped_and_reloads_to_the_trained_values(
     ]
     with safetensors.safe_open(tmp_path / "rot.safetensors", "pt") as bundle:
         assert bundle.keys() == ["weight"]  # one auto-declared slot, `rot.weight`
-        assert torch.equal(bundle.get_tensor("weight"), results["rot"])
+        assert torch.equal(bundle.get_tensor("weight"), results.result("rot"))
         stamp = bundle.metadata()
     # "A rotation fitted against bf16 weights is not the same artifact as one
     # fitted against fp32 weights, and the stamp is what says so."

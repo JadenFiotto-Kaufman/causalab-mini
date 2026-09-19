@@ -2,10 +2,14 @@
 
 This is the only file in the project that knows anything about a model's
 *internals* — `loading.py` beside it knows how to build the handle and
-nothing else — and `Address` is why that is structural rather than a
-convention: a tap holds an `Address`, and an `Address` is the only thing with a
-`read`/`write` that takes a model. Every model fact we had to encode
-ourselves is in the table below, and each one is an entry in FINDINGS.md.
+nothing else. Every model fact we had to encode ourselves is in the table
+below, and each one is an entry in FINDINGS.md.
+
+An address says **where**, in terms that are true of the architecture: which
+module, which side, which argument of which operation, which axis the sequence
+runs along. It does not say how to reach there, because that is a property of
+the runtime and not of the model — `engine/nnterp.py` reads an address with
+nnsight envoys, and another engine would read the same address differently.
 
 An `Address` stays pure data — the document's `(component, layer)`, plus, for an
 interior, the name of one `.source` operation — so it pickles, sorts, prints and
@@ -124,6 +128,18 @@ class Address:
         return self._entry.side
 
     @property
+    def interior(self) -> bool:
+        """Whether this address is inside a forward rather than at a module
+        boundary. The two are reached differently by every engine."""
+        return self._entry.op is not None
+
+    @property
+    def arg(self) -> int:
+        """For an interior: which positional argument of the call the tensor
+        is."""
+        return self._entry.arg
+
+    @property
     def seq_axis(self) -> int:
         """Which axis of the tensor at this address the sequence runs along."""
         return self._entry.seq_axis
@@ -170,43 +186,3 @@ class Address:
         for segment in self.path.split("."):
             target = target[int(segment)] if segment.isdigit() else getattr(target, segment)
         return target
-
-    def _operation(self, model: Any) -> Any:
-        if self.op is None:
-            raise AddressError(
-                f"component {self.component!r} is an interior; build its address "
-                "with Address.locate(model, ...) so the operation is resolved"
-            )
-        return getattr(self.envoy(model).source, self.op)
-
-    def read(self, model: Any) -> Any:
-        """The tensor at this address.
-
-        At a module boundary the output may be a bare tensor or a tuple whose
-        first element is the hidden state, and which one it is depends on the
-        transformers version, not on anything we can see in the document — so it
-        is decided from the value. Inside a forward the value is one argument of
-        one call, and nothing is ambiguous.
-        """
-        if self._entry.op is None:
-            value = getattr(self.envoy(model), self.side)
-            return value[0] if isinstance(value, tuple) else value
-        args, _ = self._operation(model).inputs
-        return args[self._entry.arg]
-
-    def write(self, model: Any, tensor: Any) -> None:
-        """Put a tensor back: rebuilding the tuple if there was one, or
-        rebuilding the call's arguments around the new one."""
-        if self._entry.op is None:
-            envoy = self.envoy(model)
-            current = getattr(envoy, self.side)
-            setattr(
-                envoy,
-                self.side,
-                (tensor, *current[1:]) if isinstance(current, tuple) else tensor,
-            )
-            return
-        operation = self._operation(model)
-        args, kwargs = operation.inputs
-        index = self._entry.arg
-        operation.inputs = ((*args[:index], tensor, *args[index + 1 :]), kwargs)

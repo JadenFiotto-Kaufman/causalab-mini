@@ -1,15 +1,15 @@
 """causalab-mini: a small, readable reimplementation of causalab's intervention engine.
 
-The whole design rests on one rule: **a plan is pure data, a block turns it
+The whole design rests on one rule: **a plan is pure data, an engine turns it
 into tensors**. Nothing but the compiler is allowed to decide anything from a
 tensor, and nothing but `model/` is allowed to know what a model looks like.
 
 The pipeline, which is also the reading order:
 
     documents/*.json
-        -> plan/      the request, as pure data       (document -> Plan)
-        -> session/   one nnsight session             (Plan -> tensors)
-        -> output.py  the manifest, as files
+        -> plan/      the request, as a tree of steps  (document -> Plan)
+        -> engine/    one runtime executes it          (Plan -> tensors)
+        -> Plan.write the manifest, as files
 
 and three supporting packages, each named for what it is allowed to know:
 
@@ -18,6 +18,8 @@ and three supporting packages, each named for what it is allowed to know:
     ops/     agnostic: gather, scatter, the write seam, featurizers, metrics.
              Knows nothing about models and may not import `model/`.
 
-`shapes.py` is shared vocabulary — names for the tuples that travel — and
-`cli.py` is the whole pipeline in ten lines.
+A plan holds its own results, so what a run produced is navigable where it
+happened: `root.steps["fit"].results["train/loss"]`. `shapes.py` is shared
+vocabulary — names for the tuples that travel — and `cli.py` is the whole
+pipeline in ten lines.
 """

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import argparse
 
-from . import output, plan as plan_module
+from . import plan as plan_module
+from .engine import NNterpEngine
 from .model import loading
-from .session import run
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,8 +27,8 @@ def main(argv: list[str] | None = None) -> int:
     model = loading.load(doc.model, device_map=args.device_map)
     plan = plan_module.build(doc, args.data_root, model)
     remote = True if args.remote == "true" else (args.remote or False)
-    results = run.execute(model, plan, remote=remote)
-    for path in output.write_results(args.out, plan, results):
+    executed = NNterpEngine.execute(model, plan, remote=remote)
+    for path in executed.write(args.out):
         print(path)
     return 0
 

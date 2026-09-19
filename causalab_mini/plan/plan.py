@@ -1,36 +1,47 @@
-"""The frozen plan: what will run, in forward order.
+"""The plan: a tree of steps, in the order they will run.
 
-A plan holds strings, integers and nothing else — no envoys, no tensors, no
-tokenizer, no document. It pickles with plain `pickle`, which is the test that
-keeps it honest. Everything that needed a decision (which rows, which tokens,
-which position, which module path, which order) was decided by `build`, on the
-client, before the session opened.
+A plan is data. It holds strings, integers and other steps — no envoys, no
+tokenizer, no document, and (until it has been run) no tensors. It does not
+know how to execute itself: an `Engine` walks it. That separation is the whole
+reason there can be more than one engine.
 
-The shape, top down:
+The tree, top down:
 
-    Plan
-      forwards: one per (model, input), already in execution order
-        Forward(name, input, input_ids, attention_mask, taps)
-          taps: one per address, in forward order
-            Tap(address, writes, reads)        writes run before reads at the
-              WriteOp(name, positions, operand, mechanism, featurizer)  same
-              ReadOp(name, positions, featurizer)                       address
-      metrics:     MetricOp(name, kind, of, ids)
-      featurizers: FeaturizerOp(name, kind, k, d, parametrization, seed, trained)
-      train:       TrainPlan(epochs, evaluation, objective, …) or None
-      saves:       SaveFile(file_path, value, example_ids, unit, …)
+    Plan                        a list of steps, and the files they produce
+      steps: {name: Step}       executed in order; a step may be a Plan
+      saves: (SaveFile, …)      what leaves the run, written by `Plan.write`
+      results: {name: tensor}   filled in as it runs
 
-A fit is a request, so a fit is one plan: `TrainPlan` holds the rows of every
+    Featurizers(specs)          construct the parameter sets
+    Observe(forwards, metrics)  one pass: forwards in order, then the metrics
+    Fit(epochs, evaluation, …)  that pass N times, with an optimizer between
+    Weights(names)              the fitted parameters, as results
+
+and, inside an `Observe`, the ops that make one pass:
+
+    Forward(name, input, input_ids, attention_mask, taps)
+      taps: one per address, in forward order
+        Tap(address, writes, reads)     writes run before reads at the same
+          WriteOp(name, positions, operand, mechanism, featurizer)   address
+          ReadOp(name, positions, featurizer)
+
+**`results` is the only mutable thing in here.** Every other field is frozen:
+a plan cannot be edited, only filled. Filling it is how results come home —
+the engine saves the root plan at the top of its session, so what the run
+produced is navigable exactly where it happened,
+`root.steps["fit"].results["train/loss"]`.
+
+A fit is a request, so a fit is part of one plan: `Fit` holds the rows of every
 update it will make, already batched, already tokenized, already in the order
-the seed puts them in — as **plans**, because a training step is this same plan
-over different rows, and a twin type beside `Plan` would be a lie about that.
-
-This file is the shape only. `build.py` is the compiler that fills it in.
+the seed puts them in — as `Observe` steps, because a training update is this
+same pass over different rows.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, TypeVar
 
 from ..model.address import Address
 from ..shapes import ExampleIds, Positions, TokenIds, TokenRows
@@ -98,28 +109,55 @@ class FeaturizerOp:
 @dataclass(frozen=True)
 class SaveFile:
     file_path: str
-    value: str
+    value: str  # the result this file holds, by name, from this plan's subtree
     example_ids: ExampleIds = ()
     unit: str = ""
     estimand_version: str = ""
     produced_by: str = ""
-    #: For a `.safetensors` bundle: the ArtifactIdentity stamped into its header,
-    #: as pairs because a plan holds no dicts. Empty for a metric table.
-    identity: tuple[tuple[str, str], ...] = ()
+    #: For a `.safetensors` bundle: the ArtifactIdentity stamped into its
+    #: header. Empty for a metric table.
+    identity: dict[str, str] = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
-class TrainPlan:
-    """Every update the fit will make, as plans over the rows of that update.
+@dataclass(frozen=True, kw_only=True)
+class Step:
+    """One thing that happens, and what it produced.
+
+    Every step is frozen except `results`, which the engine fills in as it
+    runs. A step has no `execute`: what it means to run one is the engine's
+    business, and a plan that knew would only work on one engine.
+    """
+
+    results: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class Featurizers(Step):
+    """Construct the parameter sets this plan's writes and reads name."""
+
+    specs: tuple[FeaturizerOp, ...]
+
+
+@dataclass(frozen=True, kw_only=True)
+class Observe(Step):
+    """One execution of the forwards, and the metrics over what they read."""
+
+    forwards: tuple[Forward, ...]
+    metrics: tuple[MetricOp, ...]
+
+
+@dataclass(frozen=True, kw_only=True)
+class Fit(Step):
+    """The same pass, N times, with an optimizer between.
 
     `epochs` is already shuffled: the seed covers data order, and data order
     decides which rows share a padded batch, which is a tokenizer question and
     therefore a client-side one. The *parameter* seed travels as data and is
-    drawn inside the session.
+    drawn where the parameter is built.
     """
 
-    epochs: tuple[tuple["Plan", ...], ...]
-    evaluation: "Plan"
+    epochs: tuple[tuple[Observe, ...], ...]
+    evaluation: Observe
     objective: tuple[tuple[float, str], ...]
     params: tuple[str, ...]
     lr: float
@@ -130,10 +168,97 @@ class TrainPlan:
     mode: str
 
 
-@dataclass(frozen=True)
-class Plan:
-    forwards: tuple[Forward, ...]
-    metrics: tuple[MetricOp, ...]
+@dataclass(frozen=True, kw_only=True)
+class Weights(Step):
+    """The fitted parameters, as results, so they can be saved."""
+
+    names: tuple[str, ...]
+
+
+S = TypeVar("S", bound=Step)
+
+
+@dataclass(frozen=True, kw_only=True)
+class Plan(Step):
+    """A list of steps, executed in order — and itself a step, so plans nest.
+
+    Three experiments in a row is a plan whose three steps are plans. Nothing
+    else is needed for that, which is the test the shape has to pass.
+    """
+
+    steps: dict[str, Step] = field(default_factory=dict)
     saves: tuple[SaveFile, ...] = ()
-    featurizers: tuple[FeaturizerOp, ...] = ()
-    train: TrainPlan | None = None
+
+    def step(self, name: str, kind: type[S] = Step) -> S:  # type: ignore[assignment]
+        """The step called `name`, checked to be the kind you expected.
+
+        `plan.steps["observe"]` is a `Step` as far as a type checker knows, so
+        reading `.forwards` off it is unchecked. `plan.step("observe",
+        Observe)` is the same lookup with the kind stated, which a checker can
+        follow and a wrong document shape trips on immediately.
+        """
+        found = self.steps[name]
+        if not isinstance(found, kind):
+            raise PlanError(
+                f"step {name!r} is a {type(found).__name__}, not a {kind.__name__}"
+            )
+        return found
+
+    def result(self, name: str) -> Any:
+        """The one result called `name` in this subtree.
+
+        The search descends through **steps** and stops at them: a `Fit`'s own
+        results are found, the hundreds of per-update passes inside it are not,
+        or every fitted document would have an ambiguous `iia`. Those are still
+        there to read, by attribute, where they happened —
+        `root.steps["fit"].epochs[0][0].results["iia"]`.
+
+        Result names come from the document and are unique within a plan; a
+        sweep repeats them across its points, and naming the point
+        (`root.steps["seed=0"].result("iia")`) is what disambiguates. An
+        ambiguous lookup is an error rather than a first match, because the
+        wrong number quietly is the worst outcome here.
+        """
+        found = _find(self, name)
+        if len(found) != 1:
+            raise PlanError(
+                f"result {name!r}: {len(found)} in this plan. Results here: "
+                f"{sorted(_names(self))}"
+            )
+        return found[0]
+
+    def all_results(self) -> dict[str, Any]:
+        """Every result in this subtree, flattened by name.
+
+        A run with one point has unique names throughout, so this is the whole
+        of what it produced. A sweep repeats them and this refuses; ask a point
+        (`root.steps["seed=0"].all_results()`) instead.
+        """
+        found: dict[str, Any] = {}
+        for name in _names(self):
+            found[name] = self.result(name)
+        return found
+
+    def write(self, out_dir: str | Path) -> list[Path]:
+        """Write this plan's save manifest, and its children's below it."""
+        from . import write as write_module  # local: writing is not part of the shape
+
+        return write_module.write(self, out_dir)
+
+
+def steps_of(step: Step) -> tuple[Step, ...]:
+    """The steps one step contains: what a plan declares, and nothing else. A
+    `Fit`'s epochs are its own workings rather than steps of the plan, so a
+    walk stops there — see `Plan.result`."""
+    return tuple(step.steps.values()) if isinstance(step, Plan) else ()
+
+
+def _find(step: Step, name: str) -> list[Any]:
+    found = [step.results[name]] if name in step.results else []
+    for child in steps_of(step):
+        found.extend(_find(child, name))
+    return found
+
+
+def _names(step: Step) -> set[str]:
+    return set(step.results) | {n for child in steps_of(step) for n in _names(child)}

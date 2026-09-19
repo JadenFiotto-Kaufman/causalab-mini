@@ -31,7 +31,7 @@ def any_plan(request):
 # a plan is pure data
 # --------------------------------------------------------------------- #
 
-ALLOWED = (str, int, float, bool, type(None), tuple)
+ALLOWED = (str, int, float, bool, type(None), tuple, dict)
 PLAN_TYPES = {"causalab_mini.plan.plan", "causalab_mini.model.address"}
 
 
@@ -44,9 +44,15 @@ def _walk(value, where="plan"):
     elif isinstance(value, tuple):
         for index, item in enumerate(value):
             yield from _walk(item, f"{where}[{index}]")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from _walk(item, f"{where}[{key!r}]")
 
 
-def test_a_plan_holds_strings_and_integers_and_nothing_else(any_plan):
+def test_a_fresh_plan_holds_strings_and_integers_and_nothing_else(any_plan):
+    """A plan that has *run* holds its results, which are tensors. Before it
+    runs, every `results` dict in the tree is empty and nothing in it is a
+    tensor, an envoy or a handle — which is what makes it shippable."""
     for where, value in _walk(any_plan):
         if dataclasses.is_dataclass(value):
             # plan.py's own ops, plus Address — which is (component, layer),
@@ -71,12 +77,12 @@ def test_a_plan_pickles_with_plain_pickle(any_plan):
 
 
 def test_the_schedule_is_two_forwards_counterfactual_then_base(minimal_plan):
-    assert [(f.name, f.input) for f in minimal_plan.forwards] == [
+    assert [(f.name, f.input) for f in minimal_plan.step("observe", plan.Observe).forwards] == [
         ("original", "counterfactual"),
         ("patched", "base"),
     ]
 
-    original, patched = minimal_plan.forwards
+    original, patched = minimal_plan.step("observe", plan.Observe).forwards
     assert [(tap.address.path, tap.address.side) for tap in original.taps] == [
         ("layers.0", "output")
     ]
@@ -124,7 +130,7 @@ def test_the_metric_columns_resolved_to_the_token_ids_notes_measured(minimal_pla
     # NOTES.md §9.1: on this sentencepiece tokenizer " Friday" and "Friday" are
     # the same id, so the space-prefixed form is the bare one.
     assert model.tokenizer.encode(" Friday", add_special_tokens=False) == [28728]
-    iia, logit_diff = minimal_plan.metrics
+    iia, logit_diff = minimal_plan.step("observe", plan.Observe).metrics
     assert (iia.name, iia.kind, iia.of) == ("iia", "match", "logits")
     # row 0's cf_answer is " Sunday", row 2's is " Friday" (documents/data/weekdays/train.json)
     assert iia.ids == ((16340, 27822, 28728, 24211),)

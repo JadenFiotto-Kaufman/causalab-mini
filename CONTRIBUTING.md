@@ -27,7 +27,7 @@ uv run causalab-mini documents/minimal_cpu.json --data-root documents/data \
 `documents/das_cpu_reduction.json` is the same command and takes a few seconds
 longer: it declares a `train` block, so the run fits a rotation before it scores
 anything, and writes `rot.safetensors` beside the two metric tables. The fit
-happens inside the same single session as the run — see `causalab_mini/session/` —
+happens inside the same single session as the run — see `causalab_mini/engine/` —
 so `--remote local` exercises the loop, the optimizer and the backward pass over
 the serialization path, exactly as `--remote true` would.
 

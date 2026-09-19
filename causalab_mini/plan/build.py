@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import random
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -25,14 +24,18 @@ from ..ops import metrics as metrics_module
 from .document import Document, SaveSpec
 from .plan import (
     FeaturizerOp,
+    Featurizers,
+    Fit,
     Forward,
     MetricOp,
+    Observe,
     Plan,
     PlanError,
     ReadOp,
     SaveFile,
+    Step,
     Tap,
-    TrainPlan,
+    Weights,
     WriteOp,
 )
 
@@ -66,10 +69,21 @@ def build(document: Document, data_root: str | Path, model: Any) -> Plan:
         _featurizer(name, document, addresses, model) for name in document.featurizers
     )
     widths = {one.name: one.d for one in featurizers}
-    return replace(
-        _pass(document, rows, addresses, tokenizer),
-        featurizers=featurizers,
-        train=_train(document, data_root, rows, addresses, tokenizer),
+
+    # The steps, in the order they run. A step that has nothing to do is not
+    # there at all: a document with no featurizers has no `featurizers` step,
+    # rather than one holding an empty tuple.
+    steps: dict[str, Step] = {}
+    if featurizers:
+        steps["featurizers"] = Featurizers(specs=featurizers)
+    fit = _fit(document, data_root, rows, addresses, tokenizer)
+    if fit is not None:
+        steps["fit"] = fit
+    steps["observe"] = _pass(document, rows, addresses, tokenizer)
+    if featurizers:
+        steps["weights"] = Weights(names=tuple(one.name for one in featurizers))
+    return Plan(
+        steps=steps,
         saves=tuple(
             _save(entry, document, rows["base"], widths) for entry in document.saves
         ),
@@ -81,10 +95,10 @@ def _pass(
     rows: dict[str, list[rows_module.Row]],
     addresses: dict[str, Address],
     tokenizer: Any,
-) -> Plan:
-    """One execution of the document's forwards over one set of rows: the whole
-    plan except what is about the fit and about the files. A training update, an
-    eval pass and the scored run are all this, over different rows."""
+) -> Observe:
+    """One execution of the document's forwards over one set of rows. A
+    training update, an eval pass and the scored run are all this step, over
+    different rows."""
     batches = {
         role: encoding.encode(tokenizer, [rows_module.field_text(row, document.roles[role].field) for row in table])
         for role, table in rows.items()
@@ -106,7 +120,7 @@ def _pass(
         )
         for name, spec in document.metrics.items()
     )
-    return Plan(forwards=forwards, metrics=metrics)
+    return Observe(forwards=forwards, metrics=metrics)
 
 
 def _featurizer(
@@ -153,22 +167,22 @@ def _save(
             produced_by=document.digest,
             # "A rotation fitted against bf16 weights is not the same artifact as
             # one fitted against fp32 weights, and the stamp is what says so."
-            identity=(
-                ("produced_by", document.digest),
-                ("model_key", document.model.key),
-                ("model_revision", document.model.revision),
-                ("model_dtype", document.model.dtype),
-                ("site", entry.site),
-                ("component", document.sites[entry.site].component),
-                ("layer", str(document.sites[entry.site].layer)),
-                ("k", str(spec.k)),
-                ("d", str(widths[entry.value])),
-                ("parametrization", spec.parametrization),
-                ("featurizer_dtype", "fp32"),
-                ("trained_on", document.roles["base"].dataset),
-                ("trained_on_digest", rows_module.digest(base_rows)),
-                ("engine", "causalab-mini"),
-            ),
+            identity={
+                "produced_by": document.digest,
+                "model_key": document.model.key,
+                "model_revision": document.model.revision,
+                "model_dtype": document.model.dtype,
+                "site": entry.site,
+                "component": document.sites[entry.site].component,
+                "layer": str(document.sites[entry.site].layer),
+                "k": str(spec.k),
+                "d": str(widths[entry.value]),
+                "parametrization": spec.parametrization,
+                "featurizer_dtype": "fp32",
+                "trained_on": document.roles["base"].dataset,
+                "trained_on_digest": rows_module.digest(base_rows),
+                "engine": "causalab-mini",
+            },
         )
     kind = document.metrics[entry.value].kind
     return SaveFile(
@@ -181,13 +195,13 @@ def _save(
     )
 
 
-def _train(
+def _fit(
     document: Document,
     data_root: str | Path,
     rows: dict[str, list[rows_module.Row]],
     addresses: dict[str, Address],
     tokenizer: Any,
-) -> TrainPlan | None:
+) -> Fit | None:
     spec = document.train
     if spec is None:
         return None
@@ -215,7 +229,7 @@ def _train(
         )
         for draw in (order.sample(range(count), count) for _ in range(spec.epochs))
     )
-    return TrainPlan(
+    return Fit(
         epochs=epochs,
         evaluation=_pass(document, evaluation, addresses, tokenizer),
         objective=spec.objective,

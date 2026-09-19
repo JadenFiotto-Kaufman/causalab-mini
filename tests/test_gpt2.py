@@ -13,12 +13,12 @@ import pathlib
 import pytest
 import torch
 
-from causalab_mini import ops, output, plan
+from causalab_mini import ops, plan
 from causalab_mini.data import encoding
 from causalab_mini.model import loading as model_module
 from causalab_mini.model.address import Address
 from causalab_mini.plan import document
-from causalab_mini.session import observe, run
+from causalab_mini.engine import NNterpEngine, nnterp
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 DOCUMENT = REPO / "documents" / "gpt2_cpu.json"
@@ -109,12 +109,12 @@ def test_a_write_lands_and_an_identity_write_does_not_move_anything(
     gpt2_raw, data_root, gpt2, component, layer
 ):
     raw = _at(gpt2_raw, component, layer)
-    clean = run.execute(gpt2, _build(_no_write(raw), data_root, gpt2))
-    identity = run.execute(gpt2, _build(_identity_write(raw), data_root, gpt2))
-    swapped = run.execute(gpt2, _build(raw, data_root, gpt2))
+    clean = NNterpEngine.execute(gpt2, _build(_no_write(raw), data_root, gpt2))
+    identity = NNterpEngine.execute(gpt2, _build(_identity_write(raw), data_root, gpt2))
+    swapped = NNterpEngine.execute(gpt2, _build(raw, data_root, gpt2))
 
-    assert torch.equal(identity["logit_diff"], clean["logit_diff"])
-    assert not torch.equal(swapped["logit_diff"], clean["logit_diff"])
+    assert torch.equal(identity.result("logit_diff"), clean.result("logit_diff"))
+    assert not torch.equal(swapped.result("logit_diff"), clean.result("logit_diff"))
 
 
 def test_a_swap_at_the_head_makes_the_patched_run_score_the_counterfactual(
@@ -122,14 +122,14 @@ def test_a_swap_at_the_head_makes_the_patched_run_score_the_counterfactual(
 ):
     """The write at `lm_head` has a value we can name: the logits read in the
     patched model are, bit for bit, the counterfactual forward's."""
-    swapped = run.execute(gpt2, _build(_at(gpt2_raw, "lm_head", None), data_root, gpt2))
+    swapped = NNterpEngine.execute(gpt2, _build(_at(gpt2_raw, "lm_head", None), data_root, gpt2))
 
     # The same run with no write, over the counterfactual prompts as its base.
     counterfactual = _no_write(gpt2_raw)
     counterfactual["data"]["base"]["field"] = counterfactual["data"]["counterfactual"]["field"]
-    reference = run.execute(gpt2, _build(counterfactual, data_root, gpt2))
+    reference = NNterpEngine.execute(gpt2, _build(counterfactual, data_root, gpt2))
 
-    assert torch.equal(swapped["logit_diff"], reference["logit_diff"])
+    assert torch.equal(swapped.result("logit_diff"), reference.result("logit_diff"))
 
 
 def test_the_engines_head_read_is_the_models_own_logits_here_too(gpt2_raw, data_root, gpt2):
@@ -137,25 +137,25 @@ def test_the_engines_head_read_is_the_models_own_logits_here_too(gpt2_raw, data_
     returned logits are two taps, equal only where nothing sits between them.
     They are equal on this family as well."""
     built = _build(gpt2_raw, data_root, gpt2)
-    results = run.execute(gpt2, built)
+    results = NNterpEngine.execute(gpt2, built)
 
-    source, patched = built.forwards
-    with gpt2.trace(observe.batch(source)):
+    source, patched = built.step("observe", plan.Observe).forwards
+    with gpt2.trace(nnterp.batch(source)):
         v_cf = gpt2.layers_output[2][:, -1, :].clone().save()
-    with gpt2.trace(observe.batch(patched)):
+    with gpt2.trace(nnterp.batch(patched)):
         gpt2.layers_output[2][:, -1, :] = v_cf
         logits = gpt2.logits[:, -1, :].clone().save()
 
     rows = torch.arange(4)
-    a, b = built.metrics[0].ids
+    a, b = built.step("observe", plan.Observe).metrics[0].ids
     assert torch.equal(
-        results["logit_diff"], logits[rows, torch.tensor(a)] - logits[rows, torch.tensor(b)]
+        results.result("logit_diff"), logits[rows, torch.tensor(a)] - logits[rows, torch.tensor(b)]
     )
 
 
 def test_the_document_runs_end_to_end(tmp_path, gpt2_raw, data_root, gpt2):
     built = _build(gpt2_raw, data_root, gpt2)
-    written = output.write_results(tmp_path, built, run.execute(gpt2, built))
+    written = NNterpEngine.execute(gpt2, built).write(tmp_path)
     assert [path.name for path in written] == ["logit_diff.json"]
     assert len(json.loads((tmp_path / "logit_diff.json").read_text())) == 4
 
@@ -195,16 +195,16 @@ def test_the_query_at_layer_0_carries_nothing_a_prompt_pair_differs_in(
     on every row, and an interchange there is a no-op that looks like a broken
     write. It is the reason the parametrized case above patches layer 2."""
     raw = _at(gpt2_raw, "attention_query", 0)
-    clean = run.execute(gpt2, _build(_no_write(raw), data_root, gpt2))
-    swapped = run.execute(gpt2, _build(raw, data_root, gpt2))
-    assert torch.equal(swapped["logit_diff"], clean["logit_diff"])
+    clean = NNterpEngine.execute(gpt2, _build(_no_write(raw), data_root, gpt2))
+    swapped = NNterpEngine.execute(gpt2, _build(raw, data_root, gpt2))
+    assert torch.equal(swapped.result("logit_diff"), clean.result("logit_diff"))
 
     built = _build(raw, data_root, gpt2)
-    source = built.forwards[0]
+    source = built.step("observe", plan.Observe).forwards[0]
     tap = source.taps[0]
-    with gpt2.trace(observe.batch(source)):
+    with gpt2.trace(nnterp.batch(source)):
         query = ops.gather(
-            tap.address.read(gpt2), tap.reads[0].positions, tap.address.seq_axis
+            nnterp.read(gpt2, tap.address), tap.reads[0].positions, tap.address.seq_axis
         ).clone().save()
     assert {sum(row) for row in source.attention_mask} == {12}
     assert all(torch.equal(query[0], query[row]) for row in range(4))

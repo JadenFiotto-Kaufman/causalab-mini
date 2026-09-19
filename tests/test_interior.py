@@ -9,13 +9,14 @@ import copy
 import json
 import pathlib
 
+import nnsight
 import pytest
 import torch
 
 from causalab_mini import ops, plan
 from causalab_mini.model.address import Address, AddressError, find_op
 from causalab_mini.plan import document
-from causalab_mini.session import observe, run
+from causalab_mini.engine import NNterpEngine, nnterp
 
 DOCUMENT = pathlib.Path(__file__).resolve().parents[1] / "documents" / "attention_query_cpu.json"
 
@@ -87,7 +88,7 @@ def test_an_interior_address_built_without_a_model_refuses_rather_than_guesses(m
         with model.trace(
             {"input_ids": torch.tensor([[1, 2, 3]]), "attention_mask": torch.tensor([[1, 1, 1]])}
         ):
-            Address("attention_query", 0).read(model)
+            nnterp.read(model, Address("attention_query", 0))
 
 
 # --------------------------------------------------------------------- #
@@ -99,17 +100,17 @@ def test_the_query_is_head_shaped_and_already_rotated(model, data_root, interior
     """Two claims about the tensor: the sequence is axis 2 because the heads are
     axis 1, and it is past RoPE — so it is not the projection's output."""
     built = _build(interior_raw, data_root, model)
-    source_forward = built.forwards[0]
+    source_forward = built.step("observe", plan.Observe).forwards[0]
     tap = source_forward.taps[0]
 
-    with model.trace(observe.batch(source_forward)):
+    with model.trace(nnterp.batch(source_forward)):
         # q_proj first: nnsight enforces forward order inside a module's forward
         # exactly as it does between modules, and the projection runs before the
         # call that consumes it.
         projected = model.attentions[0].q_proj.output.clone().save()
-        whole = tap.address.read(model).clone().save()
+        whole = nnterp.read(model, tap.address).clone().save()
         at_position = ops.gather(
-            tap.address.read(model), tap.reads[0].positions, tap.address.seq_axis
+            nnterp.read(model, tap.address), tap.reads[0].positions, tap.address.seq_axis
         ).clone().save()
 
     rows, heads, seq, head_dim = whole.shape
@@ -137,22 +138,23 @@ def test_the_interior_is_reached_under_the_checkpoints_own_attention(model):
 
 def test_a_swap_at_the_interior_lands_bit_for_bit(model, data_root, interior_raw):
     built = _build(interior_raw, data_root, model)
-    source_forward, patched_forward = built.forwards
+    source_forward, patched_forward = built.step("observe", plan.Observe).forwards
     read = source_forward.taps[0].reads[0]
     tap = patched_forward.taps[0]
     write = tap.writes[0]
 
     with model.session():
-        landed = run.nnsight.save({})
-        with model.trace(observe.batch(source_forward)):
+        landed = nnsight.save({})
+        with model.trace(nnterp.batch(source_forward)):
             v_cf = ops.gather(
-                tap.address.read(model), read.positions, tap.address.seq_axis
+                nnterp.read(model, tap.address), read.positions, tap.address.seq_axis
             ).clone()
-        with model.trace(observe.batch(patched_forward)):
-            tap.address.write(
+        with model.trace(nnterp.batch(patched_forward)):
+            nnterp.write(
                 model,
+                tap.address,
                 ops.apply_write(
-                    tap.address.read(model),
+                    nnterp.read(model, tap.address),
                     write.positions,
                     v_cf,
                     write.mechanism,
@@ -161,7 +163,7 @@ def test_a_swap_at_the_interior_lands_bit_for_bit(model, data_root, interior_raw
                 ),
             )
             landed["after"] = ops.gather(
-                tap.address.read(model), write.positions, tap.address.seq_axis
+                nnterp.read(model, tap.address), write.positions, tap.address.seq_axis
             ).clone()
             landed["source"] = v_cf
 
@@ -173,36 +175,37 @@ def test_a_write_at_the_interior_moves_the_logits(model, data_root, interior_raw
     the operand taken from the counterfactual rows scores differently from the
     same document with nothing written, and identically when what is written is
     what was already there."""
-    clean = run.execute(model, _build(_no_write(interior_raw), data_root, model))
-    identity = run.execute(model, _build(_identity_write(interior_raw), data_root, model))
-    swapped = run.execute(model, _build(interior_raw, data_root, model))
+    clean = NNterpEngine.execute(model, _build(_no_write(interior_raw), data_root, model))
+    identity = NNterpEngine.execute(model, _build(_identity_write(interior_raw), data_root, model))
+    swapped = NNterpEngine.execute(model, _build(interior_raw, data_root, model))
 
-    assert torch.equal(identity["logit_diff"], clean["logit_diff"])
-    assert not torch.equal(swapped["logit_diff"], clean["logit_diff"])
+    assert torch.equal(identity.result("logit_diff"), clean.result("logit_diff"))
+    assert not torch.equal(swapped.result("logit_diff"), clean.result("logit_diff"))
 
 
 def test_only_the_declared_position_of_the_query_changes(model, data_root, interior_raw):
     built = _build(interior_raw, data_root, model)
-    source_forward, patched_forward = built.forwards
+    source_forward, patched_forward = built.step("observe", plan.Observe).forwards
     tap = patched_forward.taps[0]
     write = tap.writes[0]
     first_token = (0, 2, 0, 2)  # the content start of each row, left-padded
 
     with model.session():
-        seen = run.nnsight.save({})
-        with model.trace(observe.batch(source_forward)):
+        seen = nnsight.save({})
+        with model.trace(nnterp.batch(source_forward)):
             v_cf = ops.gather(
-                tap.address.read(model), write.positions, tap.address.seq_axis
+                nnterp.read(model, tap.address), write.positions, tap.address.seq_axis
             ).clone()
-        with model.trace(observe.batch(patched_forward)):
+        with model.trace(nnterp.batch(patched_forward)):
             seen["clean_first"] = ops.gather(
-                tap.address.read(model), first_token, tap.address.seq_axis
+                nnterp.read(model, tap.address), first_token, tap.address.seq_axis
             ).clone()
-        with model.trace(observe.batch(patched_forward)):
-            tap.address.write(
+        with model.trace(nnterp.batch(patched_forward)):
+            nnterp.write(
                 model,
+                tap.address,
                 ops.apply_write(
-                    tap.address.read(model),
+                    nnterp.read(model, tap.address),
                     write.positions,
                     v_cf,
                     write.mechanism,
@@ -211,18 +214,16 @@ def test_only_the_declared_position_of_the_query_changes(model, data_root, inter
                 ),
             )
             seen["patched_first"] = ops.gather(
-                tap.address.read(model), first_token, tap.address.seq_axis
+                nnterp.read(model, tap.address), first_token, tap.address.seq_axis
             ).clone()
 
     assert torch.equal(seen["clean_first"], seen["patched_first"])
 
 
 def test_the_interior_document_runs_end_to_end(tmp_path, data_root, model, interior_raw):
-    from causalab_mini import output
-
     built = _build(interior_raw, data_root, model)
-    results = run.execute(model, built)
-    written = output.write_results(tmp_path, built, results)
+    results = NNterpEngine.execute(model, built)
+    written = results.write(tmp_path)
 
     assert [path.name for path in written] == ["logit_diff.json"]
     assert len(json.loads((tmp_path / "logit_diff.json").read_text())) == 4
@@ -239,12 +240,12 @@ def test_the_interior_is_ordered_before_its_own_blocks_output(interior_raw, data
     }
     built = _build(raw, data_root, model)
 
-    assert [tap.address.component for tap in built.forwards[1].taps] == [
+    assert [tap.address.component for tap in built.step("observe", plan.Observe).forwards[1].taps] == [
         "attention_query",
         "block_output",
         "lm_head",
     ]
-    run.execute(model, built)
+    NNterpEngine.execute(model, built)
 
 
 def test_the_interior_plan_survives_the_remote_path(model, data_root, interior_raw):
@@ -252,6 +253,6 @@ def test_the_interior_plan_survives_the_remote_path(model, data_root, interior_r
     An interior address is a component, a layer and an operation name, so there
     is nothing in it that cannot make the trip."""
     built = _build(interior_raw, data_root, model)
-    here = run.execute(model, built)
-    shipped = run.execute(model, built, remote="local")
-    assert torch.equal(here["logit_diff"], shipped["logit_diff"])
+    here = NNterpEngine.execute(model, built)
+    shipped = NNterpEngine.execute(model, built, remote="local")
+    assert torch.equal(here.result("logit_diff"), shipped.result("logit_diff"))
