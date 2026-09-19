@@ -574,3 +574,188 @@ there is nothing to find.
   is free. At `d=4096` it is the first thing to fix, and the fix (cache per
   forward, invalidate on `optimizer.step`) needs a place to hang the cache that
   the current `Featurizer` protocol does not have.
+
+---
+
+## 6. What a second engine had to supply that nnterp was providing
+
+A second engine was built to measure exactly this:
+`causalab_mini/engine/engines/hooks/`, a `HooksEngine` over a plain
+`AutoModelForCausalLM` + `AutoTokenizer` with
+`torch.nn.Module.register_forward_hook` doing the reading and the writing. No
+nnterp, no nnsight, no session, no `.source`. It is 262 lines in three files
+against the nnterp engine's 242 — 119 of them statements, the rest docstrings
+and comments — and, the result that matters, it runs the same documents to
+**bit-identical** numbers.
+
+Nothing outside the new directory changed. `engine/steps.py`, `ops/`, `plan/`
+and `address.py` are untouched; `engine/__init__.py` gained an export. So the
+six-member contract held for a runtime that shares no execution code with the
+first, which is the claim HANDOFF §3.6 wanted tested.
+
+### 6.1 The translation is one function with three statements
+
+`Address.path` is written in nnterp's standardized names, and a raw Llama has
+`model.layers` while a raw GPT-2 has `transformer.h`. All of the translating is
+`loading.standardized`, which returns an object carrying the standardized
+attributes so `Address.resolve` walks it unchanged:
+
+| standardized name | raw Llama | raw GPT-2 | how it is found |
+| --- | --- | --- | --- |
+| `layers` | `model.layers` | `transformer.h` | the decoder's only `nn.ModuleList` |
+| `lm_head` | `lm_head` | `lm_head` | `model.get_output_embeddings()` |
+| `attentions` | `model.layers[L].self_attn` | `transformer.h[L].attn` | not supplied — refused, see §6.6 |
+
+**It needed no family table, and that is the honest headline: most of what
+nnterp's rename table does, transformers already publishes.** The decoder is
+`model.base_model` (`base_model_prefix` is `"model"` on Llama, `"transformer"`
+on GPT-2) and the head is `get_output_embeddings()`, which *is* `lm_head` on
+both. Only the layer stack has no published accessor, so it is "the decoder's
+only `ModuleList`" — true of both families here, and precisely the guess
+nnterp replaces with a maintained list of names. A model with two `ModuleList`
+children under its decoder (an encoder-decoder, a hybrid with a separate
+adapter stack) breaks the guess, and the code raises rather than picking the
+first.
+
+This measurement cuts both ways. For these two families the standardization
+was worth about ten lines — but those ten lines encode an assumption nnterp has
+evidence for across dozens of architectures and we have evidence for across
+two.
+
+### 6.2 What nnterp was silently providing, item by item
+
+- **The tokenizer.** `StandardizedTransformer.tokenizer` comes with the model;
+  a plain load is two `from_pretrained` calls that nothing pairs, and the
+  engine has to hold both objects. `Engine.model` is one attribute, so the
+  tokenizer lives in a private one behind the `tokenizer` property — the
+  contract already had the right shape for this and nothing had to change.
+- **Padding side.** The real one. See §6.3.
+- **`num_layers`.** `len(self._names.layers)`, once the stack is translated.
+  `config.num_hidden_layers` would also have worked on both families —
+  transformers' `attribute_map` maps GPT-2's `n_layer` onto it — so this was
+  free, and counting the translated stack merely avoids depending on that map.
+- **`hidden_size` / `vocab_size`.** Free. `address.py` names them as *nnterp
+  handle attributes*, and they are spelled identically on `model.config`
+  (again via `attribute_map`, for GPT-2's `n_embd`), so `width` is
+  `getattr(self.model.config, attribute)`. Measured equal to nnterp's on the
+  tiny Llama: 16 and 32000. Worth recording as a latent trap rather than a
+  problem: the `width` column in `_COMPONENTS` is documented as naming one
+  runtime's API, and happens to name the config's too.
+- **Tuple-versus-tensor at a module boundary.** §1.3's question survives into
+  the hook, which is handed the module's output and may return a replacement,
+  so the same `output[0] if isinstance(output, tuple) else output` pair
+  appears. Measured on transformers 5.17: at both `layers.{L}` and `lm_head`,
+  on both families, a forward hook sees a **bare `Tensor`** — the tuple branch
+  never fired. It is kept because §1.3's point is that this is a property of
+  the transformers version, which is not something either engine can see.
+- **Eval mode.** Free, and load-bearing: `from_pretrained` returns a model in
+  eval mode, so GPT-2's dropout is off. A `model.train()` anywhere would have
+  broken parity non-deterministically, and nothing in the contract or in
+  `steps.py` says who owns that.
+- **`device_map`.** A plain load defaults to CPU, where nnterp defaults to
+  `"auto"` and needs `--device-map cpu` on this machine (§1's last entry). The
+  hooks loader defaults to `"cpu"`, so that footgun is nnterp's rather than
+  transformers'.
+- **The attention implementation.** Both loaders got `sdpa` here, so it did not
+  divide the two engines. That is luck, not agreement: nnterp forces `eager`
+  when `enable_attention_probs` is on, and causalab's two engines already
+  diverge on this exact default (HANDOFF §7). A cross-engine golden that does
+  not pin `attn_implementation` is one nnterp default away from being a
+  comparison of two different experiments.
+- **The dtype table.** Copied verbatim. `{"fp32": float32, "bf16": bfloat16}`
+  is the document's vocabulary rather than nnterp's, and both loaders spell it
+  out.
+
+### 6.3 Padding side is nnsight's decision, and it is invisible on Llama
+
+`nnsight/modeling/transformers.py` does `self.tokenizer.padding_side = "left"`
+unconditionally on every model it loads. A plain `AutoTokenizer` does whatever
+the checkpoint's `tokenizer_config.json` says: left for
+`tiny-random-LlamaForCausalLM`, **right** for `tiny-random-gpt2`. The hooks
+loader therefore sets `padding_side = "left"` itself, with a comment pointing
+at the nnsight line, and that one assignment is a precondition of the parity
+result below.
+
+Measured on the `weekdays/train` batch (row 0 is 11 tokens, rows 1–3 are 9 and
+so carry two pads):
+
+- **Llama, left versus right padding: max divergence 1.5e-08 on `logit_diff`,
+  which is rounding.** Rotary attention is a function of position
+  *differences*, so shifting every real token in a row by the same offset
+  cancels. `iia` is identical.
+- **Tiny GPT-2, same comparison: 0.38 on the last-real-token logits of a padded
+  row**, and 0.0 on the unpadded one. Learned absolute position embeddings do
+  not cancel; the padded row's tokens are simply at different positions.
+
+So padding side is not a formality, it is only invisible on the family this
+project's golden happens to use. `encoding.positions` is already
+padding-side-independent (§1, `starts`/`ends`), which is exactly what let the
+same document compile either way and produce numbers that quietly differ.
+
+### 6.4 The parity result
+
+`tests/test_hooks_engine.py`, CPU, fp32, `tiny-random-LlamaForCausalLM`
+@ `9fb19125`. Each engine compiles its own plan — the tokenizer and the widths
+are engine questions — and then:
+
+- **`documents/minimal_cpu.json`: bit-identical**, `torch.equal` on both
+  results. `logit_diff = [-0.027417995, 0.180859923, 0.035145037, -0.193306163]`
+  and `iia = [0, 0, 0, 0]`, the same values `test_patching.py` derives by hand
+  from nnterp's own accessors.
+- **`documents/das_cpu_reduction.json`: bit-identical through a fit**, which is
+  the stronger claim — ten AdamW updates, a backward through each engine's own
+  intervention path, early stopping after four epochs — and `torch.equal` holds
+  on the fitted `(16, 8)` rotation itself, not only on the metrics over it.
+
+No tolerance was loosened anywhere. Agreement to the bit says the intervention
+is the *same arithmetic on the same tensors* under both runtimes: nnsight's
+envoy assignment and a hook's return value are two spellings of one write, and
+`ops/` does the rest identically.
+
+### 6.5 What the contract did not give the engine, and did not need to
+
+Nothing. The six members were enough, and the two halves split the way HANDOFF
+§3.6 claims: `load`/`tokenizer`/`num_layers`/`locate`/`width` are answered from
+the loaded objects on the client, `execute`/`forward` are the run. Two smaller
+observations:
+
+- **`execute` gets the whole plan rather than a callback**, which is what let a
+  session-less engine exist at all: the hooks engine's `execute` is
+  `steps.run(self, plan); return plan`, and the nnterp engine's single session
+  turns out to be the special case rather than the baseline.
+- **`values` and `featurizers` cross into `forward` as plain dicts**, so a hook
+  closes over them and writes reads straight in. No run-state object was missed
+  — HANDOFF §4's "there is no run state object" holds on a second runtime.
+
+### 6.6 What the hooks engine refuses, by name
+
+- **`attention_query`, and every interior.** A hook fires at a module boundary;
+  the query tensor never crosses one. nnsight reaches it by recompiling the
+  forward (`.source`), and there is no hooks equivalent. To support it, a hooks
+  engine would need one of: a patched `forward` on the attention module that
+  exposes the tensor (a per-family fork of transformers code), or a hook on
+  `q_proj` plus a reimplementation *inside the engine* of the head reshape and
+  the rotary embedding — because the address says `attention_query` is
+  projected, reshaped to `(batch, head, seq, head_dim)` and rotated, with the
+  sequence on axis 2. Either one moves per-family model code back into the
+  engine, which is the cost this project exists to measure. `locate` raises
+  `AddressError` naming `.source`, so `attention_query_cpu.json` fails at
+  compile time on the client rather than mid-forward.
+- **Input-side module boundaries.** None exist in `_COMPONENTS` today (only the
+  interior is input-side), and the fix is `register_forward_pre_hook` with the
+  same body. Refused rather than written blind.
+- **`remote`, in any form.** A hook is a Python callable registered on a module
+  object in this process; there is nothing to ship. `execute` raises on any
+  truthy `remote`, `"local"` included, because running here silently would
+  produce correct numbers under a false claim about where they came from.
+
+### 6.7 One thing that was harder than expected
+
+Hook lifetime. The nnterp engine's taps live and die with the
+`with model.trace(...)` block; hooks outlive the forward unless removed, and a
+leaked handle intervenes on the *next* forward — a wrong number, not an error,
+and the next forward here is usually the one being scored. The registration
+loop is therefore wrapped in `try/finally`, and a test asserts the module's
+`_forward_hooks` count is unchanged afterwards. It is four lines, and it is the
+only place where hooks are more *dangerous* than tracing rather than merely
+more limited.

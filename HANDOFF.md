@@ -27,9 +27,9 @@ It **imports nothing from causalab**. Only the JSON documents were copied.
 
 ## 2. State as of this handoff
 
-`master`, clean tree, no remote. **124 tests passing**
-(`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~6 s), `uvx pyright` at 0
-errors. **2,649 source lines** across 24 files in `causalab_mini/`.
+`master`, clean tree, no remote. **136 tests passing**
+(`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~7 s), `uvx pyright` at 0
+errors. **2,915 source lines** across 26 files in `causalab_mini/`.
 
 The package is five sub-packages and a short spine, each named for what it is
 allowed to know:
@@ -42,6 +42,7 @@ allowed to know:
     engine/ base.py     steps.py                   the contract, and what a
                                                    plan means on any runtime
       engines/nnterp/   engine.py  loading.py      one directory per runtime
+      engines/hooks/    engine.py  loading.py      plain HF + forward hooks
 
 `plan/document.py` is 702 of those lines and was deliberately left whole: it is
 one concept (the protocol surface) and splitting it would need a third file for
@@ -50,6 +51,14 @@ the shared refusal helpers, which is more concepts, not fewer.
 Working end to end: activation patching, one `.source` interior
 (`attention_query`), GPT-2 as a reach-only probe, and a DAS fit — all inside
 **one** nnsight session, with `remote="local"` producing bit-identical results.
+
+There is now a **second engine**, `engines/hooks`: a plain
+`AutoModelForCausalLM` driven by `register_forward_hook`, no nnsight anywhere.
+It runs `minimal_cpu.json` and the DAS fit to numbers bit-identical to the
+nnterp engine's, refuses the interior and `remote` by name, and needed no
+change to `steps.py`, `ops/`, `plan/` or `address.py`. What it had to supply by
+hand — and what turned out to be free — is FINDINGS §6. It is not wired into
+the CLI: `--engine` is a flag nobody has needed yet.
 
 Documents in `documents/`: `minimal_cpu.json` (patching, shipped),
 `das.json` (shipped, unrunnable here — Llama-3.1-8B), `das_cpu_reduction.json`
@@ -140,6 +149,13 @@ field, every other sweep form refused by name.
 
 Full detail in `FINDINGS.md`; these are the ones that reach past mini.
 
+- **A second runtime needed no family table either, and agreed to the bit.**
+  Translating nnterp's standardized names onto a raw HuggingFace tree is one
+  function: the decoder is `base_model`, the head is `get_output_embeddings()`,
+  and only the layer stack has to be guessed (the decoder's one `ModuleList`).
+  nnsight's forced left padding is the one silent default that had to be
+  copied for the two engines to be comparable at all — invisible on rotary
+  models, 0.38 on a padded GPT-2 row. FINDINGS §6.
 - **No family axis was needed.** `Address.locate` returns *equal* addresses on
   tiny Llama and tiny GPT-2 for all three components, including the interior,
   though the trees share no module path. nnterp absorbs the family axis for
