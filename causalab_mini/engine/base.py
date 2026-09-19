@@ -22,7 +22,7 @@ and what the **run** asks:
     forward(forward, values, featurizers)    one forward, tapped
 
 That is all. The walk over steps, the fit loop, the metrics and the write
-algebra are shared, so a second engine is these six members and no more.
+algebra are shared, so a second engine is these seven members and no more.
 
 One rule for an engine that traces: a block may load the engine and the plan,
 never the document, the tokenizer or the dataset — nnsight ships every name a

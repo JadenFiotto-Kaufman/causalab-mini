@@ -743,7 +743,9 @@ Identical across all three, which is convenient:
 
 Both are module boundaries. **Neither requires `.source`.** Worth stating
 plainly: *none of the three copied documents exercises a `.source` interior at
-all.* The brief's "exactly one `.source` interior" will need a fourth case —
+all.* The brief's "exactly one `.source` interior" therefore needed a fourth
+document, which is `documents/attention_query_cpu.json` (`attention_query`,
+shipped and worked; see FINDINGS §1.8–1.11) —
 in causalab the `.source`-only components are the attention interior
 (`attention_probs`, `attention_premix`, `attention_z`, the pre-RoPE projections),
 the MLP interior (`mlp_activation`, `mlp_neuron_output`) and the whole routed-MoE
@@ -844,10 +846,10 @@ surface that **nothing** in `documents/` needs.
 
 **Sites**
 
-- 54 of the 56 components. In particular: `input_ids`, `embeddings`,
+- 53 of the 56 components. In particular: `input_ids`, `embeddings`,
   `block_input`, `block_mid`, the three norm taps, every attention-interior tap
   (`attention_probs`, `attention_scores`, `attention_z`, `attention_premix`,
-  `attention_query/key/value*`, `attention_gate`, `attention_result`,
+  `attention_key/value*`, `attention_gate`, `attention_result`,
   `attention_output`), every MLP tap (`mlp_input`, `mlp_activation`,
   `mlp_neuron_output`, `mlp_output`), `ln_final`, the whole Gated-DeltaNet
   `delta_*` family, and the whole MoE family.

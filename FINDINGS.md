@@ -81,8 +81,8 @@ ordering strictly (our first attempt at a test read layer 0 again after reading
 the head and failed with
 `'model.model.layers.0.output.i0' was requested but the model already ran past it`),
 but no library will *tell* you the order of two named taps, so the engine has to
-carry a private total order over the component vocabulary. With 2 components that
-is a dict of 2 entries; causalab's vocabulary has 56, and every one of them needs
+carry a private total order over the component vocabulary. With 3 components that
+is a dict of 3 entries; causalab's vocabulary has 56, and every one of them needs
 a rank — including the interior ones, where the rank is inside a single module's
 forward.
 

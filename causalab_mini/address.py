@@ -1,15 +1,14 @@
 """ENGINE: a component -> where that tensor lives.
 
 This is the only file in the project that knows anything about a model's
-*internals* — `loading.py` beside it knows how to build the handle and
-nothing else. Every model fact we had to encode ourselves is in the table
+*internals*. Every model fact we had to encode ourselves is in the table
 below, and each one is an entry in FINDINGS.md.
 
 An address says **where**, in terms that are true of the architecture: which
 module, which side, which argument of which operation, which axis the sequence
 runs along. It does not say how to reach there, because that is a property of
-the runtime and not of the model — `engine/nnterp.py` reads an address with
-nnsight envoys, and another engine would read the same address differently.
+the runtime and not of the model — `engine/engines/nnterp/` reads an address
+with nnsight envoys, and another engine reads the same address differently.
 
 An `Address` stays pure data — the document's `(component, layer)`, plus, for an
 interior, the name of one `.source` operation — so it pickles, sorts, prints and

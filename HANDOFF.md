@@ -27,9 +27,9 @@ It **imports nothing from causalab**. Only the JSON documents were copied.
 
 ## 2. State as of this handoff
 
-`master`, clean tree, no remote. **124 tests passing**
+`master`, clean tree, no remote. **138 tests passing**
 (`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~6 s), `uvx pyright` at 0
-errors. **2,649 source lines** across 24 files in `causalab_mini/`.
+errors. **2,818 source lines** across 24 files in `causalab_mini/`.
 
 The package is five sub-packages and a short spine, each named for what it is
 allowed to know:
@@ -62,7 +62,7 @@ say so in their own `header.description`.
 These are load-bearing. Several tests enforce them.
 
 1. **Imports nothing from causalab.** Ever.
-2. **One session for the whole request.** `run.execute` opens exactly one
+2. **One session for the whole request.** `NNterpEngine.execute` opens exactly one
    `model.session(remote=remote)`. Not a session per forward, not a lazy
    per-read path. `remote=True` on that session is the *only* difference
    between local and remote — there is no second code path.
@@ -80,18 +80,18 @@ These are load-bearing. Several tests enforce them.
    order taps go in. Reaching there is the engine's
    (`engine/engines/nnterp/engine.py`'s `read`/`write`). `ops/` knows nothing
    about models at all.
-6. **An engine is six members and no more**: `load`, `tokenizer`,
-   `num_layers`, `locate`, `width`, `execute`, `forward` — the first four are
-   what the compiler asks of a runtime, the last two what the run asks.
+6. **An engine is seven members and no more**: `load`, then `tokenizer`,
+   `num_layers`, `locate` and `width` — what the compiler asks of a runtime —
+   then `execute` and `forward`, what the run asks.
    Everything else lives in `engine/steps.py` and is shared.
    `tests/test_engine.py` pins this: it asserts the override set is exactly
    the contract, and runs a real compiled plan on an engine that has no model
    and no session.
 7. **An engine holds its model.** `Engine.load(spec)` is how a model enters
-   the project, and `plan.build(document, data_root, engine)` compiles
+   the project, and `plan.build_request(raw, data_root, engine)` compiles
    against the engine, not against a handle — because what a tokenizer is,
    how a site is located and how wide it is are all runtime questions.
-6. **The client never decides anything from a tensor.** The plan carries a
+8. **The client never decides anything from a tensor.** The plan carries a
    spec; the block resolves it, including any dynamic case. (Nothing here needs
    a dynamic case yet. In the real engine this is how the generated frame and
    the DeltaNet fire count work.)
@@ -179,7 +179,7 @@ Full detail in `FINDINGS.md`; these are the ones that reach past mini.
 - **A subspace swap leaves the complement untouched only as arithmetic** — in
   fp32 it moves by up to ~4e-7, because the complement is reconstructed by a
   projection rather than copied. Bit-identity needs an axis-aligned write.
-- **`document.py` is a third of the project** (702 of 2,555 lines), almost all
+- **`document.py` is a quarter of the project** (702 of 2,818 lines), almost all
   refusals. The weight of causalab is in its document surface, not its
   execution.
 - **A layer-0 query interchange is a no-op** when the two prompts share a length

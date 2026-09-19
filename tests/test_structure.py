@@ -30,8 +30,15 @@ RUN_METHODS = {"trace", "session", "generate"}
 # The client side: the modules that turn documents into plans and plans into
 # files. A block that loads one of them has a client-side object in it.
 # `plan` is deliberately absent — the plan is pure data and is the one thing a
-# block is meant to carry; `address`, `intervene` and `metrics` are block-side code.
-CLIENT_SIDE = {"document", "build", "rows", "encoding", "output", "cli"}
+# block is meant to carry; `address`, `intervene` and `metrics` are block-side
+# code.
+#
+# The file writer is listed as `write_module`, the name `plan/plan.py` imports
+# it under, and NOT as `write`: the nnterp engine has its own module-level
+# `write(model, address, tensor)`, which is block-side and must stay allowed.
+# A blocklist of bare names cannot tell those two apart, so the client one is
+# named unambiguously at its import site.
+CLIENT_SIDE = {"document", "build", "rows", "encoding", "sweep", "write_module", "cli"}
 
 
 def _is_block(node):
