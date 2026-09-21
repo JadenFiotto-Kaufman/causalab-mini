@@ -31,19 +31,26 @@ PROTOCOL_VERSION = "3"
 
 DTYPES = ("fp32", "bf16")
 COMPONENTS = (
+    "input_ids",
     "embeddings",
     "block_input",
+    "attention_input_norm",
     "attention_query",
     "attention_key",
     "attention_z",
+    "attention_premix",
     "attention_output",
+    "block_mid",
+    "mlp_input_norm",
     "mlp_input",
+    "mlp_activation",
+    "mlp_neuron_output",
     "mlp_output",
     "block_output",
     "ln_final",
     "lm_head",
 )
-LAYERLESS = ("embeddings", "ln_final", "lm_head")
+LAYERLESS = ("input_ids", "embeddings", "ln_final", "lm_head")
 MECHANISMS = ("swap",)
 TOKEN_FORMS = ("space_prefixed",)
 INPUTS = ("base", "counterfactual")

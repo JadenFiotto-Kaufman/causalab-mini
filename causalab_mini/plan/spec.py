@@ -34,6 +34,7 @@ from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .. import address
 from ..data import encoding
 
 class Node(BaseModel):
@@ -555,6 +556,12 @@ class Spec(Node):
             _refuse(read.featurizer in known, f"{where}: read {name!r}: undeclared featurizer")
         for name, write in one.writes.items():
             _refuse(write.site in self.sites, f"{where}: write {name!r}: undeclared site {write.site!r}")
+            component = self.sites[write.site].component if write.site in self.sites else ""
+            _refuse(
+                not address.describe().get(component, {}).get("read_only", False),
+                f"{where}: write {name!r}: {component!r} is read-only — the model's input, "
+                "not an activation",
+            )
             if isinstance(write.operand, str):
                 _refuse(
                     write.operand in one.reads,

@@ -40,7 +40,12 @@ from typing import Any
 class _Component:
     """Everything about one component that is a fact about models."""
 
-    path: str  # a dotted path template against the nnterp handle
+    #: A dotted path template against the nnterp handle. `a|b` is a choice:
+    #: the one alternative that exists on this checkpoint — `input_layernorm`
+    #: on Llama, `ln_1` on GPT-2. nnterp standardizes the block, the mixer
+    #: and the MLP; it does not name their children, and the checkpoint can
+    #: say which it has without a family column here.
+    path: str
     side: str  # "output" or "input"
     stage: int  # order within one block, in forward order
     #: Where this tap sits relative to the layer stack: 0 before it, 1 inside
@@ -55,6 +60,9 @@ class _Component:
     arg: int = 0  # which positional argument, or which element of the return
     seq_axis: int = 1  # which axis of the tensor the sequence runs along
     width: str | None = None  # the nnterp handle attribute holding this tap's width
+    #: A tensor that may be read and never written: the token ids are the
+    #: model's input, and swapping a float activation into them means nothing.
+    read_only: bool = False
 
 
 _COMPONENTS = {
@@ -67,7 +75,7 @@ _COMPONENTS = {
         # axis 2, not axis 1.
         path="attentions.{layer}",
         side="input",
-        stage=1,
+        stage=2,
         op="attention_interface(",
         arg=1,
         seq_axis=2,
@@ -79,7 +87,7 @@ _COMPONENTS = {
         # publishes nothing for it, which is what refuses a featurizer here.
         path="attentions.{layer}",
         side="input",
-        stage=1,
+        stage=2,
         op="attention_interface(",
         arg=2,
         seq_axis=2,
@@ -91,38 +99,73 @@ _COMPONENTS = {
         # reason `handle` exists.
         path="attentions.{layer}",
         side="input",
-        stage=2,
+        stage=3,
         op="attention_interface(",
         handle="output",
         arg=0,
         seq_axis=1,
+    ),
+    "input_ids": _Component(
+        # The model's input: integer token ids, (batch, seq), no width axis.
+        path="embed_tokens", side="input", stage=0, band=0, read_only=True
     ),
     "embeddings": _Component(
         # The vector the token ids look up. Band 0: it is the one tap upstream
         # of the whole stack.
         path="embed_tokens",
         side="output",
-        stage=0,
+        stage=1,
         band=0,
         width="hidden_size",
     ),
     "block_input": _Component(
         path="layers.{layer}", side="input", stage=0, width="hidden_size"
     ),
+    "attention_input_norm": _Component(
+        # The first norm's output — what the mixer actually consumes.
+        path="layers.{layer}.input_layernorm|layers.{layer}.ln_1",
+        side="output", stage=1, width="hidden_size",
+    ),
+    "attention_premix": _Component(
+        # The output projection's *input*: the heads' results, merged
+        # head-major and not yet mixed — where a per-head edit belongs.
+        path="attentions.{layer}.o_proj|attentions.{layer}.c_proj",
+        side="input", stage=4, width="hidden_size",
+    ),
     "attention_output": _Component(
         # The mixer's contribution to the residual stream, before it is added:
         # block_mid = block_input + attention_output.
-        path="attentions.{layer}", side="output", stage=3, width="hidden_size"
+        path="attentions.{layer}", side="output", stage=5, width="hidden_size"
+    ),
+    "block_mid": _Component(
+        # The residual stream after the mixer is added: the second norm's input.
+        path="layers.{layer}.post_attention_layernorm|layers.{layer}.ln_2",
+        side="input", stage=6, width="hidden_size",
+    ),
+    "mlp_input_norm": _Component(
+        path="layers.{layer}.post_attention_layernorm|layers.{layer}.ln_2",
+        side="output", stage=7, width="hidden_size",
     ),
     "mlp_input": _Component(
-        path="mlps.{layer}", side="input", stage=4, width="hidden_size"
+        path="mlps.{layer}", side="input", stage=8, width="hidden_size"
+    ),
+    "mlp_activation": _Component(
+        # The activation function's output. No width: nnterp publishes no
+        # intermediate size, which refuses a featurizer here.
+        path="mlps.{layer}.act_fn|mlps.{layer}.act", side="output", stage=9,
+    ),
+    "mlp_neuron_output": _Component(
+        # The down-projection's input: act(gate)·up on a gated MLP, and the
+        # activation itself on GPT-2, which has no gate — the same *place*,
+        # a different tensor, and the table says so rather than hiding it.
+        path="mlps.{layer}.down_proj|mlps.{layer}.c_proj", side="input", stage=10,
     ),
     "mlp_output": _Component(
         # block_output = block_mid + mlp_output.
-        path="mlps.{layer}", side="output", stage=5, width="hidden_size"
+        path="mlps.{layer}", side="output", stage=11, width="hidden_size"
     ),
     "block_output": _Component(
-        path="layers.{layer}", side="output", stage=6, width="hidden_size"
+        path="layers.{layer}", side="output", stage=12, width="hidden_size"
     ),
     "ln_final": _Component(
         path="ln_final", side="output", stage=0, band=2, width="hidden_size"
@@ -211,18 +254,34 @@ class Address:
         it."""
         return (self._entry.band, self.layer or 0, self._entry.stage)
 
+    @property
+    def read_only(self) -> bool:
+        return self._entry.read_only
+
     def resolve(self, root: Any) -> Any:
         """Walk this address's path against `root`, by getattr, taking a
         numeric segment as an index: "layers.0" is `root.layers[0]`.
 
         The path is written in nnterp's standardized names. An engine that
         does not have those names translates first — how much translating that
-        takes is a measurement of what the standardization is worth.
+        takes is a measurement of what the standardization is worth. Where
+        the path offers alternatives, exactly one must exist here.
         """
-        target = root
-        for segment in self.path.split("."):
-            target = target[int(segment)] if segment.isdigit() else getattr(target, segment)
-        return target
+        found = []
+        for candidate in self.path.split("|"):
+            target = root
+            try:
+                for segment in candidate.split("."):
+                    target = target[int(segment)] if segment.isdigit() else getattr(target, segment)
+            except (AttributeError, IndexError, KeyError, TypeError):
+                continue
+            found.append(target)
+        if len(found) != 1:
+            raise AddressError(
+                f"component {self.component!r}: {len(found)} of {self.path.split('|')} "
+                "exist on this model; an address needs exactly one"
+            )
+        return found[0]
 
 
 def describe() -> dict[str, dict[str, Any]]:
@@ -237,6 +296,7 @@ def describe() -> dict[str, dict[str, Any]]:
             "layered": "{layer}" in entry.path,
             "seq_axis": entry.seq_axis,
             "width": entry.width,
+            "read_only": entry.read_only,
         }
         for name, entry in _COMPONENTS.items()
     }

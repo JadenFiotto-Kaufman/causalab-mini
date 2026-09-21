@@ -86,9 +86,16 @@ def test_one_address_serves_both_families(component, model_engine, gpt2_engine):
 #: families, written down — see FINDINGS §6.
 RAW_PATHS = {
     "llama": {
+        "input_ids": "model.embed_tokens",
         "embeddings": "model.embed_tokens",
         "block_input": "model.layers.0",
+        "attention_input_norm": "model.layers.0.input_layernorm",
+        "attention_premix": "model.layers.0.self_attn.o_proj",
         "attention_output": "model.layers.0.self_attn",
+        "block_mid": "model.layers.0.post_attention_layernorm",
+        "mlp_input_norm": "model.layers.0.post_attention_layernorm",
+        "mlp_activation": "model.layers.0.mlp.act_fn",
+        "mlp_neuron_output": "model.layers.0.mlp.down_proj",
         "mlp_input": "model.layers.0.mlp",
         "mlp_output": "model.layers.0.mlp",
         "block_output": "model.layers.0",
@@ -96,9 +103,16 @@ RAW_PATHS = {
         "lm_head": "lm_head",
     },
     "gpt2": {
+        "input_ids": "transformer.wte",
         "embeddings": "transformer.wte",
         "block_input": "transformer.h.0",
+        "attention_input_norm": "transformer.h.0.ln_1",
+        "attention_premix": "transformer.h.0.attn.c_proj",
         "attention_output": "transformer.h.0.attn",
+        "block_mid": "transformer.h.0.ln_2",
+        "mlp_input_norm": "transformer.h.0.ln_2",
+        "mlp_activation": "transformer.h.0.mlp.act",
+        "mlp_neuron_output": "transformer.h.0.mlp.c_proj",
         "mlp_input": "transformer.h.0.mlp",
         "mlp_output": "transformer.h.0.mlp",
         "block_output": "transformer.h.0",
@@ -134,11 +148,15 @@ def test_the_addresses_sort_into_forward_order():
     embeddings are the one tap upstream of the whole stack."""
     layered = [Address(name, 0) for name in LAYERED]
     order = [one.component for one in sorted(layered, key=lambda one: one.key)]
-    assert order == ["block_input", "attention_output", "mlp_input", "mlp_output", "block_output"]
+    assert order == [
+        "block_input", "attention_input_norm", "attention_premix", "attention_output",
+        "block_mid", "mlp_input_norm", "mlp_input", "mlp_activation", "mlp_neuron_output",
+        "mlp_output", "block_output",
+    ]
 
     everything = [Address(name, 0 if _COMPONENTS[name].band == 1 else None) for name in BOUNDARIES]
     ordered = [one.component for one in sorted(everything, key=lambda one: one.key)]
-    assert ordered[0] == "embeddings" and ordered[-2:] == ["ln_final", "lm_head"]
+    assert ordered[:2] == ["input_ids", "embeddings"] and ordered[-2:] == ["ln_final", "lm_head"]
 
 
 def test_every_component_can_be_read_in_one_forward(model_engine):
@@ -232,16 +250,16 @@ def test_the_attention_interior_taps_are_head_shaped(model_engine):
 #: tensor for itself. FINDINGS §1.14 records the same thing for a layer-0
 #: query. Tested below as a no-op rather than skipped, because it looks
 #: exactly like a broken write.
-SAME_AT_LAYER_0 = ("embeddings", "block_input")
+SAME_AT_LAYER_0 = ("embeddings", "block_input", "attention_input_norm")
 
 #: Which layer each component is tested at. `block_input` moves at layer 1 for
 #: the reason above.
-LAYER_UNDER_TEST = {"block_input": 1}
+LAYER_UNDER_TEST = {"block_input": 1, "attention_input_norm": 1}
 
 
 @pytest.mark.parametrize(
     "component",
-    [name for name in BOUNDARIES if name not in ("lm_head", "embeddings")],
+    [name for name in BOUNDARIES if name not in ("lm_head", "embeddings", "input_ids")],
 )
 def test_a_swap_at_every_component_lands_and_moves_the_logits(
     component, minimal_raw, data_root, model_engine
@@ -308,3 +326,42 @@ def test_the_two_engines_agree_at_the_new_components(
 
     for name in ("iia", "logit_diff"):
         assert torch.equal(traced.result(name), hooked.result(name)), (component, name)
+
+
+def test_the_token_ids_can_be_read_and_never_written(minimal_raw, data_root, model_engine):
+    """`input_ids` is the model's input: integers, `(batch, seq)`, no width.
+    A read gathers it like anything else; a write is refused where the
+    document is read, because a float activation swapped into token ids
+    means nothing."""
+    from pydantic import ValidationError
+
+    from causalab_mini.plan.spec import Spec
+
+    raw = __import__("json").loads((REPO / "documents" / "v2" / "patching.json").read_text())
+    raw["sites"]["ids"] = {"component": "input_ids"}
+    raw["interventions"]["patching"]["reads"]["tokens"] = {"site": "ids", "pos": {"last": 2}, "input": "base"}
+    raw["steps"]["score"]["outputs"] = {"last_two": "tokens"}
+    executed = model_engine.execute(plan.build_request(raw, data_root, model_engine))
+    tokens = executed.step("score", plan.Observe).results["last_two"]
+    assert tokens.shape == (4, 2) and not tokens.is_floating_point()
+
+    raw["interventions"]["patching"]["writes"]["patch"]["site"] = "ids"
+    with pytest.raises(ValidationError, match="'input_ids' is read-only"):
+        Spec.model_validate(raw)
+
+
+def test_a_path_with_alternatives_needs_exactly_one_to_exist():
+    """`input_layernorm|ln_1` is a question the checkpoint answers. If it
+    answers neither, or both, the address refuses rather than guessing."""
+    from types import SimpleNamespace
+
+    from causalab_mini.address import AddressError
+
+    norm = Address("attention_input_norm", 0)
+    llama_like = SimpleNamespace(layers=[SimpleNamespace(input_layernorm="L")])
+    gpt2_like = SimpleNamespace(layers=[SimpleNamespace(ln_1="G")])
+    assert norm.resolve(llama_like) == "L" and norm.resolve(gpt2_like) == "G"
+    for broken in (SimpleNamespace(layers=[SimpleNamespace()]),
+                   SimpleNamespace(layers=[SimpleNamespace(input_layernorm="L", ln_1="G")])):
+        with pytest.raises(AddressError, match="an address needs exactly one"):
+            norm.resolve(broken)

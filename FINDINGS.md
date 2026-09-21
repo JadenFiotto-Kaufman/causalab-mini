@@ -1022,3 +1022,46 @@ Run from stdin or `python -c`, `with model.generate(...) as tracer:` returned
 a tensor and the `with` failed — nnsight decides "traced or direct" by
 reading the calling frame's source, and stdin has none. From a file it
 traces. Worth knowing before concluding that generation is broken.
+
+
+## 13. Eighteen components, and the family axis that still was not needed
+
+Seven more: `input_ids`, `attention_input_norm`, `attention_premix`,
+`block_mid`, `mlp_input_norm`, `mlp_activation`, `mlp_neuron_output`.
+
+### 13.1 A child's name is a question the checkpoint can answer
+
+The first plan was `.source`: each of these is one call inside a forward, and
+a call-site needle per family would find it. The probe showed something
+simpler — **every one is a module boundary of a named child**, and the only
+per-family fact is the child's name: `input_layernorm` / `ln_1`,
+`post_attention_layernorm` / `ln_2`, `o_proj` / `c_proj`, `act_fn` / `act`,
+`down_proj` / `c_proj`. nnterp standardizes the block, the mixer and the MLP;
+it does not name their children. So a path may offer alternatives —
+`layers.{layer}.input_layernorm|layers.{layer}.ln_1` — and `Address.resolve`
+takes the one that exists, refusing if none or several do. Still one row per
+component, still no family column, and because nothing here needs `.source`,
+**the hooks engine reaches all of them** where it would have refused every
+interior.
+
+Had these gone through `.source`, the match would also have needed a rule
+mini's `find_op` lacks: `hidden_states = self.input_layernorm(hidden_states)`
+is *two* operations on one line, the call and the assignment, and a needle on
+the line hits both. (causalab's `match_op` prefers the hit whose own name is
+the called symbol. Mini did not need to learn that today.)
+
+### 13.2 The same place is not always the same tensor
+
+`mlp_neuron_output` is the down-projection's input on both families. On
+Llama that is `act(gate)·up`; on GPT-2, which has no gate, it is the
+activation itself — the same tensor `mlp_activation` names. The address is
+right on both; what it *means* differs, and the table's comment says so
+rather than the code hiding it.
+
+### 13.3 Read-only is a property of a component
+
+`input_ids` is integers, `(batch, seq)`, no width axis; `gather` returns
+`(rows, w)` for it without being told. A write there is refused where the
+document is read. And at layer 0 a third component joins `embeddings` and
+`block_input` in being a no-op under interchange on these prompts:
+`attention_input_norm`, the norm of a last token both prompts share.

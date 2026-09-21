@@ -351,9 +351,10 @@ Recorded so they are not rediscovered.
 > round trip landed the same day: `file_path` on a featurizer loads a bundle
 > a previous run wrote and checks its header key by key against the
 > document; `pca` is both an output reduction (a harvest to its top-k
-> directions) and a loadable kind that is never trained. Remaining, in the
-> owner's order: the rest of the components, the `gate` family, and
-> eligibility reaching a metric table.
+> directions) and a loadable kind that is never trained. Then seven more
+> components (eighteen now), every one a module boundary of a named child,
+> so the hooks engine reaches them too — FINDINGS §13. Remaining, in the
+> owner's order: the `gate` family, and eligibility reaching a metric table.
 
 The test of each item is the same one this project has used from the start:
 write the document first, see whether it needs anything beyond a new kind of

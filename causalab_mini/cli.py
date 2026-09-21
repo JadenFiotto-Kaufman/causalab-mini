@@ -105,7 +105,7 @@ def vocab(args: argparse.Namespace) -> dict[str, Any]:
     lines = ["components:"]
     for name, entry in payload["components"].items():
         kind = "interior" if entry["interior"] else f"{entry['side']} of {entry['path']}"
-        lines.append(f"  {name:18s} {kind}")
+        lines.append(f"  {name:22s} {kind}{'  (read-only)' if entry['read_only'] else ''}")
     lines.append(f"mechanisms:       {', '.join(payload['mechanisms'])}")
     lines.append(f"featurizer kinds: {', '.join(payload['featurizer_kinds'])} (plus 'identity', never declared)")
     lines.append("metric kinds:     " + ", ".join(f"{k}({', '.join(v)})" for k, v in payload["metric_kinds"].items()))
