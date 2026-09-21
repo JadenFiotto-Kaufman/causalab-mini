@@ -118,8 +118,8 @@ class Basis:
     save can stamp it exactly as it would a rotation's parameter.
     """
 
-    def __init__(self, basis: torch.Tensor) -> None:
-        self.weight = basis
+    def __init__(self, weight: torch.Tensor) -> None:
+        self.weight = weight
 
     @property
     def basis(self) -> torch.Tensor:
@@ -132,6 +132,50 @@ class Basis:
         basis = _on(self.basis, x)
         x = x.to(basis.dtype)
         return f @ basis.T + (x - (x @ basis) @ basis.T)
+
+
+class Encoder:
+    """A loaded encoder/decoder pair — a sparse autoencoder, or any fixed
+    linear map into a feature space. The one featurizer with an **error
+    term**, which is what `err` in the write seam has been for all along:
+
+        featurize(x) = (f, x − decode(f))     f = act((x − b_dec) W_enc + b_enc)
+        inverse(f′, err, x) = decode(f′) + err
+
+    so a write changes what the dictionary explains and leaves what it does
+    not explain exactly as it was — with `f′ = f` the activation comes back
+    to the bit, however bad the SAE's reconstruction is. Without the error
+    term, every SAE intervention would also be "replace the activation with
+    its reconstruction", and the two effects could not be told apart.
+
+    The tensors are SAELens's names and orientations: `W_enc (d, k)`,
+    `W_dec (k, d)`, optional `b_enc (k)` and `b_dec (d)`. `linear` is the
+    same object with no nonlinearity, and a missing `W_dec` means tied
+    weights, `W_encᵀ`. Loaded, never trained.
+    """
+
+    def __init__(self, W_enc: torch.Tensor, W_dec: torch.Tensor | None = None,
+                 b_enc: torch.Tensor | None = None, b_dec: torch.Tensor | None = None,
+                 activation: str = "relu") -> None:
+        d, k = W_enc.shape
+        self.W_enc = W_enc
+        self.W_dec = W_enc.T.contiguous() if W_dec is None else W_dec
+        self.b_enc = torch.zeros(k) if b_enc is None else b_enc
+        self.b_dec = torch.zeros(d) if b_dec is None else b_dec
+        self.activation = activation
+
+    def decode(self, f: Any) -> Any:
+        return f @ _on(self.W_dec, f) + _on(self.b_dec, f)
+
+    def featurize(self, x: Any) -> tuple[Any, Any]:
+        x = x.to(self.W_enc.dtype)
+        f = (x - _on(self.b_dec, x)) @ _on(self.W_enc, x) + _on(self.b_enc, x)
+        if self.activation == "relu":
+            f = torch.relu(f)
+        return f, x - self.decode(f)
+
+    def inverse(self, f: Any, err: Any, x: Any) -> Any:
+        return self.decode(f) + err
 
 
 class Gate:
@@ -194,7 +238,22 @@ def pca(rows: torch.Tensor, k: int) -> torch.Tensor:
 #: a table of *constructors*, not of instances: a subspace carries a trained
 #: parameter, so one exists per run and not one per process. Each takes the
 #: one tensor it is made of — a Cayley parameter, a basis.
-KINDS = {"subspace": Subspace, "pca": Basis, "gate": Gate}
+KINDS: dict[str, Any] = {
+    "subspace": Subspace,
+    "pca": Basis,
+    "gate": Gate,
+    "sae": Encoder,
+    "linear": lambda **tensors: Encoder(**tensors, activation="none"),
+}
+
+#: The tensors a bundle of each kind holds: (required, optional).
+TENSORS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "subspace": (("weight",), ()),
+    "pca": (("weight",), ()),
+    "gate": (("weight",), ()),
+    "sae": (("W_enc", "W_dec"), ("b_enc", "b_dec")),
+    "linear": (("W_enc",), ("W_dec", "b_enc", "b_dec")),
+}
 
 
 def start(kind: str, d: int, k: int, seed: int) -> torch.Tensor:

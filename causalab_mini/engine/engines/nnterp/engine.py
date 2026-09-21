@@ -170,6 +170,7 @@ def apply_taps(
                 tap.address.seq_axis,
                 write_op.params,
                 original,
+                write_op.features,
             )
             write(model, tap.address, patched)
         for read_op in tap.reads:

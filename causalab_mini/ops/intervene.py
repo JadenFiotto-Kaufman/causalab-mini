@@ -294,16 +294,29 @@ def apply_write(
     seq_axis: int = 1,
     params: dict[str, Any] | None = None,
     original: Any = None,
+    features: tuple[int, ...] | None = None,
 ) -> Any:
     """`original` is the tensor at this address before any write of this
-    forward: what a `PRE_WRITE` mechanism measures against."""
+    forward: what a `PRE_WRITE` mechanism measures against. `features` are
+    the coordinates of the *featurizer's* space the mechanism acts on — one
+    SAE latent, three directions of a rotation — the rest passing through."""
     featurize = FEATURIZERS[featurizer] if isinstance(featurizer, str) else featurizer
     x = gather(tensor, at, seq_axis)
     with exact(x):
         f, err = featurize.featurize(x)
         if mechanism in PRE_WRITE:
             operand = featurize.featurize(gather(tensor if original is None else original, at, seq_axis))[0]
-        f = MECHANISMS[mechanism](f, operand, **(params or {}))
+        if features is None:
+            f = MECHANISMS[mechanism](f, operand, **(params or {}))
+        else:
+            index = list(features)
+            # an operand in the same feature space is cut the same way; a
+            # number, or one already that narrow, is used as it is
+            if hasattr(operand, "shape") and operand.shape[-1:] == f.shape[-1:]:
+                operand = operand[..., index]
+            f = f.clone()
+            acted = MECHANISMS[mechanism](f[..., index], operand, **(params or {}))
+            f[..., index] = acted.to(f) if hasattr(acted, "to") else acted  # a literal is a number
         written = featurize.inverse(f, err, x)
     return scatter(tensor, at, written, seq_axis)
 

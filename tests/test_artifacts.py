@@ -55,10 +55,14 @@ def test_a_loaded_rotation_scores_exactly_what_the_fit_scored_on_the_same_rows(
     held_out = fitted.step("fit", plan.Fit).evaluation.results
     scored = applied.step("apply", plan.Observe).results
     assert torch.equal(held_out["iia"], scored["iia"]) and torch.equal(held_out["ce"], scored["ce"])
-    # and the plan carried the weights as plain floats, so it is still data
+    # and the plan carried the weights as the bundle's own bytes — still plain
+    # data, at four bytes a number
+    import safetensors.torch
+
     (spec,) = applied.step("featurizers", plan.Featurizers).specs
-    assert spec.source == str(bundle) and len(spec.weight) == 16 and len(spec.weight[0]) == 8
-    assert isinstance(spec.weight[0][0], float)
+    assert spec.source == str(bundle) and isinstance(spec.weight, bytes)
+    assert safetensors.torch.load(spec.weight)["weight"].shape == (16, 8)
+    assert len(spec.weight) < 16 * 8 * 4 + 512
 
 
 def test_the_committed_fixtures_load_and_run(data_root, model_engine, monkeypatch):
@@ -131,7 +135,7 @@ def test_a_bundle_that_is_not_a_featurizer_is_refused(tmp_path, data_root, model
     path = tmp_path / "junk.safetensors"
     save_file({"weight": torch.zeros(16, 8), "extra": torch.zeros(1)}, str(path), metadata={})
     raw = _apply_from(path)
-    with pytest.raises(plan.PlanError, match="not one `weight`"):
+    with pytest.raises(plan.PlanError, match=r"a subspace bundle holds \['weight'\]"):
         plan.build_request(raw, data_root, model_engine)
     raw = _apply_from(tmp_path / "missing.safetensors")
     with pytest.raises(plan.PlanError, match="no bundle at"):
@@ -156,7 +160,7 @@ def test_what_a_loaded_featurizer_may_not_say(edit, message):
 def test_a_pca_basis_cannot_be_trained_or_written():
     raw = json.loads(DAS.read_text())
     raw["featurizers"]["rot"] = {"kind": "pca", "k": 8, "file_path": "x.safetensors"}
-    with pytest.raises(ValidationError, match="a pca basis, which is fixed by definition"):
+    with pytest.raises(ValidationError, match="a pca, which is fixed by definition"):
         Spec.model_validate(raw)
     harvest = json.loads(HARVEST.read_text())
     harvest["interventions"]["ablate"] = {

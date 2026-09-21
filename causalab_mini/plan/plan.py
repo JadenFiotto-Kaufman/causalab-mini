@@ -75,6 +75,9 @@ class WriteOp:
     featurizer: str
     #: The mechanism's numbers: a scale, a seed.
     params: dict[str, float] = field(default_factory=dict)
+    #: Which coordinates of the featurizer's space the mechanism acts on.
+    #: None: all of them.
+    features: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -166,11 +169,13 @@ class FeaturizerOp:
     parametrization: str
     seed: int
     trained: bool
-    #: A loaded parameter or basis, `(d, k)`, as plain floats — the one
+    #: Loaded tensors, as the bytes of a safetensors bundle — the one
     #: tensor-shaped thing a fresh plan carries, and it is an *input* of the
-    #: experiment like the token ids are. None: drawn from `seed` in the
-    #: block.
-    weight: tuple[Any, ...] | None = None
+    #: experiment like the token ids are. Bytes because they are still plain
+    #: data (they pickle, compare and ship), at four bytes a number: a real
+    #: SAE is tens of millions of them, which a tuple of Python floats is not
+    #: a format for. None: drawn from `seed` where the run runs.
+    weight: bytes | None = None
     #: Where it was loaded from, for the record.
     source: str = ""
 

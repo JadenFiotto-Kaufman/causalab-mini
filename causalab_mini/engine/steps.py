@@ -29,6 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+import safetensors.torch
 import torch
 
 from ..ops import featurizer as featurizer_module, intervene, metrics
@@ -87,12 +88,14 @@ def build(step: Featurizers, state: State) -> None:
     """
     for spec in step.specs:
         if spec.weight is not None:
-            weight = torch.tensor(spec.weight, dtype=torch.float32)
+            # a bundle's own bytes, carried verbatim: compact, shippable, and
+            # exactly what was checked on the client
+            tensors = {name: one.to(torch.float32) for name, one in safetensors.torch.load(spec.weight).items()}
         else:
-            weight = featurizer_module.start(spec.kind, spec.d, spec.k, spec.seed)
-        state.featurizers[spec.name] = featurizer_module.KINDS[spec.kind](
-            weight.requires_grad_(spec.trained)
-        )
+            tensors = {"weight": featurizer_module.start(spec.kind, spec.d, spec.k, spec.seed)}
+        if spec.trained:
+            tensors["weight"].requires_grad_(True)
+        state.featurizers[spec.name] = featurizer_module.KINDS[spec.kind](**tensors)
 
 
 def observe(engine: Any, step: Observe, state: State) -> dict[str, Any]:

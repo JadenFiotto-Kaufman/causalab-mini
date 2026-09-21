@@ -49,7 +49,7 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
             origin = f"loaded from {one.source}" if one.source else f"seed={one.seed}"
             out.append(
                 f"{pad}    {one.name}: {one.kind} k={one.k} d={one.d} "
-                f"{one.parametrization} {origin} trained={one.trained}"
+                f"{one.parametrization + ' ' if one.kind == 'subspace' else ''}{origin} trained={one.trained}"
             )
     elif isinstance(step, Fit):
         out.append(
@@ -81,6 +81,7 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
                     out.append(
                         f"{pad}      write {write.name!r} at {where} pos={_pos(write.at.positions)}{_features(write.at)} "
                         f"{write.mechanism}({', '.join(args)}) via {write.featurizer!r}"
+                        f"{'' if write.features is None else f' on its features {list(write.features)}'}"
                     )
                 for read in tap.reads:
                     view = "" if read.view == "raw" else f" as {read.view}"

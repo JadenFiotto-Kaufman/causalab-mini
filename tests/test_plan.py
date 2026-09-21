@@ -31,7 +31,8 @@ def any_plan(request):
 # a plan is pure data
 # --------------------------------------------------------------------- #
 
-ALLOWED = (str, int, float, bool, type(None), tuple, dict, list)
+# bytes: a loaded featurizer's bundle, verbatim — data, and it pickles
+ALLOWED = (str, int, float, bool, bytes, type(None), tuple, dict, list)
 # `shapes.Selection` is where an op is — positions and feature groups, integers
 # all the way down; the walk goes into it like any other node.
 PLAN_TYPES = {"causalab_mini.plan.plan", "causalab_mini.address", "causalab_mini.shapes"}

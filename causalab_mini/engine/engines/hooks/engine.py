@@ -223,6 +223,7 @@ def _apply(
             tap.address.seq_axis,
             write.params,
             original,
+            write.features,
         )
     for read in tap.reads:
         gathered = intervene.gather(

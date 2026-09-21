@@ -104,6 +104,12 @@ class Site(Node):
         return self
 
 
+#: Kinds that exist only as a file: a basis someone computed, a dictionary
+#: someone trained elsewhere. A fit may not name one. (`sae` and `linear` are
+#: an encoder/decoder pair with an error term — `k` comes from the bundle.)
+LOADED_ONLY = frozenset({"pca", "sae", "linear"})
+
+
 class Featurizer(Node):
     """A parameter set. `subspace` is a Cayley-parametrized rotation, drawn
     from a seed or loaded, and trainable; `pca` is a fixed basis, always
@@ -111,7 +117,7 @@ class Featurizer(Node):
     a learned binary mask over the site's units (DBM), soft while a fit
     updates it and hard whenever it is scored."""
 
-    kind: Literal["subspace", "pca", "gate"]
+    kind: Literal["subspace", "pca", "gate", "sae", "linear"]
     #: The rank of a basis. A gate has none: its features are the units.
     k: int | None = Field(default=None, gt=0)
     parametrization: Literal["cayley"] = "cayley"
@@ -124,16 +130,14 @@ class Featurizer(Node):
 
     @model_validator(mode="after")
     def _drawn_or_loaded(self) -> "Featurizer":
-        if (self.kind == "gate") != (self.k is None):
-            raise ValueError(
-                "a gate masks every unit of its site and takes no k"
-                if self.kind == "gate"
-                else f"a {self.kind} needs k, the rank of its basis"
-            )
+        if self.kind == "gate" and self.k is not None:
+            raise ValueError("a gate masks every unit of its site and takes no k")
+        if self.kind in ("subspace", "pca") and self.k is None:
+            raise ValueError(f"a {self.kind} needs k, the rank of its basis")
+        if self.kind in LOADED_ONLY and self.file_path is None:
+            raise ValueError(f"a {self.kind} featurizer is loaded from a file; nothing draws or trains one")
         if self.kind == "gate" and self.seed is not None:
             raise ValueError("a gate starts at θ = 0, not from a draw; it has no seed")
-        if self.kind == "pca" and self.file_path is None:
-            raise ValueError("a pca featurizer is loaded from a file; nothing draws or trains one")
         if self.file_path is not None and self.seed is not None:
             raise ValueError("a loaded featurizer has no seed: its weights are its bytes")
         return self
@@ -186,6 +190,10 @@ class Write(Node):
     #: mechanism that takes none.
     operand: str | float | Reference | None = None
     featurizer: str = "identity"
+    #: Which coordinates of the featurizer's space the mechanism acts on —
+    #: SAE latents, directions of a rotation. The others pass through, and
+    #: so does whatever the featurizer does not explain (its error term).
+    features: list[int] | None = None
     #: The mechanism's numbers: `scale` for add_scaled and gaussian, `t` for
     #: lerp, `seed` for gaussian.
     params: dict[str, float] = Field(default_factory=dict)
@@ -558,9 +566,9 @@ class Spec(Node):
                 )
                 for param in step.params:
                     _refuse(
-                        self.featurizers[param].kind != "pca",
-                        f"step {name!r}: trains {param!r}, a pca basis, which is fixed by "
-                        "definition — declare a subspace loaded from it to fine-tune",
+                        self.featurizers[param].kind not in LOADED_ONLY,
+                        f"step {name!r}: trains {param!r}, a {self.featurizers[param].kind}, which is "
+                        "fixed by definition — a pca basis can be fine-tuned as a subspace loaded from it",
                     )
                 gates = {p for p in step.params if self.featurizers[p].kind == "gate"}
                 _refuse(
@@ -591,6 +599,12 @@ class Spec(Node):
                     f"step {name!r}: names {sorted(set(step.names) - set(self.featurizers))}, "
                     "which is not a declared featurizer",
                 )
+                for one in step.names:
+                    _refuse(
+                        self.featurizers[one].kind not in ("sae", "linear"),
+                        f"step {name!r}: {one!r} is a loaded {self.featurizers[one].kind}; its "
+                        "tensors are the file it came from, and there is no fitted weight to publish",
+                    )
                 produced = set(step.names)
             for save in step.saves:
                 _refuse(

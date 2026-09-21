@@ -1463,3 +1463,41 @@ identity, and a document that does nothing should not validate.
 `documents/v2/steer_renormalize.json` measures its own claim with reads at
 the site: the steered activation is longer, the renormalized one is exactly
 as long as the original, and the two models answer differently.
+
+
+## 21. `sae` and `linear`: the featurizer the error term was waiting for
+
+The write seam has been `inverse(do(featurize(x)), err, x)` since the first
+rotation, and `err` has been `None` every time. An encoder/decoder pair is
+what it was for:
+
+    featurize(x) = (f, x − decode(f))        inverse(f′, err, x) = decode(f′) + err
+
+An intervention changes what the dictionary explains and hands back the
+rest exactly. Without it every SAE experiment is also "replace the
+activation by its reconstruction", and the two effects cannot be told
+apart; with it, a write that changes no latent is the un-intervened model
+however bad the SAE is (pinned with a *random* dictionary, whose
+reconstruction is terrible). One class, `Encoder`, in SAELens's names and
+orientations; `linear` is the same object without the ReLU, and a missing
+`W_dec` means tied weights. Loaded, never trained, never published by a
+`weights` step; `k` comes from the bundle and may exceed `d`.
+
+**`features` on a write** is what makes it usable: the mechanism acts on
+named coordinates of the *featurizer's* space and the others pass through.
+It is not an SAE feature — two of a rotation's eight directions is the same
+field. (A site's `heads`/`units` slice the activation; a write's `features`
+slice the feature space. Two axes, two fields.) Pinned on the model:
+ablating a latent moves **exactly** the rows where that latent was on.
+
+**Loaded tensors now travel as bytes.** They were nested tuples of Python
+floats, which was honest for a 16x8 rotation and is not a format for a real
+SAE (tens of millions of numbers). A `FeaturizerOp` now carries the
+safetensors blob itself — still plain data: it pickles, compares, ships by
+value to a server, and is exactly the bytes that were checked on the client
+— at four bytes a number. Every kind's constructor takes its tensors by
+name, so `build` is `KINDS[kind](**tensors)` for all five.
+
+Not done: top-k and JumpReLU activations, a published SAE run for real
+(hakone has `Qwen/SAE-Res-Qwen3-8B-Base-W64K-L0_50` cached — the obvious
+next real run), and featurizer chains (standardize then rotate).

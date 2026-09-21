@@ -23,6 +23,7 @@ import torch
 
 from ..address import Address
 from ..data import encoding, rows as rows_module
+from ..ops import featurizer as featurizer_module
 from ..ops import intervene as intervene_module
 from ..ops import metrics as metrics_module
 from . import sweep
@@ -84,6 +85,17 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
         for name, one in spec.featurizers.items()
     )
     widths = {one.name: one.d for one in featurizers}
+    spaces = {one.name: one.k for one in featurizers}
+    for label, one in spec.interventions.items():
+        for write_name, write in one.writes.items():
+            if write.features is None:
+                continue
+            k = spaces.get(write.featurizer, engine.width(addresses[write.site]) if write.featurizer == "identity" else 0)
+            if not write.features or len(set(write.features)) != len(write.features) or not 0 <= min(write.features) <= max(write.features) < k:
+                raise PlanError(
+                    f"interventions.{label}: write {write_name!r}: features {write.features} of a "
+                    f"{k}-dimensional feature space; they are distinct indices below {k}"
+                )
 
     def table(refs: dict[str, str]) -> dict[str, list[rows_module.Row]]:
         loaded = {role: rows_module.load(data_root, ref) for role, ref in refs.items()}
@@ -258,9 +270,10 @@ def _spec_featurizer(
         d = d // engine.heads(addresses[site]) * len(spec.sites[site].heads)
     if spec.sites[site].units is not None:
         d = len(spec.sites[site].units)
-    # a gate's features are the site's units, so its k is d
+    # a gate's features are the site's units, so its k is d; an encoder's
+    # comes from its bundle and may exceed d — a dictionary is overcomplete
     k = d if one.k is None else one.k
-    if not 0 < k <= d:
+    if one.kind in ("subspace", "pca") and not 0 < k <= d:
         raise PlanError(
             f"featurizer {name!r}: k={one.k} is not a subspace of the {d}-wide site {site!r}"
         )
@@ -270,7 +283,7 @@ def _spec_featurizer(
         seed = next((fit.seed for fit in fits if name in fit.params), 0)
     weight = None
     if one.file_path is not None:
-        weight = _load_featurizer(name, one, spec, site, d)
+        weight, k = _load_featurizer(name, one, spec, site, d)
     return FeaturizerOp(
         name=name,
         kind=one.kind,
@@ -312,45 +325,53 @@ def _identity(spec: Any, name: str, site: str, d: int) -> dict[str, str]:
 _FREE = {"site", "engine"}
 
 
-def _load_featurizer(name: str, one: Any, spec: Any, site: str, d: int) -> tuple[Any, ...]:
-    """A saved parameter, checked against this document key by key.
+def _load_featurizer(name: str, one: Any, spec: Any, site: str, d: int) -> tuple[bytes, int]:
+    """A saved bundle, checked against this document, as `(bytes, k)`.
 
     A rotation is a grid of numbers; nothing in the numbers says which model
     or which layer it came from. The header does, and this is where it is
     read. A mismatch on any key is refused naming the key — a rotation
     fitted at layer 13 loaded at layer 14 would run, and would be nonsense.
+    A bundle from elsewhere (a published SAE) has no stamp of ours, and then
+    the shapes are all there is to check: its width must be this site's.
     """
+    import safetensors.torch
     from safetensors import safe_open
 
     path = Path(one.file_path)
     if not path.exists():
         raise PlanError(f"featurizer {name!r}: no bundle at {one.file_path!r}")
+    required, optional = featurizer_module.TENSORS[one.kind]
     with safe_open(str(path), "pt") as bundle:
         stamp = dict(bundle.metadata() or {})
-        keys = list(bundle.keys())
-        if keys != ["weight"]:
-            raise PlanError(f"featurizer {name!r}: {one.file_path!r} holds {keys}, not one `weight`")
-        tensor = bundle.get_tensor("weight")
+        keys = set(bundle.keys())
+        if not set(required) <= keys or not keys <= set(required) | set(optional):
+            raise PlanError(
+                f"featurizer {name!r}: {one.file_path!r} holds {sorted(keys)}; a {one.kind} "
+                f"bundle holds {list(required)}" + (f" and optionally {list(optional)}" if optional else "")
+            )
+        tensors = {key: bundle.get_tensor(key).to(torch.float32).contiguous() for key in sorted(keys)}
     expected = _identity(spec, name, site, d)
     checked = {key for key in expected if key in stamp} - _FREE
     if one.kind != "subspace":
         checked.discard("parametrization")
+    if one.k is None:
+        checked.discard("k")
     mismatched = {key: (stamp[key], expected[key]) for key in sorted(checked) if stamp[key] != expected[key]}
     if mismatched:
         detail = "; ".join(f"{key}: bundle says {got!r}, document says {want!r}" for key, (got, want) in mismatched.items())
         raise PlanError(f"featurizer {name!r}: {one.file_path!r} is not this featurizer — {detail}")
-    shape = (d,) if one.kind == "gate" else (d, one.k)
-    if tuple(tensor.shape) != shape:
-        raise PlanError(
-            f"featurizer {name!r}: {one.file_path!r} is {tuple(tensor.shape)}, not the "
-            f"{shape} this document declares"
-        )
-    return _frozen(tensor.to(torch.float32).tolist())
 
-
-def _frozen(nested: Any) -> Any:
-    """A tensor's `tolist()`, as the tuples a frozen plan can hold."""
-    return tuple(_frozen(one) for one in nested) if isinstance(nested, list) else float(nested)
+    k = d if one.kind == "gate" else (one.k or int(tensors[required[0]].shape[-1]))
+    shapes = {"weight": (d,) if one.kind == "gate" else (d, k),
+              "W_enc": (d, k), "W_dec": (k, d), "b_enc": (k,), "b_dec": (d,)}
+    for key, tensor in tensors.items():
+        if tuple(tensor.shape) != shapes[key]:
+            raise PlanError(
+                f"featurizer {name!r}: {one.file_path!r} has {key} {tuple(tensor.shape)}, not the "
+                f"{shapes[key]} this document and its {d}-wide site declare"
+            )
+    return safetensors.torch.save(tensors), k
 
 
 def _sites_of(spec: Any) -> dict[str, str]:
@@ -464,6 +485,7 @@ class _Experiment:
                 name: _WriteSpec(
                     site=w.site, pos=w.pos, mechanism=w.mechanism,
                     operand=w.operand_name, featurizer=w.featurizer, params=dict(w.params),
+                    features=None if w.features is None else tuple(w.features),
                 )
                 for name, w in intervention.writes.items()
             },
@@ -481,6 +503,7 @@ class _WriteSpec:
     operand: str | float | None
     featurizer: str
     params: dict[str, float]
+    features: tuple[int, ...] | None = None
 
 
 def build_request(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Plan:
@@ -898,6 +921,7 @@ def _forward(
                     mechanism=spec.mechanism,
                     featurizer=spec.featurizer,
                     params=dict(getattr(spec, "params", {})),
+                    features=getattr(spec, "features", None),
                 )
             )
     reads: dict[tuple[Address, Any], list[ReadOp]] = {}
