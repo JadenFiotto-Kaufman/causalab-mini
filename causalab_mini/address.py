@@ -32,8 +32,30 @@ Two kinds of address live here:
 
 from __future__ import annotations
 
+import copy
+from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass, replace
 from typing import Any
+
+
+@dataclass(frozen=True)
+class Lens:
+    """The escape hatch for a boundary value a path cannot describe: two
+    module-level functions, because a write needs the way back as much as a
+    read needs the way in. `get(value)` is the activation; `put(value,
+    tensor)` is `value` with the activation replaced."""
+
+    get: Callable[[Any], Any]
+    put: Callable[[Any, Any], Any]
+
+
+#: How the activation sits inside what a module boundary hands over.
+#:   None     decided from the value: a tuple's first element, or the tensor
+#:            itself — which of the two a block returns is a property of the
+#:            transformers version, so the default must not pin it
+#:   a path   indices and keys, walked in: `(1,)`, `("hidden_states",)`
+#:   a Lens   anything else
+Select = None | tuple[int | str, ...] | Lens
 
 
 @dataclass(frozen=True)
@@ -63,6 +85,19 @@ class _Component:
     #: A tensor that may be read and never written: the token ids are the
     #: model's input, and swapping a float activation into them means nothing.
     read_only: bool = False
+    #: At a module boundary: where in the boundary's value the activation is.
+    select: Select = None
+
+
+#: The exceptions, and only those: `(config.model_type, component)` -> the
+#: fields of the row that differ on that family. The `a|b` paths cover a
+#: child that is *named* differently, because the checkpoint can say which
+#: it has; this covers the same name handing over a different *structure*,
+#: which nothing about existence can distinguish. Empty until a model needs
+#: it — e.g. a block returning `(router_logits, hidden)` would be
+#:
+#:     ("some_moe", "block_output"): {"select": (1,)},
+_OVERRIDES: dict[tuple[str, str], dict[str, Any]] = {}
 
 
 _COMPONENTS = {
@@ -188,6 +223,9 @@ class Address:
     component: str
     layer: int | None = None
     op: str | None = None
+    #: `config.model_type`, when the engine that located this knows it. A
+    #: string, so the plan stays data; it selects a row's overrides.
+    family: str | None = None
 
     def __post_init__(self) -> None:
         if self.component not in _COMPONENTS:
@@ -197,7 +235,37 @@ class Address:
 
     @property
     def _entry(self) -> _Component:
-        return _COMPONENTS[self.component]
+        entry = _COMPONENTS[self.component]
+        differs = _OVERRIDES.get((self.family or "", self.component))
+        return replace(entry, **differs) if differs else entry
+
+    @property
+    def where(self) -> tuple[str, int | None, str | None]:
+        """The place, without the family it was located on. Equal across
+        families whenever the table needed no exception for either."""
+        return (self.component, self.layer, self.op)
+
+    def get(self, value: Any) -> Any:
+        """The activation inside a boundary's value."""
+        select = self._entry.select
+        if select is None:
+            return value[0] if isinstance(value, tuple) else value
+        found = select.get(value) if isinstance(select, Lens) else _walk(value, select)
+        if not hasattr(found, "shape"):
+            raise AddressError(
+                f"component {self.component!r} on {self.family!r}: select {select!r} "
+                f"reaches a {type(found).__name__}, not a tensor"
+            )
+        return found
+
+    def put(self, value: Any, tensor: Any) -> Any:
+        """`value` with the activation replaced — what a write hands back."""
+        select = self._entry.select
+        if select is None:
+            return (tensor, *value[1:]) if isinstance(value, tuple) else tensor
+        if isinstance(select, Lens):
+            return select.put(value, tensor)
+        return _rebuild(value, select, tensor)
 
     @property
     def call_site(self) -> str | None:
@@ -284,6 +352,33 @@ class Address:
         return found[0]
 
 
+def _walk(value: Any, path: tuple[int | str, ...]) -> Any:
+    for step in path:
+        try:
+            value = value[step]
+        except (IndexError, KeyError, TypeError) as error:
+            raise AddressError(f"select {path!r}: no {step!r} in a {type(value).__name__}") from error
+    return value
+
+
+def _rebuild(value: Any, path: tuple[int | str, ...], tensor: Any) -> Any:
+    """`value` with the thing at `path` replaced, containers rebuilt on the
+    way out: a tuple is immutable, and the caller's value is not ours to
+    edit in place."""
+    if not path:
+        return tensor
+    step, rest = path[0], path[1:]
+    inner = _rebuild(_walk(value, (step,)), rest, tensor)
+    if isinstance(value, tuple):
+        items = [*value[:step], inner, *value[step + 1 :]]  # type: ignore[index, operator]
+        return type(value)(*items) if hasattr(value, "_fields") else tuple(items)
+    if isinstance(value, (list, MutableMapping)):
+        copied = copy.copy(value)
+        copied[step] = inner  # type: ignore[index]
+        return copied
+    raise AddressError(f"select {path!r}: cannot rebuild a {type(value).__name__}")
+
+
 def describe() -> dict[str, dict[str, Any]]:
     """The component vocabulary, as data an agent can read: for each name,
     where it is and what kind of place that is. This is the table, not a
@@ -297,6 +392,12 @@ def describe() -> dict[str, dict[str, Any]]:
             "seq_axis": entry.seq_axis,
             "width": entry.width,
             "read_only": entry.read_only,
+            # the families this row has an exception for, and what differs
+            "overrides": {
+                family: {key: repr(value) for key, value in differs.items()}
+                for (family, component), differs in _OVERRIDES.items()
+                if component == name
+            },
         }
         for name, entry in _COMPONENTS.items()
     }

@@ -1160,3 +1160,48 @@ Not done: a *position's* ineligibility (a `{"column": …}` window the row
 does not contain) reaching a metric. A metric reads a unit window, so that
 case cannot be authored yet; when a metric over a located position exists,
 its `rows` is this same field.
+
+
+## 16. Where the activation is inside the boundary's value
+
+Until now both engines carried the same two lines — a tuple's first element,
+or the tensor itself — and nothing could say otherwise. That rule is a
+convention: a block returning `(router_logits, hidden)` would have handed
+over the wrong tensor without complaint.
+
+Now it is the *default* of a field, `select`, on the component row, and the
+two lines live once, in `Address.get` / `Address.put`:
+
+| `select` | meaning |
+|---|---|
+| `None` | decided from the value, as before. Stays the default because tensor-vs-tuple is a property of the transformers version, and pinning it would be wrong on half the installs. |
+| a path, `(1,)`, `("hidden_states", 0)` | walked in to read; containers rebuilt on the way out to write (tuples, named tuples, lists, mappings). Pure data. |
+| `Lens(get, put)` | two module-level functions, for what a path cannot say — e.g. an activation packed `(tokens, d)`. |
+
+**It has to be a pair.** "A function that indexes the tuple" is a read; a
+write must hand the module back its whole value with one part replaced. A
+path gives both directions for free, which is why it is the first choice
+and the function form the escape hatch.
+
+**The family axis finally arrived, as a list of exceptions.** `a|b` paths
+cover a child that is *named* differently, because existence distinguishes
+them. The same name handing over a different *structure* cannot be probed
+that way (and guessing the hidden state by shape is the silent failure this
+removes), so `_OVERRIDES[(config.model_type, component)]` holds the fields
+of a row that differ on that family. The engine stamps `family` on the
+address when it locates it — a string, so the plan is still data, and the
+functions never leave the table. `Address.where` is the place without the
+family, which is what "one address serves both families" now compares.
+
+`_OVERRIDES` is **empty**: no model in this repository needs an exception.
+What is pinned instead is the wiring, on the real tiny Llama through both
+engines — a lens that reverses the width axis in and out is bit-invisible
+to a full-width swap and is observed being called for the read and the
+write; an explicit `(0,)` on the raw attention module's real `(output,
+weights)` tuple equals the default bit for bit; `(1,)` reaches sdpa's `None`
+weights and is refused by name. A select that does not reach a tensor is an
+`AddressError`, not a swap.
+
+Not covered: interiors keep their own `handle`/`arg`, and the hooks
+engine's *input* side still picks the first positional or the single tensor
+keyword before `select` could apply.

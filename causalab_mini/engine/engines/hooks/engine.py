@@ -66,7 +66,7 @@ class HooksEngine(Engine):
         embedding that the address says have already happened by the time the
         query is the query.
         """
-        address = Address(component, layer)
+        address = Address(component, layer, family=getattr(self.model.config, "model_type", None))
         if address.interior:
             raise AddressError(
                 f"component {component!r} is an interior — one argument of one call "
@@ -261,8 +261,8 @@ def intervene_at(
     def hook(module: Any, args: Any, output: Any) -> Any:
         if not intervene.applies(tap.step, clock["step"]):
             return None
-        activation = output[0] if isinstance(output, tuple) else output
-        activation = _apply(tap, activation, values, featurizers, names, clock["step"])
-        return (activation, *output[1:]) if isinstance(output, tuple) else activation
+        address = tap.address
+        activation = _apply(tap, address.get(output), values, featurizers, names, clock["step"])
+        return address.put(output, activation)
 
     return hook

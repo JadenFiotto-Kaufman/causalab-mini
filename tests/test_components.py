@@ -78,7 +78,7 @@ def test_one_address_serves_both_families(component, model_engine, gpt2_engine):
     because nnterp absorbs the family axis and the interior's operation is
     resolved per checkpoint rather than tabulated."""
     layer = 0 if _COMPONENTS[component].band == 1 else None
-    assert model_engine.locate(component, layer) == gpt2_engine.locate(component, layer)
+    assert model_engine.locate(component, layer).where == gpt2_engine.locate(component, layer).where
 
 
 #: What each standardized name resolves to in a raw HuggingFace tree. This is

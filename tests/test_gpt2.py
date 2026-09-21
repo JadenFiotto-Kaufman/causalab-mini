@@ -79,7 +79,7 @@ def test_one_address_serves_both_families(model_engine, gpt2_engine, model, gpt2
     """The same `Address` — the same component, layer and resolved operation —
     reaches both models, although the modules it lands on share no path."""
     for component, layer in (("block_output", 0), ("lm_head", None), ("attention_query", 0)):
-        assert model_engine.locate(component, layer) == gpt2_engine.locate(component, layer)
+        assert model_engine.locate(component, layer).where == gpt2_engine.locate(component, layer).where
 
     # What nnterp is absorbing on our behalf, spelled out: these are the real
     # paths, and nothing in the project mentions either of them.

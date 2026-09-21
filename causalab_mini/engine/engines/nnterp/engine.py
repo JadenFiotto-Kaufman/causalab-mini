@@ -61,7 +61,7 @@ class NNterpEngine(Engine):
         client: it is named by the loaded checkpoint's forward, so a document
         that cannot be addressed should fail at compile time and not inside
         someone else's process."""
-        address = Address(component, layer)
+        address = Address(component, layer, family=getattr(self.model.config, "model_type", None))
         if address.call_site is None:
             return address
         source = address.resolve(self.model).source
@@ -212,8 +212,7 @@ def read(model: Any, address: Address) -> Any:
     nnsight. A different engine says it differently.
     """
     if not address.interior:
-        value = getattr(address.resolve(model), address.side)
-        return value[0] if isinstance(value, tuple) else value
+        return address.get(getattr(address.resolve(model), address.side))
     call = operation(model, address)
     if address.handle == "output":
         return call.output[address.arg]
@@ -226,12 +225,7 @@ def write(model: Any, address: Address, tensor: Any) -> None:
     the call's arguments around the new one."""
     if not address.interior:
         envoy = address.resolve(model)
-        current = getattr(envoy, address.side)
-        setattr(
-            envoy,
-            address.side,
-            (tensor, *current[1:]) if isinstance(current, tuple) else tensor,
-        )
+        setattr(envoy, address.side, address.put(getattr(envoy, address.side), tensor))
         return
     call = operation(model, address)
     index = address.arg
