@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 class Node(BaseModel):
     """Every node refuses a key it does not know, and says where it was."""
@@ -90,17 +90,28 @@ class Read(Node):
     featurizer: str = "identity"
 
 
+class Reference(Node):
+    """A value an earlier sibling step published under `outputs`."""
+
+    ref: str
+
+
 class Write(Node):
     """`mechanism` and `operand` are two fields, not the protocol's
     `{"swap": "v_cf"}`, because a key that is itself the mechanism's name
     cannot be enumerated by a schema — and the schema is what an agent
-    reads."""
+    reads. The operand is a read of this intervention, or a reference to
+    what an earlier step output."""
 
     site: str
     pos: int
     mechanism: Literal["swap"]
-    operand: str  # the name of a read
+    operand: str | Reference
     featurizer: str = "identity"
+
+    @property
+    def operand_name(self) -> str:
+        return self.operand.ref if isinstance(self.operand, Reference) else self.operand
 
 
 class IntervenedModel(Node):
@@ -180,6 +191,15 @@ class Intervention(Node):
 # --------------------------------------------------------------------- #
 
 
+class Output(Node):
+    """One value a pass publishes for the steps after it: a read, kept as it
+    is (`rows x width`) or averaged over rows to one vector — which is how a
+    corpus mean gets made without the un-reduced activations ever leaving."""
+
+    read: str
+    reduce: Literal["none", "mean"] = "none"
+
+
 class Save(Node):
     """One file. `value` names a result **of the step this sits on**.
 
@@ -217,12 +237,26 @@ class Evaluation(Node):
 class Observe(Node):
     kind: Literal["observe"]
     rows: dict[str, str]
+    #: Which experiment this pass runs. Optional when the document declares
+    #: exactly one.
+    intervention: str | None = None
+    #: name -> what to publish. A bare read name is shorthand for keeping it
+    #: unreduced.
+    outputs: dict[str, Output] = Field(default_factory=dict)
     saves: list[Save] = Field(default_factory=list)
+
+    @field_validator("outputs", mode="before")
+    @classmethod
+    def _shorthand(cls, raw: Any) -> Any:
+        if isinstance(raw, dict):
+            return {name: {"read": one} if isinstance(one, str) else one for name, one in raw.items()}
+        return raw
 
 
 class Fit(Node):
     kind: Literal["fit"]
     rows: dict[str, str]
+    intervention: str | None = None
     params: list[str]
     #: Σ wᵢ·metricᵢ, minimized.
     objective: list[tuple[float, str]]
@@ -258,9 +292,25 @@ class Spec(Node):
     model: Model
     roles: dict[str, Role]
     sites: dict[str, Site]
-    intervention: Intervention
+    #: The experiments, by name. A step names the one it runs; when there is
+    #: exactly one, it need not.
+    interventions: dict[str, Intervention]
     steps: dict[str, Step]
     featurizers: dict[str, Featurizer] = Field(default_factory=dict)
+
+    def intervention_of(self, step: Any) -> Intervention:
+        """The experiment a step runs, resolved."""
+        name = getattr(step, "intervention", None)
+        if name is None:
+            if len(self.interventions) != 1:
+                raise ValueError(
+                    f"a step must name its intervention when the document declares "
+                    f"{len(self.interventions)}: {sorted(self.interventions)}"
+                )
+            (name,) = self.interventions
+        if name not in self.interventions:
+            raise ValueError(f"undeclared intervention {name!r}; declared: {sorted(self.interventions)}")
+        return self.interventions[name]
 
     @model_validator(mode="before")
     @classmethod
@@ -277,56 +327,71 @@ class Spec(Node):
     def _cross_check(self) -> "Spec":
         """Everything that is about two pieces at once. No single node owns
         any of it, so none of it is a field validator."""
+        _refuse(bool(self.interventions), "a document declares at least one intervention")
         known = set(self.featurizers) | {"identity"}
-        for name, read in self.intervention.reads.items():
-            _refuse(read.site in self.sites, f"read {name!r}: undeclared site {read.site!r}")
-            _refuse(read.input in self.roles, f"read {name!r}: undeclared role {read.input!r}")
-            _refuse(
-                read.model == "original" or read.model in self.intervention.models,
-                f"read {name!r}: model {read.model!r} is neither 'original' nor declared",
-            )
-            _refuse(read.featurizer in known, f"read {name!r}: undeclared featurizer")
-        for name, write in self.intervention.writes.items():
-            _refuse(write.site in self.sites, f"write {name!r}: undeclared site {write.site!r}")
-            _refuse(
-                write.operand in self.intervention.reads,
-                f"write {name!r}: the operand must be a read name; param and literal "
-                "operands are not implemented",
-            )
-            _refuse(write.featurizer in known, f"write {name!r}: undeclared featurizer")
-        for name, model in self.intervention.models.items():
-            _refuse(model.input in self.roles, f"model {name!r}: undeclared role")
-            for write in model.writes:
-                _refuse(write in self.intervention.writes, f"model {name!r}: undeclared write {write!r}")
-        for name, metric in self.intervention.metrics.items():
-            _refuse(
-                metric.of in self.intervention.reads,
-                f"metric {name!r}: `of` must be a read name, got {metric.of!r}",
-            )
+        for label, one in self.interventions.items():
+            self._check_intervention(label, one, known)
 
         # one featurizer name is one parameter set, so it acts at one site
         for name in self.featurizers:
-            at = {read.site for read in self.intervention.reads.values() if read.featurizer == name}
-            at |= {w.site for w in self.intervention.writes.values() if w.featurizer == name}
+            at = {
+                read.site
+                for one in self.interventions.values()
+                for read in one.reads.values()
+                if read.featurizer == name
+            }
+            at |= {
+                write.site
+                for one in self.interventions.values()
+                for write in one.writes.values()
+                if write.featurizer == name
+            }
             _refuse(len(at) == 1, f"featurizer {name!r} is used at {sorted(at)}; one name is one site")
 
-        produced = set(self.intervention.metrics)
+        published: dict[str, str] = {}  # output name -> the step that publishes it
+        all_reads = {name for one in self.interventions.values() for name in one.reads}
         for name, step in self.steps.items():
-            # A step that runs forwards needs rows for every role; `weights`
-            # runs none, and asking it for rows would be asking a question
-            # about a step that does not touch the model.
             if isinstance(step, (Observe, Fit)):
+                intervention = self.intervention_of(step)
                 for role in self.roles:
                     _refuse(role in step.rows, f"step {name!r}: no rows for role {role!r}")
                 for role, dataset in step.rows.items():
                     _refuse(role in self.roles, f"step {name!r}: undeclared role {role!r}")
                     _refuse(bool(dataset), f"step {name!r}: role {role!r} has no dataset")
+                # a reference must be to something an EARLIER sibling published
+                for write_name, write in intervention.writes.items():
+                    if isinstance(write.operand, Reference):
+                        _refuse(
+                            write.operand.ref in published,
+                            f"step {name!r}: write {write_name!r} references "
+                            f"{write.operand.ref!r}, which no earlier step outputs "
+                            f"(published so far: {sorted(published)})",
+                        )
+            produced = set(self.intervention_of(step).metrics) if isinstance(step, (Observe, Fit)) else set()
+            if isinstance(step, Observe):
+                for output_name, output in step.outputs.items():
+                    _refuse(
+                        output.read in self.intervention_of(step).reads,
+                        f"step {name!r}: output {output_name!r} keeps read {output.read!r}, "
+                        "which its intervention does not have",
+                    )
+                    _refuse(
+                        output_name not in published,
+                        f"step {name!r}: output {output_name!r} is already published by "
+                        f"step {published.get(output_name)!r}",
+                    )
+                    _refuse(
+                        output_name not in all_reads,
+                        f"step {name!r}: output {output_name!r} shares its name with a "
+                        "read; an operand names one or the other",
+                    )
+                    published[output_name] = name
+                produced |= set(step.outputs)
             if isinstance(step, Fit):
                 for role in self.roles:
                     _refuse(
                         role in step.eval.rows, f"step {name!r}.eval: no rows for role {role!r}"
                     )
-            if isinstance(step, Fit):
                 _refuse(
                     set(step.params) <= set(self.featurizers),
                     f"step {name!r}: trains {sorted(set(step.params) - set(self.featurizers))}, "
@@ -343,34 +408,61 @@ class Spec(Node):
                         save.value in produced,
                         f"step {name!r}.eval: saves {save.value!r}, which that pass does not produce",
                     )
+                produced = set(_publishes(step))
             if isinstance(step, Weights):
                 _refuse(
                     set(step.names) <= set(self.featurizers),
                     f"step {name!r}: names {sorted(set(step.names) - set(self.featurizers))}, "
                     "which is not a declared featurizer",
                 )
+                produced = set(step.names)
             for save in step.saves:
-                available = produced if isinstance(step, Observe) else set(_publishes(step))
                 _refuse(
-                    save.value in available,
+                    save.value in produced,
                     f"step {name!r}: saves {save.value!r}, which it does not produce "
-                    f"(it produces {sorted(available)})",
+                    f"(it produces {sorted(produced)})",
                 )
         self._check_order()
         return self
 
+    def _check_intervention(self, label: str, one: Intervention, known: set[str]) -> None:
+        where = f"interventions.{label}"
+        for name, read in one.reads.items():
+            _refuse(read.site in self.sites, f"{where}: read {name!r}: undeclared site {read.site!r}")
+            _refuse(read.input in self.roles, f"{where}: read {name!r}: undeclared role {read.input!r}")
+            _refuse(
+                read.model == "original" or read.model in one.models,
+                f"{where}: read {name!r}: model {read.model!r} is neither 'original' nor declared",
+            )
+            _refuse(read.featurizer in known, f"{where}: read {name!r}: undeclared featurizer")
+        for name, write in one.writes.items():
+            _refuse(write.site in self.sites, f"{where}: write {name!r}: undeclared site {write.site!r}")
+            if not isinstance(write.operand, Reference):
+                _refuse(
+                    write.operand in one.reads,
+                    f"{where}: write {name!r}: the operand must be a read name or a "
+                    '{"ref": …} to an earlier step\'s output; a literal is not implemented',
+                )
+            _refuse(write.featurizer in known, f"{where}: write {name!r}: undeclared featurizer")
+        for name, model in one.models.items():
+            _refuse(model.input in self.roles, f"{where}: model {name!r}: undeclared role")
+            for write in model.writes:
+                _refuse(write in one.writes, f"{where}: model {name!r}: undeclared write {write!r}")
+        for name, metric in one.metrics.items():
+            _refuse(
+                metric.of in one.reads,
+                f"{where}: metric {name!r}: `of` must be a read name, got {metric.of!r}",
+            )
+
     def _check_order(self) -> None:
         """A trained featurizer may not be used before it is trained.
 
-        Every step runs the one intervention, so every step that runs a
-        forward uses every featurizer the intervention names. If a later step
-        trains one of them, an earlier step scored it untrained — a valid
-        document with a silently wrong number. Refused, with the fix: a
-        deliberate untrained baseline is a *second* featurizer that no fit
-        names (see documents/random_subspace_cpu.json).
+        A step that runs a forward uses every featurizer its intervention
+        names. If a later fit trains one of them, an earlier step scored it
+        untrained — a valid document with a silently wrong number. Refused,
+        with the fix: a deliberate untrained baseline is a *second* featurizer
+        that no fit names (see documents/random_subspace_cpu.json).
         """
-        used = {read.featurizer for read in self.intervention.reads.values()}
-        used |= {write.featurizer for write in self.intervention.writes.values()}
         trained_at: dict[str, int] = {}
         for index, (name, step) in enumerate(self.steps.items()):
             if isinstance(step, Fit):
@@ -378,7 +470,9 @@ class Spec(Node):
                     trained_at.setdefault(param, index)
         for index, (name, step) in enumerate(self.steps.items()):
             if isinstance(step, (Observe, Fit)):
-                touches = used
+                one = self.intervention_of(step)
+                touches = {read.featurizer for read in one.reads.values()}
+                touches |= {write.featurizer for write in one.writes.values()}
             elif isinstance(step, Weights):
                 touches = set(step.names)
             else:

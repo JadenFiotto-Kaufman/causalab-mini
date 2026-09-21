@@ -20,11 +20,13 @@ from pydantic import ValidationError
 
 from causalab_mini import plan
 from causalab_mini.plan import document
+from causalab_mini.plan import spec as spec_module
 from causalab_mini.plan.spec import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 V2_DAS = REPO / "documents" / "v2" / "das.json"
 V2_PATCHING = REPO / "documents" / "v2" / "patching.json"
+V2_MEAN = REPO / "documents" / "v2" / "mean_ablation.json"
 
 
 @pytest.fixture
@@ -35,6 +37,11 @@ def das_spec_raw():
 @pytest.fixture
 def patching_spec_raw():
     return json.loads(V2_PATCHING.read_text())
+
+
+@pytest.fixture
+def mean_raw():
+    return json.loads(V2_MEAN.read_text())
 
 
 # --------------------------------------------------------------------- #
@@ -129,19 +136,19 @@ def test_the_patching_document_matches_its_protocol_twin(
 def test_an_unknown_key_anywhere_is_refused_with_its_path(patching_spec_raw):
     """`extra="forbid"` is the catch-all `document.py` needed four silent
     bugs to learn it wanted, and the error says where."""
-    patching_spec_raw["intervention"]["reads"]["v_cf"]["shuffle"] = {"seed": 1}
+    patching_spec_raw["interventions"]["patching"]["reads"]["v_cf"]["shuffle"] = {"seed": 1}
     with pytest.raises(ValidationError) as refusal:
         Spec.model_validate(patching_spec_raw)
-    assert "intervention.reads.v_cf.shuffle" in str(refusal.value)
+    assert "interventions.patching.reads.v_cf.shuffle" in str(refusal.value)
     assert "Extra inputs are not permitted" in str(refusal.value)
 
 
 @pytest.mark.parametrize(
     "edit, message",
     [
-        (lambda raw: raw["intervention"]["reads"]["v_cf"].update(site="nope"), "undeclared site"),
-        (lambda raw: raw["intervention"]["writes"]["patch"].update(operand="nope"), "must be a read name"),
-        (lambda raw: raw["intervention"]["metrics"]["iia"].update(of="nope"), "must be a read name"),
+        (lambda raw: raw["interventions"]["patching"]["reads"]["v_cf"].update(site="nope"), "undeclared site"),
+        (lambda raw: raw["interventions"]["patching"]["writes"]["patch"].update(operand="nope"), "must be a read name"),
+        (lambda raw: raw["interventions"]["patching"]["metrics"]["iia"].update(of="nope"), "must be a read name"),
         (lambda raw: raw["steps"]["score"]["saves"].append({"value": "nope", "file_path": "x.json"}), "does not produce"),
         (lambda raw: raw["steps"]["score"]["rows"].pop("counterfactual"), "no rows for role"),
     ],
@@ -158,7 +165,7 @@ def test_the_format_has_a_machine_readable_schema():
     """Which the protocol does not — 372 KB of authoritative prose and a
     Python implementation (NOTES §1). Here the schema is the model."""
     schema = Spec.model_json_schema()
-    assert schema["required"] == ["model", "roles", "sites", "intervention", "steps"]
+    assert schema["required"] == ["model", "roles", "sites", "interventions", "steps"]
     assert "Fit" in schema["$defs"] and "Observe" in schema["$defs"]
 
 
@@ -231,3 +238,108 @@ def test_a_write_is_two_fields_a_schema_can_enumerate():
     write = schema["$defs"]["Write"]
     assert write["required"] == ["site", "pos", "mechanism", "operand"]
     assert write["properties"]["mechanism"]["const"] == "swap"  # one value: const, not enum
+
+
+# --------------------------------------------------------------------- #
+# several interventions, and what one step hands the next
+# --------------------------------------------------------------------- #
+
+
+def test_a_step_names_its_intervention_or_there_is_only_one(das_spec_raw, mean_raw):
+    """One intervention: steps need not say. Several: they must, and an
+    unknown name is refused."""
+    assert Spec.model_validate(das_spec_raw).intervention_of(Spec.model_validate(das_spec_raw).steps["score"])
+    unnamed = json.loads(json.dumps(mean_raw))
+    del unnamed["steps"]["clean"]["intervention"]
+    with pytest.raises(ValidationError, match="must name its intervention when the document declares 3"):
+        Spec.model_validate(unnamed)
+    wrong = json.loads(json.dumps(mean_raw))
+    wrong["steps"]["clean"]["intervention"] = "nope"
+    with pytest.raises(ValidationError, match="undeclared intervention 'nope'"):
+        Spec.model_validate(wrong)
+
+
+def test_mean_ablation_is_three_steps_and_the_mean_never_needs_a_file(
+    mean_raw, data_root, model_engine, tmp_path
+):
+    """The document the protocol's format cannot write. `harvest` publishes a
+    mean; `ablated` swaps it in. The mean crosses the steps through the walk's
+    state — never a file, never the plan — and reaches disk only because a
+    save on `harvest` asks."""
+    executed = model_engine.execute(plan.build_request(mean_raw, data_root, model_engine))
+
+    harvest = executed.step("harvest", plan.Observe)
+    assert [o.name for o in harvest.outputs] == ["mean"]
+    assert tuple(harvest.results["mean"].shape) == (16,)  # rows averaged away
+
+    clean = executed.step("clean", plan.Observe).results["logit_diff"]
+    ablated = executed.step("ablated", plan.Observe).results["logit_diff"]
+    assert not torch.equal(clean, ablated), "the swap landed"
+
+    written = {p.name for p in executed.write(tmp_path)}
+    assert {"mean.safetensors", "clean.json", "ablated.json"} <= written
+
+
+def test_the_two_engines_agree_on_mean_ablation(mean_raw, data_root, model_engine):
+    """A published output is seeded into `values` before the forward, on both
+    engines, by the shared walk — so the engine cannot tell an operand that
+    came from an earlier step from one read in this pass."""
+    from causalab_mini.engine.engines.hooks import HooksEngine
+
+    hooks = HooksEngine.load(Spec.model_validate(mean_raw).model, device_map="cpu")
+    traced = model_engine.execute(plan.build_request(mean_raw, data_root, model_engine))
+    hooked = hooks.execute(plan.build_request(mean_raw, data_root, hooks))
+    assert torch.equal(traced.result("mean"), hooked.result("mean"))
+    assert torch.equal(
+        traced.step("ablated", plan.Observe).results["logit_diff"],
+        hooked.step("ablated", plan.Observe).results["logit_diff"],
+    )
+
+
+@pytest.mark.parametrize(
+    "edit, message",
+    [
+        (lambda raw: raw["steps"].update({k: raw["steps"].pop(k) for k in ("harvest",)}),
+         "references 'mean', which no earlier step outputs"),
+        (lambda raw: raw["interventions"]["ablated"]["writes"]["ablate"].update(operand={"ref": "nope"}),
+         "references 'nope', which no earlier step outputs"),
+        (lambda raw: raw["steps"]["harvest"]["outputs"].update(logits={"read": "acts"}),
+         "shares its name with a read"),
+        (lambda raw: raw["steps"]["harvest"]["outputs"].update(mean={"read": "nope"}),
+         "keeps read 'nope', which its intervention does not have"),
+        (lambda raw: raw["steps"]["harvest"]["saves"].__setitem__(0, {"value": "acts", "file_path": "x.json"}),
+         "saves 'acts', which it does not produce"),
+    ],
+    ids=["consumer before producer", "unknown output", "output named like a read",
+         "output of a read it lacks", "saving a read that is not an output"],
+)
+def test_outputs_and_references_are_checked(mean_raw, edit, message):
+    edit(mean_raw)
+    with pytest.raises(ValidationError, match=message):
+        Spec.model_validate(mean_raw)
+
+
+def test_an_unreduced_output_must_match_the_rows_it_is_swapped_over(mean_raw, data_root, model_engine):
+    """`(rows, width)` swapped over a different number of rows is a shape error
+    the block would find; the compiler knows both counts and says so first."""
+    mean_raw["steps"]["harvest"]["outputs"]["mean"] = {"read": "acts"}  # unreduced
+    mean_raw["steps"]["harvest"]["saves"] = []
+    mean_raw["steps"]["ablated"]["rows"] = {"base": "weekdays/data#test"}  # 2 rows, not 4
+    with pytest.raises(plan.PlanError, match="has 4 rows, over 2 rows"):
+        plan.build_request(mean_raw, data_root, model_engine)
+
+
+def test_an_output_saves_as_a_tensor_not_a_table(mean_raw, data_root, model_engine):
+    mean_raw["steps"]["harvest"]["saves"] = [{"value": "mean", "file_path": "mean.json"}]
+    with pytest.raises(plan.PlanError, match="an output is a tensor, not a table"):
+        plan.build_request(mean_raw, data_root, model_engine)
+
+
+def test_a_reads_shorthand_keeps_it_unreduced(mean_raw):
+    mean_raw["steps"]["harvest"]["outputs"] = {"acts_kept": "acts"}
+    mean_raw["steps"]["harvest"]["saves"] = []
+    mean_raw["interventions"]["ablated"]["writes"]["ablate"]["operand"] = {"ref": "acts_kept"}
+    spec = Spec.model_validate(mean_raw)
+    harvest = spec.steps["harvest"]
+    assert isinstance(harvest, spec_module.Observe)
+    assert harvest.outputs["acts_kept"].reduce == "none"

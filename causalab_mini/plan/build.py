@@ -31,6 +31,7 @@ from .plan import (
     Forward,
     MetricOp,
     Observe,
+    OutputOp,
     Plan,
     PlanError,
     ReadOp,
@@ -61,7 +62,6 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
         name: engine.locate(site.component, site.layers[0] if site.layers else None)
         for name, site in spec.sites.items()
     }
-    experiment = _Experiment.of_spec(spec)
     fits = [one for one in spec.steps.values() if type(one).__name__ == "Fit"]
     featurizers = tuple(
         _spec_featurizer(name, one, spec, addresses, engine, fits)
@@ -81,15 +81,44 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
         # Declaring a featurizer is what builds it; the document does not
         # spell out a step whose whole content would be the declaration.
         steps["featurizers"] = Featurizers(specs=featurizers)
+    #: An unreduced output is (rows, width), and a write that swaps it in
+    #: needs the same rows. The compiler knows both row counts; the block
+    #: would only find out from a shape error.
+    output_rows: dict[str, int | None] = {}
     for name, step in spec.steps.items():
         kind = type(step).__name__
+        experiment = (
+            _Experiment.of_spec(spec, spec.intervention_of(step))
+            if kind in ("Observe", "Fit")
+            else None
+        )
+        if experiment is not None:
+            count = len(table(step.rows)["base"])
+            for write_name, write in spec.intervention_of(step).writes.items():
+                if type(write.operand).__name__ == "Reference":
+                    have = output_rows[write.operand.ref]
+                    if have is not None and have != count:
+                        raise PlanError(
+                            f"step {name!r}: write {write_name!r} swaps in "
+                            f"{write.operand.ref!r}, which has {have} rows, over {count} "
+                            "rows; reduce the output or run over the same rows"
+                        )
         if kind == "Observe":
+            assert experiment is not None
             rows = table(step.rows)
+            outputs = tuple(
+                OutputOp(name=out_name, read=out.read, reduce=out.reduce)
+                for out_name, out in step.outputs.items()
+            )
+            for out in outputs:
+                output_rows[out.name] = None if out.reduce == "mean" else len(rows["base"])
             steps[name] = replace(
                 _pass(experiment, rows, addresses, engine.tokenizer),
-                saves=_spec_saves(step.saves, spec, rows["base"], widths),
+                outputs=outputs,
+                saves=_spec_saves(step.saves, spec, rows["base"], widths, outputs={o.name for o in outputs}),
             )
         elif kind == "Fit":
+            assert experiment is not None
             steps[name] = _spec_fit(step, spec, experiment, table, addresses, engine, widths)
         elif kind == "Weights":
             steps[name] = Weights(
@@ -177,8 +206,18 @@ def _sites_of(spec: Any) -> dict[str, str]:
     where it is used."""
     found = {}
     for name in spec.featurizers:
-        at = {read.site for read in spec.intervention.reads.values() if read.featurizer == name}
-        at |= {w.site for w in spec.intervention.writes.values() if w.featurizer == name}
+        at = {
+            read.site
+            for one in spec.interventions.values()
+            for read in one.reads.values()
+            if read.featurizer == name
+        }
+        at |= {
+            w.site
+            for one in spec.interventions.values()
+            for w in one.writes.values()
+            if w.featurizer == name
+        }
         (found[name],) = at
     return found
 
@@ -189,11 +228,21 @@ def _spec_saves(
     base_rows: list[rows_module.Row],
     widths: dict[str, int],
     sites: dict[str, str] | None = None,
+    outputs: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[SaveFile, ...]:
     """A step's saves. A metric table carries its rows' labels; a fitted
-    parameter carries the identity stamp a later run would check."""
+    parameter carries the identity stamp a later run would check; a
+    published output is a tensor and goes to a safetensors file as it is."""
     built = []
     for save in saves:
+        if save.value in outputs:
+            if not save.file_path.endswith(".safetensors"):
+                raise PlanError(
+                    f"save {save.value!r}: an output is a tensor, not a table; give it "
+                    f"a .safetensors path, not {save.file_path!r}"
+                )
+            built.append(SaveFile(file_path=save.file_path, value=save.value))
+            continue
         if sites is not None and save.value in sites:
             site = sites[save.value]
             one = spec.featurizers[save.value]
@@ -217,7 +266,11 @@ def _spec_saves(
                 )
             )
             continue
-        kind = spec.intervention.metrics[save.value].kind
+        kind = next(
+            one.metrics[save.value].kind
+            for one in spec.interventions.values()
+            if save.value in one.metrics
+        )
         built.append(
             SaveFile(
                 file_path=save.file_path,
@@ -257,14 +310,31 @@ class _Experiment:
         )
 
     @classmethod
-    def of_spec(cls, spec: Any) -> "_Experiment":
+    def of_spec(cls, spec: Any, intervention: Any) -> "_Experiment":
         return cls(
             fields={role: one.field for role, one in spec.roles.items()},
-            reads=dict(spec.intervention.reads),
-            writes=dict(spec.intervention.writes),
-            models=dict(spec.intervention.models),
-            metrics=dict(spec.intervention.metrics),
+            reads=dict(intervention.reads),
+            writes={
+                # a write's operand is a name whichever way it was written: a
+                # read of this pass, or an output published before it
+                name: _WriteSpec(
+                    site=w.site, pos=w.pos, mechanism=w.mechanism,
+                    operand=w.operand_name, featurizer=w.featurizer,
+                )
+                for name, w in intervention.writes.items()
+            },
+            models=dict(intervention.models),
+            metrics=dict(intervention.metrics),
         )
+
+
+@dataclass(frozen=True)
+class _WriteSpec:
+    site: str
+    pos: int
+    mechanism: str
+    operand: str
+    featurizer: str
 
 
 def build_request(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Plan:
@@ -561,7 +631,9 @@ def _schedule(experiment: _Experiment) -> list[tuple[str, str]]:
         ready = [
             unit
             for unit, operands in remaining.items()
-            if all(read_home[operand] in ordered for operand in operands)
+            # an operand that is not a read of this pass was published by an
+            # earlier step; it is already there and orders nothing
+            if all(read_home[operand] in ordered for operand in operands if operand in read_home)
         ]
         if not ready:
             raise PlanError(f"the model/read graph has a cycle: {sorted(remaining)}")

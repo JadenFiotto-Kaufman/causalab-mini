@@ -1,0 +1,137 @@
+{
+  "header": {
+    "description": "Mean ablation in one document, which the protocol's format cannot write: three steps, three experiments. `harvest` reads the residual stream at the answer position over a corpus and publishes its mean; `clean` scores the un-intervened model; `ablated` swaps the published mean in at that position and scores again. The mean never touches disk unless a save asks \u2014 it is an output of one step and an operand of a later one. Tiny CPU Llama, so the numbers demonstrate the mechanism and nothing else."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "roles": {
+    "base": {
+      "field": "input"
+    }
+  },
+  "sites": {
+    "target": {
+      "component": "block_output",
+      "layers": [
+        0
+      ]
+    },
+    "head": {
+      "component": "lm_head"
+    }
+  },
+  "interventions": {
+    "harvest": {
+      "reads": {
+        "acts": {
+          "site": "target",
+          "pos": -1,
+          "input": "base"
+        }
+      }
+    },
+    "clean": {
+      "reads": {
+        "logits": {
+          "site": "head",
+          "pos": -1,
+          "input": "base"
+        }
+      },
+      "metrics": {
+        "logit_diff": {
+          "kind": "logit_diff",
+          "of": "logits",
+          "a": "cf_answer",
+          "b": "base_answer"
+        }
+      }
+    },
+    "ablated": {
+      "reads": {
+        "logits": {
+          "site": "head",
+          "pos": -1,
+          "model": "ablated",
+          "input": "base"
+        }
+      },
+      "writes": {
+        "ablate": {
+          "site": "target",
+          "pos": -1,
+          "mechanism": "swap",
+          "operand": {
+            "ref": "mean"
+          }
+        }
+      },
+      "models": {
+        "ablated": {
+          "input": "base",
+          "writes": [
+            "ablate"
+          ]
+        }
+      },
+      "metrics": {
+        "logit_diff": {
+          "kind": "logit_diff",
+          "of": "logits",
+          "a": "cf_answer",
+          "b": "base_answer"
+        }
+      }
+    }
+  },
+  "steps": {
+    "harvest": {
+      "kind": "observe",
+      "intervention": "harvest",
+      "rows": {
+        "base": "weekdays/train"
+      },
+      "outputs": {
+        "mean": {
+          "read": "acts",
+          "reduce": "mean"
+        }
+      },
+      "saves": [
+        {
+          "value": "mean",
+          "file_path": "mean.safetensors"
+        }
+      ]
+    },
+    "clean": {
+      "kind": "observe",
+      "intervention": "clean",
+      "rows": {
+        "base": "weekdays/train"
+      },
+      "saves": [
+        {
+          "value": "logit_diff",
+          "file_path": "clean.json"
+        }
+      ]
+    },
+    "ablated": {
+      "kind": "observe",
+      "intervention": "ablated",
+      "rows": {
+        "base": "weekdays/train"
+      },
+      "saves": [
+        {
+          "value": "logit_diff",
+          "file_path": "ablated.json"
+        }
+      ]
+    }
+  }
+}

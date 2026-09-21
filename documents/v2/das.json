@@ -33,52 +33,54 @@
       "parametrization": "cayley"
     }
   },
-  "intervention": {
-    "reads": {
-      "v_cf": {
-        "site": "target",
-        "pos": -1,
-        "model": "original",
-        "input": "counterfactual",
-        "featurizer": "rot"
+  "interventions": {
+    "das": {
+      "reads": {
+        "v_cf": {
+          "site": "target",
+          "pos": -1,
+          "model": "original",
+          "input": "counterfactual",
+          "featurizer": "rot"
+        },
+        "logits": {
+          "site": "head",
+          "pos": -1,
+          "model": "patched",
+          "input": "base"
+        }
       },
-      "logits": {
-        "site": "head",
-        "pos": -1,
-        "model": "patched",
-        "input": "base"
-      }
-    },
-    "writes": {
-      "patch": {
-        "site": "target",
-        "pos": -1,
-        "featurizer": "rot",
-        "mechanism": "swap",
-        "operand": "v_cf"
-      }
-    },
-    "models": {
-      "patched": {
-        "input": "base",
-        "writes": [
-          "patch"
-        ]
-      }
-    },
-    "metrics": {
-      "iia": {
-        "kind": "logit_diff",
-        "of": "logits",
-        "a": "cf_answer",
-        "b": "base_answer",
-        "token_form": "space_prefixed"
+      "writes": {
+        "patch": {
+          "site": "target",
+          "pos": -1,
+          "featurizer": "rot",
+          "mechanism": "swap",
+          "operand": "v_cf"
+        }
       },
-      "ce": {
-        "kind": "cross_entropy",
-        "of": "logits",
-        "target": "cf_answer",
-        "token_form": "space_prefixed"
+      "models": {
+        "patched": {
+          "input": "base",
+          "writes": [
+            "patch"
+          ]
+        }
+      },
+      "metrics": {
+        "iia": {
+          "kind": "logit_diff",
+          "of": "logits",
+          "a": "cf_answer",
+          "b": "base_answer",
+          "token_form": "space_prefixed"
+        },
+        "ce": {
+          "kind": "cross_entropy",
+          "of": "logits",
+          "target": "cf_answer",
+          "token_form": "space_prefixed"
+        }
       }
     }
   },

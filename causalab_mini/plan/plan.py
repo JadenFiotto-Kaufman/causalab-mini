@@ -85,6 +85,16 @@ class Forward:
 
 
 @dataclass(frozen=True)
+class OutputOp:
+    """One value a pass makes available to the steps after it: a read, kept
+    — optionally reduced over rows — under a name later steps reference."""
+
+    name: str
+    read: str
+    reduce: str = "none"  # "none" keeps (rows, width); "mean" averages the rows away
+
+
+@dataclass(frozen=True)
 class MetricOp:
     name: str
     kind: str
@@ -152,6 +162,10 @@ class Observe(Step):
 
     forwards: tuple[Forward, ...]
     metrics: tuple[MetricOp, ...]
+    #: What this pass publishes to its later siblings. Ephemeral: it lives in
+    #: the walk's state and dies with the plan, unless a save on this step
+    #: names it too.
+    outputs: tuple[OutputOp, ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)

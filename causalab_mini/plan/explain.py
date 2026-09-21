@@ -40,7 +40,8 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
         out += _lines(step.epochs[0][0], "epochs[0][0]", depth + 2)
         out += _lines(step.evaluation, "evaluation", depth + 2)
     elif isinstance(step, Observe):
-        out.append(f"{pad}{name}: Observe  metrics={[m.name + '/' + m.kind for m in step.metrics]}{tail}")
+        outputs = f"  outputs={[o.name + ('=' + o.reduce + '(' + o.read + ')' if o.reduce != 'none' else '=' + o.read) for o in step.outputs]}" if step.outputs else ""
+        out.append(f"{pad}{name}: Observe  metrics={[m.name + '/' + m.kind for m in step.metrics]}{outputs}{tail}")
         for forward in step.forwards:
             rows, width = len(forward.input_ids), len(forward.input_ids[0]) if forward.input_ids else 0
             out.append(f"{pad}    forward {forward.name!r} on {forward.input!r}  ({rows} rows x {width} tokens)")

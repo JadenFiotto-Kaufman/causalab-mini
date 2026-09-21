@@ -28,7 +28,7 @@ def _json(capsys, argv):
 
 def test_schema_is_the_models_own(capsys):
     out = _json(capsys, ["schema"])
-    assert out["schema"]["required"] == ["model", "roles", "sites", "intervention", "steps"]
+    assert out["schema"]["required"] == ["model", "roles", "sites", "interventions", "steps"]
     assert "Fit" in out["schema"]["$defs"]
 
 
@@ -85,10 +85,10 @@ def test_validate_reads_both_formats(capsys):
 
 def test_validate_refuses_with_a_path(tmp_path, capsys):
     broken = json.loads(pathlib.Path(DAS).read_text())
-    broken["intervention"]["reads"]["v_cf"]["shuffle"] = {"seed": 1}
+    broken["interventions"]["das"]["reads"]["v_cf"]["shuffle"] = {"seed": 1}
     path = tmp_path / "broken.json"
     path.write_text(json.dumps(broken))
-    with pytest.raises(Exception, match="intervention.reads.v_cf.shuffle"):
+    with pytest.raises(Exception, match="interventions.das.reads.v_cf.shuffle"):
         cli.main(["validate", str(path)])
 
 

@@ -303,8 +303,16 @@ Recorded so they are not rediscovered.
    entry point for both formats and lowers sweeps — including cross
    products, labelled `k=8,seed=0` — before either compiler sees a point; a
    write is `mechanism` and `operand`, two fields a schema can enumerate.
-3. **B + C.** References and named interventions. With `save.reduce` this is
-   mean ablation, logit lens and clean-vs-treatment as documents.
+3. ~~**B + C.** References and named interventions.~~ Landed 2026-09-21.
+   One `State` per `steps` list — the owner's `state = {}; for step in
+   steps: run(step, state)` — carrying the live featurizers and what earlier
+   siblings published; a nested plan gets its own outputs. A step declares
+   `outputs` (a read, kept or averaged over rows); a later write names one
+   with `{"ref": …}`; the compiler checks existence, order, name collisions
+   and row counts. `interventions` is plural and a step names its own.
+   `documents/v2/mean_ablation.json` is the proof: three steps, three
+   experiments, a mean that crosses them without touching disk. Logit lens
+   still needs the `view: "logits"` read (§5).
 4. **D, windows first.** Then ragged, with eligibility.
 5. **Vocabulary throughout**, in whatever order the documents being written
    demand.

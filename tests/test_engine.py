@@ -155,3 +155,12 @@ def test_a_hooks_shell_refuses_to_run_because_it_has_nowhere_to(minimal_raw, dat
     shell = HooksEngine.load(document.Document.from_json(minimal_raw).model, dispatch=False)
     with pytest.raises(EngineError, match="dispatch=False"):
         shell.execute(build(document.Document.from_json(minimal_raw), data_root, shell))
+
+
+def test_a_nested_plan_gets_its_own_outputs_but_the_same_featurizers():
+    """The state is scoped to a `steps` list. A sweep point is a nested plan:
+    it shares the live parameter sets and sees none of its siblings' outputs."""
+    parent = steps.State(featurizers={"rot": object()}, outputs={"mean": object()})
+    child = parent.child()
+    assert child.featurizers is parent.featurizers
+    assert child.outputs == {} and child.outputs is not parent.outputs
