@@ -8,11 +8,11 @@ they are written once, here, as plain functions.
 
 Two rules hold throughout:
 
-* **a step writes its own results.** Every `Observe` records what it scored,
-  including the ones inside a fit, so a run is navigable at any depth
-  (`root.steps["fit"].epochs[0][1].results["iia"]`). On a long fit that is a
-  real amount of small tensors coming home; it is worth it here and would be
-  worth a `record` flag there.
+* **a step writes its own results** — every `Observe`, and a fit's held-out
+  pass (`root.steps["fit"].evaluation.results["iia"]`). A fit's *updates* do
+  not: what they scored is already the fit's `train/loss`, and recording
+  each one promised something only an in-process run could keep — on a real
+  server they never came home, and `remote="local"` could not show it.
 * **what crosses steps is one `State`, scoped to a `steps` list.** Its
   `featurizers` are the live parameter sets, shared so a fit trains the
   rotation a later step scores with; its `outputs` are what earlier siblings
@@ -98,7 +98,7 @@ def build(step: Featurizers, state: State) -> None:
         state.featurizers[spec.name] = featurizer_module.KINDS[spec.kind](**tensors)
 
 
-def observe(engine: Any, step: Observe, state: State) -> dict[str, Any]:
+def observe(engine: Any, step: Observe, state: State, record: bool = True) -> dict[str, Any]:
     """One pass: the forwards in order, then the metrics over what they read.
 
     Returns the metrics live, because a fit differentiates them; records them
@@ -122,12 +122,13 @@ def observe(engine: Any, step: Observe, state: State) -> dict[str, Any]:
         )
         for metric in step.metrics
     }
-    step.results.update({name: value.detach().cpu() for name, value in scored.items()})
-    # a decoding forward leaves its generated ids in `values`; they are a
-    # result of the pass like a metric is
-    step.results.update(
-        {name: value.detach().cpu() for name, value in values.items() if name.endswith(".generated")}
-    )
+    if record:
+        step.results.update({name: value.detach().cpu() for name, value in scored.items()})
+        # a decoding forward leaves its generated ids in `values`; they are a
+        # result of the pass like a metric is
+        step.results.update(
+            {name: value.detach().cpu() for name, value in values.items() if name.endswith(".generated")}
+        )
     for output in step.outputs:
         tensor = values[output.read]
         if output.reduce == "mean":
@@ -160,6 +161,8 @@ def passes(engine: Any, step: Observe, state: State) -> dict[str, Any]:
     over fewer rows rounds differently (FINDINGS §8).
     """
     count = len(step.forwards[0].input_ids) if step.forwards else 0
+    if state.batch_size is not None and state.batch_size < 1:
+        raise ValueError(f"batch_size is a positive number of rows, or None for all of them; got {state.batch_size}")
     size = state.batch_size or count or 1
     parts = []
     for start in range(0, count, size):
@@ -216,7 +219,7 @@ def fit(engine: Any, step: Fit, state: State) -> None:
                 # geometric, from `first` on the first update to `last` on the last
                 featurizers[name].temperature = first * (last / first) ** (done / max(total - 1, 1))
             done += 1
-            scored = dict(observe(engine, update, state))
+            scored = dict(observe(engine, update, state, record=False))
             scored.update({f"{name}.mask": gate.mask for name, gate in gates.items()})
             loss = objective(step.objective, scored)
             optimizer.zero_grad()

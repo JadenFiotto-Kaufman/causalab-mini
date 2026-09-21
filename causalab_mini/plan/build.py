@@ -592,7 +592,7 @@ def build_request(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Pl
     plan-shaped document has `steps`), lowers sweeps on the raw JSON — which
     neither format has to know about — and hands each point to its compiler.
     """
-    compile_point = _compile_spec if "steps" in raw else _compile_document
+    compile_point = _compile_spec if shape_of(raw) == "plan-shaped" else _compile_document
     points = sweep.points(raw)
     if len(points) == 1 and not points[0][0]:
         return replace(compile_point(raw, data_root, engine), source=raw)
@@ -607,6 +607,23 @@ def build_request(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Pl
 
 def _compile_document(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Plan:
     return build(Document.from_json(raw), data_root, engine)
+
+
+def shape_of(raw: dict[str, Any]) -> str:
+    """Which of the two formats a document is in — decided by a marker each
+    one carries, not by what it happens to lack. Routing on "has `steps`"
+    sent a plan-shaped document with a misspelt `steps` to the protocol
+    parser, which asked its author for a `data` group from a format they
+    had never seen."""
+    header = raw.get("header")
+    if isinstance(header, dict) and "protocol_version" in header:
+        return "protocol"
+    if "steps" in raw:
+        return "plan-shaped"
+    raise PlanError(
+        "this document has neither `steps` (the plan-shaped format — `causalab-mini schema`) nor "
+        f"`header.protocol_version` (the protocol format). Its top-level keys are {sorted(raw)}"
+    )
 
 
 def _compile_spec(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Plan:
@@ -906,6 +923,14 @@ def _check_ragged(forwards: tuple[Forward, ...], experiment: _Experiment) -> Non
         read.name: read.at.positions for forward in forwards for tap in forward.taps for read in tap.reads
     }
     read_in = {read.name: forward for forward in forwards for tap in forward.taps for read in tap.reads}
+    for name, windows in reads.items():
+        if windows and not any(windows):
+            # one excluded row is a measurement; every row excluded is a typo
+            raise PlanError(
+                f"read {name!r} finds its position in none of these {len(windows)} prompt(s) — for a "
+                "{'column': c} position, column c's text is in no row's prompt. Check the column's name "
+                "and that it holds text that appears in the prompt"
+            )
     for forward in forwards:
         for tap in forward.taps:
             for write in tap.writes:

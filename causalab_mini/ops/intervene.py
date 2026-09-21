@@ -202,7 +202,9 @@ def _flat(positions: Positions, device: Any) -> tuple[Any, Any]:
     empty window — an excluded row — contributes nothing."""
     rows = [row for row, window in enumerate(positions) for _ in window]
     index = [position for window in positions for position in window]
-    return torch.as_tensor(rows, device=device), torch.as_tensor(index, device=device)
+    # `long` said out loud: an all-empty window makes `[]`, which torch types as float
+    return (torch.as_tensor(rows, dtype=torch.long, device=device),
+            torch.as_tensor(index, dtype=torch.long, device=device))
 
 
 def _selection(at: Selection | Positions) -> Selection:
@@ -243,7 +245,7 @@ def _window(tensor: Any, at: Selection, seq_axis: int) -> Any:
         rows, index = _flat(positions, tensor.device)
         return moved[rows, index]
     rows = torch.arange(tensor.shape[0], device=tensor.device)[:, None]
-    index = torch.as_tensor(positions, device=tensor.device)  # (batch, w)
+    index = torch.as_tensor(positions, dtype=torch.long, device=tensor.device)  # (batch, w)
     return moved[rows, index]
 
 
@@ -281,7 +283,7 @@ def scatter(tensor: Any, at: Selection | Positions, values: Any, seq_axis: int =
         moved[rows, index] = values.to(out)
         return out
     rows = torch.arange(tensor.shape[0], device=tensor.device)[:, None]
-    index = torch.as_tensor(positions, device=tensor.device)
+    index = torch.as_tensor(positions, dtype=torch.long, device=tensor.device)
     moved[rows, index] = values.to(out)
     return out
 

@@ -22,7 +22,9 @@ from .data import rows as rows_module
 from .engine import NNterpEngine
 from .engine.engines.hooks import HooksEngine
 from .ops import featurizer, intervene, metrics
+from .plan.build import shape_of
 from .plan import document, sweep
+from .plan.plan import PlanError
 from .plan.explain import explain
 from .plan.spec import METRIC_COLUMNS, Spec
 
@@ -36,6 +38,15 @@ ENGINES: dict[str, tuple[type, dict[str, Any], bool | str]] = {
     "hooks": (HooksEngine, {}, False),
 }
 SHAPE_ONLY = {"dispatch": False}
+
+
+def _positive(text: str) -> int:
+    """`--batch-size -1` used to run no forward at all and die on a KeyError;
+    `0` was silently "every row"."""
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"{text} is not a positive number of rows")
+    return value
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -73,7 +84,7 @@ def main(argv: list[str] | None = None) -> int:
         if verb == "run":
             one.add_argument("--out", default="out")
             one.add_argument("--device-map", default="auto", help="ignored by ndif, whose weights are the server's")
-            one.add_argument("--batch-size", type=int, default=None,
+            one.add_argument("--batch-size", type=_positive, default=None,
                              help="rows per model call; bounds memory, moves only the last bit (default: every row at once)")
 
     args = parser.parse_args(argv)
@@ -190,7 +201,7 @@ def data(args: argparse.Namespace) -> dict[str, Any]:
 
 def validate(args: argparse.Namespace) -> dict[str, Any]:
     raw = _read(args.document)
-    shape = "plan-shaped" if "steps" in raw else "protocol"
+    shape = shape_of(raw)
     for _, point in sweep.points(raw):
         Spec.model_validate(point) if shape == "plan-shaped" else document.Document.from_json(point)
     return {"text": f"ok: {args.document} is a valid {shape} document", "ok": True, "format": shape}
@@ -202,7 +213,11 @@ def _compile(args: argparse.Namespace, **options: Any) -> tuple[Any, Any]:
     # The model is the same at every point of a sweep — a sweep may not touch
     # it — so the first point says what to load, in either format.
     first = sweep.points(raw)[0][1]
-    model_block = Spec.model_validate(first).model if "steps" in raw else document.Document.from_json(first).model
+    model_block = (
+        Spec.model_validate(first).model
+        if shape_of(raw) == "plan-shaped"
+        else document.Document.from_json(first).model
+    )
     engine = engine_class.load(model_block, **options)
     return engine, plan_module.build_request(raw, args.data_root, engine)
 
@@ -222,7 +237,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _read(path: str) -> dict[str, Any]:
-    return json.loads(Path(path).read_text())
+    """The document, with a JSON object's keys required to be distinct:
+    `json.loads` keeps the last of two and says nothing, which for a document
+    an agent assembled is a silently different experiment."""
+
+    def distinct(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        keys = [key for key, _ in pairs]
+        repeated = sorted({key for key in keys if keys.count(key) > 1})
+        if repeated:
+            raise PlanError(f"{path}: the key(s) {repeated} appear twice in one JSON object")
+        return dict(pairs)
+
+    return json.loads(Path(path).read_text(), object_pairs_hook=distinct)
 
 
 VERBS = {

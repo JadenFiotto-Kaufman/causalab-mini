@@ -188,15 +188,20 @@ def test_the_fit_reduces_its_own_objective(fitted):
     assert (losses[1:] < losses[:-1]).all(), losses
 
 
-def test_the_fit_records_every_pass_where_it_happened(fitted):
-    """A plan carries its own results, so a fit is not a black box that emits
-    two curves: every update and every eval pass is still there, on the step
-    that scored it. The flat search deliberately stops before them — six `iia`
-    in one document would make every lookup ambiguous — so they are reached by
-    saying where."""
+def test_the_fit_records_what_comes_home_and_nothing_else(fitted):
+    """A fit is not a black box that emits two curves: its held-out pass is
+    still there, on the step that scored it, reached by saying where. Its
+    updates record nothing — their scores are the loss curve — because a
+    per-update record was a promise only an in-process run could keep: what
+    a server sends home stops at the eval pass (`plan.children`)."""
+    from causalab_mini.plan import plan as plan_module
+
     fit = fitted.step("fit", plan.Fit)
-    assert sorted(fit.epochs[0][0].results) == ["ce", "iia"]
+    assert all(update.results == {} for epoch in fit.epochs for update in epoch)
     assert sorted(fit.evaluation.results) == ["ce", "iia"]
+    # so what is on the plan is exactly what travels
+    home = plan_module.results_of(fitted)
+    assert sorted(home["fit/eval"]) == ["ce", "iia"] and "train/loss" in home["fit"]
     assert torch.equal(
         fitted.result("iia"), fitted.step("observe", plan.Observe).results["iia"]
     )

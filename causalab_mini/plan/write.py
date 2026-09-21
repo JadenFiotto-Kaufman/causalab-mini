@@ -33,6 +33,7 @@ def write(step: Step, out_dir: str | Path) -> list[Path]:
     folder would say otherwise.
     """
     out = Path(out_dir)
+    _check_places(step, out)
     out.mkdir(parents=True, exist_ok=True)
     written = [_file(step, save, out) for save in step.saves]
     if isinstance(step, Plan):
@@ -45,6 +46,40 @@ def write(step: Step, out_dir: str | Path) -> list[Path]:
     for name, child in children(step):
         written.extend(write(child, out / name if isinstance(child, Plan) else out))
     return written
+
+
+def _places(step: Step, out: Path) -> list[tuple[Path, str]]:
+    """Every file this subtree will write, with what writes it."""
+    found = [((out / save.file_path).resolve(), f"the save of {save.value!r}") for save in step.saves]
+    if isinstance(step, Plan):
+        if step.source is not None:
+            found.append(((out / "document.json").resolve(), "the run's own document.json"))
+        if step.provenance:
+            found.append(((out / "run.json").resolve(), "the run's own run.json"))
+    for name, child in children(step):
+        found.extend(_places(child, out / name if isinstance(child, Plan) else out))
+    return found
+
+
+def _check_places(step: Step, out: Path) -> None:
+    """Before anything is written: every file is inside the output directory,
+    and every place holds one thing. A document is data an agent wrote, so
+    `../` and `/abs` in a save are refused; and a save named `document.json`,
+    or two saves to one path, used to be the last writer silently winning."""
+    from .plan import PlanError
+
+    root, seen = out.resolve(), {}
+    for path, what in _places(step, out):
+        if not path.is_relative_to(root):
+            raise PlanError(
+                f"{what} resolves to {path}, outside the output directory {root}. "
+                "A save names a file inside --out: no leading '/', no '..'"
+            )
+        if path.is_dir():
+            raise PlanError(f"{what} names {path}, which is a directory")
+        if path in seen:
+            raise PlanError(f"two things in this run write {path}: {seen[path]} and {what}. One place holds one thing")
+        seen[path] = what
 
 
 def _json(path: Path, payload: object) -> Path:

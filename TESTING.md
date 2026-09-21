@@ -6,36 +6,36 @@ scripts are under `scratchpad/agents/{arch_a,arch_b,combos,authoring,robust}/`
 Status: `[ ]` open, `[x]` fixed with a pytest. Severity order within a batch.
 
 ## Batch 1 — silent wrong answers in the core
-- [ ] 1.1 A save resolves its metric from the FIRST intervention declaring that name, not the step's (`build._spec_saves`): wrong unit, wrong eligibility mask, shifted rows in the table; reverse case is a bare StopIteration in `write._file`.
-- [ ] 1.2 Hooks engine passes no `position_ids`: on a left-padded batch it runs a different forward from nnterp (GPT-2: 0.29 off on padded rows; RoPE hides it). Fix: mask-derived position_ids in `hooks.batch()` and generate.
-- [ ] 1.3 `renormalize` is a silent no-op when it and the write it follows are in different decode frames: `original` is per tap, and prompt-frame taps sort before step taps unconditionally.
-- [ ] 1.4 Under decode, a prompt-frame read does not see a `{"step":"all"}`/step-0 write at the same address (same root as 1.3).
-- [ ] 1.5 v2 accepts two absolute writes at one (site, overlapping pos, model); last wins. The protocol format refuses. Lift the check.
-- [ ] 1.6 Sweep labels are not injective: duplicate values / colliding axes silently drop points (4096 -> 16). Refuse duplicate labels. Also sanitise `/` in labels.
-- [ ] 1.7 `<model>.generated` is keyed by model only: two forwards of one model (base, counterfactual) collide, alphabetically-last input wins. Key by (model, input) or refuse.
-- [ ] 1.8 Saving `original.generated` when no read names `original`: validate+explain pass, KeyError at write time after all the GPU work.
-- [ ] 1.9 A metric/output/read named `*.generated` is overwritten by the generated ids. Reserve the suffix.
-- [ ] 1.10 pydantic lax mode: `"pos": true` means position 1; `"pos": "-1"`, `"layers": [true]`, `"decode": "3"` coerced. `strict=True` on `Node` (keep int->float for params).
-- [ ] 1.11 An output (`reduce: pca` etc.) bundle carries no identity stamp, and an empty stamp means NO checks: a basis loads at any layer/component/model. Stamp outputs; refuse unstamped bundles (the repo's own pca/sae artifacts are unstamped) unless explicitly allowed.
-- [ ] 1.12 `_identity` omits the site's `heads`/`units`: a rotation fitted at head 1 loads at head 2.
-- [ ] 1.13 `{"column": c}`: first substring match when the text occurs twice; matches inside words; empty value resolves to the first token instead of an excluded row.
-- [ ] 1.14 A metric may bind to a read that is not vocabulary-shaped (mlp_activation, units/heads on lm_head, a featurized read): IndexError on tiny models, silently a neuron's activation labelled a logit on a real one.
-- [ ] 1.15 A fit's per-update results never come home from a real server (`children()` stops at eval); `remote="local"` cannot show it and a test pins the lossy set. Decide: ship them or stop promising them.
+- [x] 1.1 A save resolves its metric from the FIRST intervention declaring that name, not the step's (`build._spec_saves`): wrong unit, wrong eligibility mask, shifted rows in the table; reverse case is a bare StopIteration in `write._file`.
+- [x] 1.2 Hooks engine passes no `position_ids`: on a left-padded batch it runs a different forward from nnterp (GPT-2: 0.29 off on padded rows; RoPE hides it). Fix: mask-derived position_ids in `hooks.batch()` and generate.
+- [x] 1.3 `renormalize` is a silent no-op when it and the write it follows are in different decode frames: `original` is per tap, and prompt-frame taps sort before step taps unconditionally.
+- [x] 1.4 Under decode, a prompt-frame read does not see a `{"step":"all"}`/step-0 write at the same address (same root as 1.3).
+- [x] 1.5 v2 accepts two absolute writes at one (site, overlapping pos, model); last wins. The protocol format refuses. Lift the check.
+- [x] 1.6 Sweep labels are not injective: duplicate values / colliding axes silently drop points (4096 -> 16). Refuse duplicate labels. Also sanitise `/` in labels.
+- [x] 1.7 `<model>.generated` is keyed by model only: two forwards of one model (base, counterfactual) collide, alphabetically-last input wins. Key by (model, input) or refuse.
+- [x] 1.8 Saving `original.generated` when no read names `original`: validate+explain pass, KeyError at write time after all the GPU work.
+- [x] 1.9 A metric/output/read named `*.generated` is overwritten by the generated ids. Reserve the suffix.
+- [x] 1.10 pydantic lax mode: `"pos": true` means position 1; `"pos": "-1"`, `"layers": [true]`, `"decode": "3"` coerced. `strict=True` on `Node` (keep int->float for params).
+- [x] 1.11 An output (`reduce: pca` etc.) bundle carries no identity stamp, and an empty stamp means NO checks: a basis loads at any layer/component/model. Stamp outputs; refuse unstamped bundles (the repo's own pca/sae artifacts are unstamped) unless explicitly allowed.
+- [x] 1.12 `_identity` omits the site's `heads`/`units`: a rotation fitted at head 1 loads at head 2.
+- [x] 1.13 `{"column": c}`: first substring match when the text occurs twice; matches inside words; empty value resolves to the first token instead of an excluded row.
+- [x] 1.14 A metric may bind to a read that is not vocabulary-shaped (mlp_activation, units/heads on lm_head, a featurized read): IndexError on tiny models, silently a neuron's activation labelled a logit on a real one.
+- [x] 1.15 A fit's per-update results never come home from a real server (`children()` stops at eval); `remote="local"` cannot show it and a test pins the lossy set. Decide: ship them or stop promising them.
 
 ## Batch 2 — crashes and data loss in the core
-- [ ] 2.1 `gaussian` has never worked from a document: `params: dict[str, float]` coerces seed to 7.0; `manual_seed` refuses a float.
-- [ ] 2.2 A write's `features` bound uses the component's full width, ignoring the site's heads/units -> IndexError in the trace.
-- [ ] 2.3 Operands are never moved to the write's device: `add_scaled`/`lerp`/`{"ref"}` die under `device_map="auto"`; `swap` survives by accident.
-- [ ] 2.4 A `weights` save to a path not ending `.safetensors` silently writes `[]` (exit 0). A metric saved to `.safetensors` loses its table columns. Make the extension contract two-way and refuse.
-- [ ] 2.5 A fit cannot save its own `train/loss` / `train/eval`: validate advertises them, `_spec_saves` raises StopIteration.
-- [ ] 2.6 `save.file_path` escapes `--out` (`../`, absolute); dataset refs escape `--data-root`. Contain both.
-- [ ] 2.7 A save silently overwrites document.json / run.json / another save. Refuse collisions.
-- [ ] 2.8 Sweeps have no size guard: `{"range":[0,1e9]}` took a process past 110 GB. MAX_POINTS before any deepcopy.
-- [ ] 2.9 Ragged read empty on every row -> float index tensor IndexError; refuse at compile (misspelt column).
-- [ ] 2.10 Under decode a multi-position lm_head read silently collapses to one position. Refuse.
-- [ ] 2.11 Raw tracebacks: intervened model named `original`; `counterfactual_inputs[3]` out of range; missing/empty dataset; `--batch-size -1` (KeyError) / `0` (ignored); `{"span":"ab"}` TypeError; `{"all": false}` means all; `{"last":0}`, `{"span":[3,1]}` pass validate; save path is a directory.
-- [ ] 2.12 Nonsense accepted: `steps: {}`; a model with `writes: []`; `scale: Infinity`; duplicate example_ids; duplicate JSON keys; stale files in a reused `--out`.
-- [ ] 2.13 A missing/misspelt `steps` reroutes a v2 document to the protocol parser ("missing top-level group 'data'"). Route on `protocol_version`.
+- [x] 2.1 `gaussian` has never worked from a document: `params: dict[str, float]` coerces seed to 7.0; `manual_seed` refuses a float.
+- [x] 2.2 A write's `features` bound uses the component's full width, ignoring the site's heads/units -> IndexError in the trace.
+- [x] 2.3 Operands are never moved to the write's device: `add_scaled`/`lerp`/`{"ref"}` die under `device_map="auto"`; `swap` survives by accident.
+- [x] 2.4 A `weights` save to a path not ending `.safetensors` silently writes `[]` (exit 0). A metric saved to `.safetensors` loses its table columns. Make the extension contract two-way and refuse.
+- [x] 2.5 A fit cannot save its own `train/loss` / `train/eval`: validate advertises them, `_spec_saves` raises StopIteration.
+- [x] 2.6 `save.file_path` escapes `--out` (`../`, absolute); dataset refs escape `--data-root`. Contain both.
+- [x] 2.7 A save silently overwrites document.json / run.json / another save. Refuse collisions.
+- [x] 2.8 Sweeps have no size guard: `{"range":[0,1e9]}` took a process past 110 GB. MAX_POINTS before any deepcopy.
+- [x] 2.9 Ragged read empty on every row -> float index tensor IndexError; refuse at compile (misspelt column).
+- [x] 2.10 Under decode a multi-position lm_head read silently collapses to one position. Refuse.
+- [x] 2.11 (all but `save path is a directory` now refused too) Raw tracebacks: intervened model named `original`; `counterfactual_inputs[3]` out of range; missing/empty dataset; `--batch-size -1` (KeyError) / `0` (ignored); `{"span":"ab"}` TypeError; `{"all": false}` means all; `{"last":0}`, `{"span":[3,1]}` pass validate; save path is a directory.
+- [~] 2.12 (done: `steps: {}`, Infinity, duplicate example_ids, duplicate JSON keys. Kept by design: a model with `writes: []` is the clean control. OPEN: stale files in a reused `--out`) Nonsense accepted: `steps: {}`; a model with `writes: []`; `scale: Infinity`; duplicate example_ids; duplicate JSON keys; stale files in a reused `--out`.
+- [x] 2.13 A missing/misspelt `steps` reroutes a v2 document to the protocol parser ("missing top-level group 'data'"). Route on `protocol_version`.
 - [ ] 2.14 Protocol format: 24% of mutations are raw KeyError/AttributeError (`document.py` indexes `raw[...]` at ~30 sites). `_need(raw, key, where)`.
 
 ## Batch 3 — architectures
@@ -63,8 +63,8 @@ llama, gpt2, qwen3 (trl, head_dim 128), gemma2 (trl), gemma3_text, phi, phi3, gp
 - [ ] 4.4 `validate` misses 10 classes `explain`/`run` catch; 4 need no model, 3 need only `--data-root`. Add a data pass; document what it does not check.
 - [ ] 4.5 `model`: report resolved revision sha, num_heads/head_dim per head component, and only truly-resolving components (3.2). New verbs: `guide` (draft in the authoring report), `template <kind>`, `positions <key> <text>`, `tokens --data --column`, `run --dry-run`, `--set path=value`.
 - [ ] 4.6 `--json explain` returns a string; return the plan tree as data.
-- [ ] 4.7 `produced_by` is "" on every v2 table; `provenance.document_digest` is never called. run.json lacks device_map, requested dtype, attn_implementation, seed, data digests. Safetensors slot is always named `weight`.
-- [ ] 4.8 Every step must give rows for every role, even ones its intervention never reads.
+- [~] 4.7 (done: `produced_by`. OPEN: the run.json fields, the safetensors slot name) `produced_by` is "" on every v2 table; `provenance.document_digest` is never called. run.json lacks device_map, requested dtype, attn_implementation, seed, data digests. Safetensors slot is always named `weight`.
+- [x] 4.8 Every step must give rows for every role, even ones its intervention never reads.
 
 ## Batch 5 — scale
 - [ ] 5.1 A loaded featurizer's bytes are duplicated per sweep point and re-read per point (real SAE: 6.4 GB plan). Share one blob. `plan.source` ships per point though the server never reads it.
