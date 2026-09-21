@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from ..shapes import Positions, TokenRows
+from ..shapes import Indices, Positions, TokenRows
 
 
 class EncodingError(ValueError):
@@ -28,8 +28,8 @@ class Batch:
 
     input_ids: TokenRows
     attention_mask: TokenRows
-    starts: Positions
-    ends: Positions
+    starts: Indices
+    ends: Indices
 
 
 def encode(tokenizer: Any, texts: list[str]) -> Batch:
@@ -48,19 +48,61 @@ def encode(tokenizer: Any, texts: list[str]) -> Batch:
     return Batch(input_ids, mask, tuple(starts), tuple(ends))
 
 
-def positions(batch: Batch, pos: int) -> Positions:
-    """One absolute index into the padded sequence, per row.
+def positions(batch: Batch, pos: Any) -> Positions:
+    """A window of absolute indices into the padded sequence, per row.
 
-    Negative counts from the end of the row's content, non-negative from its
-    start — so `-1` is the last real token whichever side the padding is on.
+    Every form is relative to the row's *content*, so it means the same thing
+    whichever side the padding is on. Negative counts from the end.
+
+        -1 / 3               one position: the unit window
+        {"index": i}         the same, spelled out
+        {"last": n}          the last n content tokens
+        {"span": [a, b]}     content-relative, half-open, negatives allowed
+
+    Every row gets a window of the same width — the forms above cannot make
+    one otherwise — and that is what keeps a read a rectangle. `{"all":
+    true}` would not, and is refused here by name until reads can be ragged.
     """
     resolved = []
     for start, end in zip(batch.starts, batch.ends):
-        index = end + pos if pos < 0 else start + pos
-        if not start <= index < end:
-            raise EncodingError(f"position {pos} falls outside the row's content")
-        resolved.append(index)
+        length = end - start
+        lo, hi = _window(pos, length)
+        if not 0 <= lo < hi <= length:
+            raise EncodingError(
+                f"position {pos!r} falls outside the row's content ({length} tokens)"
+            )
+        resolved.append(tuple(range(start + lo, start + hi)))
     return tuple(resolved)
+
+
+def width_of(pos: Any) -> int:
+    """How many positions a form names — knowable without a row, which is
+    what lets the compiler check a write against its operand."""
+    lo, hi = _window(pos, 1 << 30)
+    return hi - lo
+
+
+def _window(pos: Any, length: int) -> tuple[int, int]:
+    """The half-open content-relative window a form names, on a row of
+    `length` tokens."""
+    if isinstance(pos, bool) or not isinstance(pos, (int, dict)):
+        raise EncodingError(f"position {pos!r}: not a form this slice runs")
+    if isinstance(pos, int):
+        index = length + pos if pos < 0 else pos
+        return index, index + 1
+    if set(pos) == {"index"}:
+        return _window(pos["index"], length)
+    if set(pos) == {"last"}:
+        return length - pos["last"], length
+    if set(pos) == {"span"}:
+        a, b = pos["span"]
+        return (length + a if a < 0 else a), (length + b if b < 0 else b)
+    if set(pos) == {"all"}:
+        raise EncodingError(
+            "{'all': true} is a window whose width varies by row; ragged reads are "
+            "not implemented — use {'span': [a, b]} or {'last': n}"
+        )
+    raise EncodingError(f"position {pos!r}: not a form this slice runs")
 
 
 def token_id(tokenizer: Any, text: str, token_form: str) -> int:

@@ -82,19 +82,21 @@ MECHANISMS: dict[str, Mechanism] = {"swap": swap}
 
 
 def gather(tensor: Any, positions: Positions, seq_axis: int = 1) -> Any:
-    """One position per row, with the sequence axis dropped: (batch, seq, width)
-    -> (batch, width). `seq_axis` is which axis the sequence runs along — 1 at a
-    module boundary, 2 inside attention, where a tensor is (batch, head, seq,
-    head_dim). Which one it is is a fact about the address, not about the
-    tensor, so it is passed in."""
-    rows = torch.arange(tensor.shape[0], device=tensor.device)
-    index = torch.as_tensor(positions, device=tensor.device)
+    """A window per row: (batch, seq, width) -> (batch, w, width). The unit
+    window is w=1, and a metric squeezes it. `seq_axis` is which axis the
+    sequence runs along — 1 at a module boundary, 2 inside attention, where a
+    tensor is (batch, head, seq, head_dim). Which one it is is a fact about
+    the address, not about the tensor, so it is passed in."""
+    rows = torch.arange(tensor.shape[0], device=tensor.device)[:, None]
+    index = torch.as_tensor(positions, device=tensor.device)  # (batch, w)
     return tensor.movedim(seq_axis, 1)[rows, index]
 
 
 def scatter(tensor: Any, positions: Positions, values: Any, seq_axis: int = 1) -> Any:
-    """A copy of `tensor` with one position per row replaced by `values`."""
-    rows = torch.arange(tensor.shape[0], device=tensor.device)
+    """A copy of `tensor` with each row's window replaced by `values`,
+    which is (batch, w, width) or anything that broadcasts to it — a
+    published (w, width) mean, say."""
+    rows = torch.arange(tensor.shape[0], device=tensor.device)[:, None]
     index = torch.as_tensor(positions, device=tensor.device)
     out = tensor.clone()
     out.movedim(seq_axis, 1)[rows, index] = values.to(out.dtype)  # a view of `out`

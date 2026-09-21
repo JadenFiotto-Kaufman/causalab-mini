@@ -81,10 +81,11 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
         # Declaring a featurizer is what builds it; the document does not
         # spell out a step whose whole content would be the declaration.
         steps["featurizers"] = Featurizers(specs=featurizers)
-    #: An unreduced output is (rows, width), and a write that swaps it in
-    #: needs the same rows. The compiler knows both row counts; the block
-    #: would only find out from a shape error.
+    #: An unreduced output is (rows, w, width), and a write that swaps it in
+    #: needs the same rows and the same window. The compiler knows all of it;
+    #: the block would only find out from a shape error.
     output_rows: dict[str, int | None] = {}
+    output_width: dict[str, int] = {}
     for name, step in spec.steps.items():
         kind = type(step).__name__
         experiment = (
@@ -103,6 +104,13 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
                             f"{write.operand.ref!r}, which has {have} rows, over {count} "
                             "rows; reduce the output or run over the same rows"
                         )
+                    want = encoding.width_of(write.pos)
+                    if output_width[write.operand.ref] != want:
+                        raise PlanError(
+                            f"step {name!r}: write {write_name!r} covers {want} "
+                            f"position(s) but {write.operand.ref!r} was read over "
+                            f"{output_width[write.operand.ref]}; the windows must match"
+                        )
         if kind == "Observe":
             assert experiment is not None
             rows = table(step.rows)
@@ -112,6 +120,7 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
             )
             for out in outputs:
                 output_rows[out.name] = None if out.reduce == "mean" else len(rows["base"])
+                output_width[out.name] = encoding.width_of(experiment.reads[out.read].pos)
             steps[name] = replace(
                 _pass(experiment, rows, addresses, engine.tokenizer),
                 outputs=outputs,

@@ -74,7 +74,7 @@ def test_a_swap_lands_the_source_read_bit_for_bit(model, minimal_plan):
             ).clone()
             landed["source"] = v_cf
 
-    assert landed["after"].shape == (4, model.hidden_size)
+    assert landed["after"].shape == (4, 1, model.hidden_size)
     assert torch.equal(landed["after"], landed["source"])
 
 
@@ -123,7 +123,7 @@ def test_a_write_touches_only_the_position_it_declares(model, minimal_plan):
     source, patched = minimal_plan.step("observe", plan.Observe).forwards
     tap = patched.taps[0]
     write = tap.writes[0]
-    first_token = (0, 2, 0, 2)  # the content start of each row, left-padded
+    first_token = ((0,), (2,), (0,), (2,))  # the content start of each row, left-padded
 
     with model.session():
         seen = nnsight.save({})

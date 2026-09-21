@@ -313,7 +313,14 @@ Recorded so they are not rediscovered.
    `documents/v2/mean_ablation.json` is the proof: three steps, three
    experiments, a mean that crosses them without touching disk. Logit lens
    still needs the `view: "logits"` read (§5).
-4. **D, windows first.** Then ragged, with eligibility.
+4. **D, windows first** — landed 2026-09-21. A resolved position is a
+   window per row, `((10,), (10,))` for the unit case, so a read is always
+   `(rows, w, width)`; `{"last": n}` and `{"span": [a, b]}` join the int
+   form; a metric reads the unit window and the compiler refuses wider; a
+   write and its operand must cover the same width. `documents/v2/
+   window_patch.json` swaps three tokens in one write and equals the
+   protocol's three-write document to the bit. **Ragged is next**, with
+   eligibility: `{"all": true}` and per-row variables, refused by name today.
 5. **Vocabulary throughout**, in whatever order the documents being written
    demand.
 6. **E.**

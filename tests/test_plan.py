@@ -123,8 +123,8 @@ def test_positions_resolve_to_the_last_real_token_of_each_row(model):
     assert [len(row) for row in batch.input_ids] == [11, 11]
     assert batch.starts == (0, 2) and batch.ends == (11, 11)
 
-    assert encoding.positions(batch, -1) == (10, 10)  # the last real token
-    assert encoding.positions(batch, 0) == (0, 2)  # the first real token of each row
+    assert encoding.positions(batch, -1) == ((10,), (10,))  # the last real token
+    assert encoding.positions(batch, 0) == ((0,), (2,))  # the first real token of each row
     with pytest.raises(encoding.EncodingError):
         encoding.positions(batch, -12)
 

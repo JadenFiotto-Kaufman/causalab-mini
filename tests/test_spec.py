@@ -270,7 +270,7 @@ def test_mean_ablation_is_three_steps_and_the_mean_never_needs_a_file(
 
     harvest = executed.step("harvest", plan.Observe)
     assert [o.name for o in harvest.outputs] == ["mean"]
-    assert tuple(harvest.results["mean"].shape) == (16,)  # rows averaged away
+    assert tuple(harvest.results["mean"].shape) == (1, 16)  # rows averaged away, the window kept
 
     clean = executed.step("clean", plan.Observe).results["logit_diff"]
     ablated = executed.step("ablated", plan.Observe).results["logit_diff"]

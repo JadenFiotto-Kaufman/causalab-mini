@@ -7,8 +7,15 @@ checker attached; nothing here has a runtime effect.
 
 from __future__ import annotations
 
-#: One absolute index into the padded sequence, per row of a batch.
-Positions = tuple[int, ...]
+#: A window of absolute indices into the padded sequence, per row of a batch.
+#: `((10,), (10,))` is one position per row — the unit window, which is what a
+#: metric reads. `((8, 9, 10), (8, 9, 10))` is a three-token window. Every row's
+#: window has the same width today; a ragged one is the same type with that
+#: rule dropped, which is why the type is already per row.
+Positions = tuple[tuple[int, ...], ...]
+
+#: One integer per row: a row's content start, a row's content end.
+Indices = tuple[int, ...]
 
 #: One vocabulary id, per row of a batch — what a metric column resolved to.
 TokenIds = tuple[int, ...]

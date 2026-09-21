@@ -98,8 +98,10 @@ def observe(engine: Any, step: Observe, state: State) -> dict[str, Any]:
     values: dict[str, Any] = dict(state.outputs)
     for forward in step.forwards:
         engine.forward(forward, values, state.featurizers)
+    # A metric reads one position per row — the compiler refused anything
+    # else — so its (rows, 1, vocab) is (rows, vocab) with the unit window off.
     scored = {
-        metric.name: metrics.compute(metric.kind, values[metric.of], metric.ids)
+        metric.name: metrics.compute(metric.kind, values[metric.of][:, 0], metric.ids)
         for metric in step.metrics
     }
     step.results.update({name: value.detach().cpu() for name, value in scored.items()})

@@ -106,7 +106,7 @@ def test_the_points_differ_in_the_swept_field_and_nothing_else(swept_plan):
     # width of 11 here, so -1/-2/-3 are the absolute indices 10/9/8 — which is
     # the point of resolving a position on the client, against the padding the
     # tokenizer actually produced.
-    assert positions == [(10,) * 4, (9,) * 4, (8,) * 4]
+    assert positions == [((10,),) * 4, ((9,),) * 4, ((8,),) * 4]
     reads = {
         point.step("observe", plan.Observe).forwards[0].taps[0].reads[0].positions
         for point in swept_plan.steps.values()

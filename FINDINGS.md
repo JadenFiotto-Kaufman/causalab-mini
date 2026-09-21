@@ -863,6 +863,21 @@ The reason this matters beyond one document: **cross-engine bit-parity is a
 property of one write, not of writing.** A suite that only ever wrote once
 would have reported exact agreement and been believed.
 
+**Sharpened 2026-09-21, once windows existed.** `documents/v2/window_patch.json`
+replaces the same three positions in *one* write, and diverges across
+engines by exactly the same 1.49e-08 on the same one row; the single-position
+document is exact. Measured side by side:
+
+| document | writes | positions replaced | max diff |
+|---|---|---|---|
+| `v2/patching.json` | 1 | 1 | 0 |
+| `v2/window_patch.json` | 1 | 3 | 1.49e-08 |
+| `multi_position_patch_cpu.json` | 3 | 3 | 1.49e-08 |
+
+So it is about **how many positions are replaced at an address**, not how
+many writes do it, and it enters after the replacement is installed. The two
+multi-position documents agree with *each other* to the bit on one engine.
+
 
 ## 9. nnsight mounts `.save()` on `object`, and pydantic notices
 

@@ -67,10 +67,13 @@ def test_a_subspace_swap_takes_the_subspace_and_keeps_the_complement():
     subspace = rotation(k=4)
     basis = subspace.basis
     base = torch.randn(3, 5, 16, generator=torch.Generator().manual_seed(1))
-    counterfactual = torch.randn(3, 16, generator=torch.Generator().manual_seed(2))
+    # a window per row: (rows, w, width), here the unit window
+    counterfactual = torch.randn(3, 1, 16, generator=torch.Generator().manual_seed(2))
+    at = ((4,), (4,), (4,))
+    first = ((0,), (0,), (0,))
 
-    out = ops.apply_write(base, (4, 4, 4), counterfactual @ basis, featurizer=subspace)
-    written, before = ops.gather(out, (4, 4, 4)), ops.gather(base, (4, 4, 4))
+    out = ops.apply_write(base, at, counterfactual @ basis, featurizer=subspace)
+    written, before = ops.gather(out, at), ops.gather(base, at)
 
     # in the subspace: the counterfactual's coordinates, not the base's.
     assert torch.allclose(written @ basis, counterfactual @ basis, atol=1e-5)
@@ -79,7 +82,7 @@ def test_a_subspace_swap_takes_the_subspace_and_keeps_the_complement():
     complement = lambda x: x - (x @ basis) @ basis.T
     assert torch.allclose(complement(written), complement(before), atol=1e-5)
     # and every other position of the tensor is untouched, bit for bit.
-    assert torch.equal(ops.gather(out, (0, 0, 0)), ops.gather(base, (0, 0, 0)))
+    assert torch.equal(ops.gather(out, first), ops.gather(base, first))
 
 
 def test_a_full_width_subspace_swap_is_a_full_swap():
@@ -87,13 +90,14 @@ def test_a_full_width_subspace_swap_is_a_full_swap():
     `inverse` returns the operand and DAS's write *is* activation patching's."""
     subspace = rotation(k=16)
     base = torch.randn(3, 5, 16, generator=torch.Generator().manual_seed(1))
-    counterfactual = torch.randn(3, 16, generator=torch.Generator().manual_seed(2))
+    counterfactual = torch.randn(3, 1, 16, generator=torch.Generator().manual_seed(2))
+    at = ((4,), (4,), (4,))
 
     rotated = ops.apply_write(
-        base, (4, 4, 4), counterfactual @ subspace.basis, featurizer=subspace
+        base, at, counterfactual @ subspace.basis, featurizer=subspace
     )
-    plain = ops.apply_write(base, (4, 4, 4), counterfactual)
-    assert torch.allclose(ops.gather(rotated, (4, 4, 4)), ops.gather(plain, (4, 4, 4)), atol=1e-5)
+    plain = ops.apply_write(base, at, counterfactual)
+    assert torch.allclose(ops.gather(rotated, at), ops.gather(plain, at), atol=1e-5)
 
 
 def test_the_read_and_the_write_are_one_parameter_set():

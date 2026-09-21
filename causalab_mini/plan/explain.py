@@ -11,6 +11,13 @@ from __future__ import annotations
 from .plan import Featurizers, Fit, Observe, Plan, Step, Weights
 
 
+def _pos(positions: tuple[tuple[int, ...], ...]) -> str:
+    """`(10, 10)` for unit windows, `[8:11], [8:11]` for wider ones."""
+    if all(len(window) == 1 for window in positions):
+        return str(tuple(window[0] for window in positions))
+    return ", ".join(f"[{w[0]}:{w[-1] + 1}]" for w in positions)
+
+
 def explain(step: Step, name: str = "<root>") -> str:
     return "\n".join(_lines(step, name, 0))
 
@@ -50,12 +57,12 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
                 where = address.component + (f"[{address.layer}]" if address.layer is not None else "")
                 for write in tap.writes:
                     out.append(
-                        f"{pad}      write {write.name!r} at {where} pos={write.positions} "
+                        f"{pad}      write {write.name!r} at {where} pos={_pos(write.positions)} "
                         f"{write.mechanism}({write.operand}) via {write.featurizer!r}"
                     )
                 for read in tap.reads:
                     out.append(
-                        f"{pad}      read  {read.name!r} at {where} pos={read.positions} via {read.featurizer!r}"
+                        f"{pad}      read  {read.name!r} at {where} pos={_pos(read.positions)} via {read.featurizer!r}"
                     )
     elif isinstance(step, Weights):
         out.append(f"{pad}{name}: Weights  names={list(step.names)}{tail}")

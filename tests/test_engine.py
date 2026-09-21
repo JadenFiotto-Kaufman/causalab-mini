@@ -46,7 +46,7 @@ class FakeEngine(Engine):
                 # engine would take this off a model; nothing downstream can
                 # tell the difference.
                 values[read.name] = torch.arange(rows * self.VOCAB, dtype=torch.float32).reshape(
-                    rows, self.VOCAB
+                    rows, 1, self.VOCAB  # a unit window per row, as a real read is
                 )
 
 

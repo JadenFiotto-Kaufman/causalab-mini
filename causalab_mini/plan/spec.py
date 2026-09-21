@@ -34,6 +34,8 @@ from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ..data import encoding
+
 class Node(BaseModel):
     """Every node refuses a key it does not know, and says where it was."""
 
@@ -82,12 +84,22 @@ class Featurizer(Node):
     seed: int | None = None
 
 
+#: A position form: one index, or a window of the same width on every row.
+Position = int | dict[str, Any]
+
+
 class Read(Node):
     site: str
-    pos: int
+    pos: Position
     model: str = "original"
     input: str
     featurizer: str = "identity"
+
+    @field_validator("pos")
+    @classmethod
+    def _a_known_form(cls, pos: Any) -> Any:
+        encoding.width_of(pos)  # refuses an unknown or ragged form by name
+        return pos
 
 
 class Reference(Node):
@@ -104,10 +116,16 @@ class Write(Node):
     what an earlier step output."""
 
     site: str
-    pos: int
+    pos: Position
     mechanism: Literal["swap"]
     operand: str | Reference
     featurizer: str = "identity"
+
+    @field_validator("pos")
+    @classmethod
+    def _a_known_form(cls, pos: Any) -> Any:
+        encoding.width_of(pos)
+        return pos
 
     @property
     def operand_name(self) -> str:
@@ -453,6 +471,20 @@ class Spec(Node):
                 metric.of in one.reads,
                 f"{where}: metric {name!r}: `of` must be a read name, got {metric.of!r}",
             )
+            _refuse(
+                encoding.width_of(one.reads[metric.of].pos) == 1,
+                f"{where}: metric {name!r} reads {metric.of!r}, a window of "
+                f"{encoding.width_of(one.reads[metric.of].pos)} positions; a metric "
+                "scores one position per row",
+            )
+        for name, write in one.writes.items():
+            if not isinstance(write.operand, Reference):
+                have, want = encoding.width_of(one.reads[write.operand].pos), encoding.width_of(write.pos)
+                _refuse(
+                    have == want,
+                    f"{where}: write {name!r} covers {want} position(s) but its operand "
+                    f"{write.operand!r} was read over {have}; the windows must match",
+                )
 
     def _check_order(self) -> None:
         """A trained featurizer may not be used before it is trained.

@@ -123,7 +123,7 @@ def test_a_swap_lands_the_source_read_bit_for_bit(hooks_engine, minimal_raw, dat
     hooks_engine.forward(source, values, featurizers)
     hooks_engine.forward(watched, values, featurizers)
 
-    assert values["landed"].shape == (4, hooks_engine.model.config.hidden_size)
+    assert values["landed"].shape == (4, 1, hooks_engine.model.config.hidden_size)
     assert torch.equal(values["landed"], values["v_cf"])
 
 

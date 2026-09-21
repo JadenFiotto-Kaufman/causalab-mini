@@ -118,7 +118,7 @@ def test_the_query_is_head_shaped_and_already_rotated(model_engine, model, data_
     rows, heads, seq, head_dim = whole.shape
     assert (rows, seq) == (4, len(source_forward.input_ids[0]))
     assert heads * head_dim == model.hidden_size
-    assert at_position.shape == (4, heads, head_dim)
+    assert at_position.shape == (4, 1, heads, head_dim)  # the unit window, kept
 
     # The same numbers, reshaped the way the forward reshapes them, before RoPE.
     before = projected.view(rows, seq, heads, head_dim).transpose(1, 2)
@@ -190,7 +190,7 @@ def test_only_the_declared_position_of_the_query_changes(model_engine, model, da
     source_forward, patched_forward = built.step("observe", plan.Observe).forwards
     tap = patched_forward.taps[0]
     write = tap.writes[0]
-    first_token = (0, 2, 0, 2)  # the content start of each row, left-padded
+    first_token = ((0,), (2,), (0,), (2,))  # the content start of each row, left-padded
 
     with model.session():
         seen = nnsight.save({})
