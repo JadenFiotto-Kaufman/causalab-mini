@@ -79,9 +79,16 @@ class WriteOp:
 
 @dataclass(frozen=True)
 class Tap:
+    """One place in one forward: an address, and — when the forward decodes —
+    which step. `None` is the prompt frame: the prefill, with positions
+    resolved against the prompt. An integer is that decode step, at the one
+    position it processes. `"all"` is every step, and only a write may say
+    it: steering is a write at every step."""
+
     address: Address
     writes: tuple[WriteOp, ...]
     reads: tuple[ReadOp, ...]
+    step: int | str | None = None
 
 
 @dataclass(frozen=True)
@@ -91,6 +98,11 @@ class Forward:
     input_ids: TokenRows
     attention_mask: TokenRows
     taps: tuple[Tap, ...]
+    #: How many tokens to generate after the prompt. 0 is one forward pass;
+    #: N is the prefill plus N decode steps, greedy, EOS held off so the
+    #: bound holds, and the generated ids come back as a value named
+    #: `<forward>.generated`.
+    decode: int = 0
 
 
 @dataclass(frozen=True)

@@ -337,7 +337,15 @@ Recorded so they are not rediscovered.
    as one document, one point per layer. The lens rounds differently from
    the head by one ulp, FINDINGS §10. Remaining vocabulary: `pca` (needs
    the artifact round trip), the rest of the 56 components, gates.
-6. **E.**
+6. **E** — landed 2026-09-21, and it did **not** need an eighth engine
+   member. `decode: N` on an intervention gives every forward a budget; a
+   position may be `{"step": k}`, a write `{"step": "all"}`; `forward` runs
+   a generate trace (nnsight) or `model.generate` with a step counter
+   (hooks) when the budget is nonzero. Taps carry a frame, and the two
+   frame rules — which taps apply at which step, and where a position lands
+   in a one-position tensor — are eight lines in `ops/intervene.py` shared
+   by both engines. `documents/v2/generate_probe.json` sweeps the step.
+   FINDINGS §12.
 
 The test of each item is the same one this project has used from the start:
 write the document first, see whether it needs anything beyond a new kind of

@@ -52,10 +52,12 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
         out.append(f"{pad}{name}: Observe  metrics={[m.name + '/' + m.kind for m in step.metrics]}{outputs}{tail}")
         for forward in step.forwards:
             rows, width = len(forward.input_ids), len(forward.input_ids[0]) if forward.input_ids else 0
-            out.append(f"{pad}    forward {forward.name!r} on {forward.input!r}  ({rows} rows x {width} tokens)")
+            decode = f"  decode={forward.decode}" if forward.decode else ""
+            out.append(f"{pad}    forward {forward.name!r} on {forward.input!r}  ({rows} rows x {width} tokens){decode}")
             for tap in forward.taps:
                 address = tap.address
                 where = address.component + (f"[{address.layer}]" if address.layer is not None else "")
+                where += "" if tap.step is None else f" @step {tap.step}"
                 for write in tap.writes:
                     args = [] if write.operand is None else [str(write.operand)]
                     args += [f"{k}={v}" for k, v in write.params.items()]

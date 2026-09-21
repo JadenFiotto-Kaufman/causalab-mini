@@ -128,9 +128,27 @@ class HooksEngine(Engine):
         is removed — a leaked hook would intervene on the *next* forward,
         which is a silently wrong number rather than an error.
         """
-        handles = [_install(self._names, tap, values, featurizers) for tap in forward.taps]
+        # The decode step, shared by every hook of this forward: a hook on
+        # the root fires once per pass and counts. None for a plain forward.
+        clock = {"step": 0 if forward.decode else None}
+        handles = [
+            _install(self._names, tap, values, featurizers, clock) for tap in forward.taps
+        ]
+        if forward.decode:
+            handles.append(self.model.register_forward_hook(lambda *_: _tick(clock)))
         try:
-            self.model(**batch(forward))
+            if not forward.decode:
+                self.model(**batch(forward))
+            else:
+                prompt = len(forward.input_ids[0])
+                ids = self.model.generate(
+                    **batch(forward),
+                    max_new_tokens=forward.decode,
+                    min_new_tokens=forward.decode,
+                    do_sample=False,
+                    pad_token_id=self._tokenizer.pad_token_id,
+                )
+                values[f"{forward.name}.generated"] = ids[:, prompt:].clone()
         finally:
             for handle in handles:
                 handle.remove()
@@ -144,18 +162,25 @@ def batch(forward: Forward) -> dict[str, Any]:
     }
 
 
-def _install(names: Any, tap: Tap, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
+def _tick(clock: dict[str, Any]) -> None:
+    """One more decode step has run."""
+    clock["step"] = int(clock["step"] or 0) + 1
+
+
+def _install(
+    names: Any, tap: Tap, values: dict[str, Any], featurizers: dict[str, Any], clock: dict[str, Any]
+) -> Any:
     """Hook one address, on the side it is addressed on."""
     module = tap.address.resolve(names)
     if tap.address.side == "output":
-        return module.register_forward_hook(intervene_at(tap, values, featurizers, names))
+        return module.register_forward_hook(intervene_at(tap, values, featurizers, names, clock))
     return module.register_forward_pre_hook(
-        intervene_before(tap, values, featurizers, names), with_kwargs=True
+        intervene_before(tap, values, featurizers, names, clock), with_kwargs=True
     )
 
 
 def intervene_before(
-    tap: Tap, values: dict[str, Any], featurizers: dict[str, Any], names: Any
+    tap: Tap, values: dict[str, Any], featurizers: dict[str, Any], names: Any, clock: dict[str, Any]
 ) -> Callable[[Any, Any, Any], Any]:
     """The same body, on the way *in*.
 
@@ -167,6 +192,8 @@ def intervene_before(
     """
 
     def hook(module: Any, args: Any, kwargs: Any) -> Any:
+        if not intervene.applies(tap.step, clock["step"]):
+            return None
         if args:
             activation, where = args[0], None
         else:
@@ -179,7 +206,7 @@ def intervene_before(
                 )
             where = tensors[0]
             activation = kwargs[where]
-        activation = _apply(tap, activation, values, featurizers, names)
+        activation = _apply(tap, activation, values, featurizers, names, clock["step"])
         if where is None:
             return (activation, *args[1:]), kwargs
         return args, {**kwargs, where: activation}
@@ -188,14 +215,14 @@ def intervene_before(
 
 
 def _apply(
-    tap: Tap, activation: Any, values: dict[str, Any], featurizers: dict[str, Any], names: Any
+    tap: Tap, activation: Any, values: dict[str, Any], featurizers: dict[str, Any], names: Any, step: int | None
 ) -> Any:
     """This address's writes, then its reads. A read in a model sees that
     model's writes, so at one address the writes go first."""
     for write in tap.writes:
         activation = intervene.apply_write(
             activation,
-            write.positions,
+            intervene.at_step(write.positions, activation, tap.address.seq_axis, tap.step, step),
             intervene.resolve_operand(values, write.operand),
             write.mechanism,
             featurizers[write.featurizer],
@@ -203,7 +230,11 @@ def _apply(
             write.params,
         )
     for read in tap.reads:
-        gathered = intervene.gather(activation, read.positions, tap.address.seq_axis)
+        gathered = intervene.gather(
+            activation,
+            intervene.at_step(read.positions, activation, tap.address.seq_axis, tap.step, step),
+            tap.address.seq_axis,
+        )
         if read.view == "logits":
             gathered = names.lm_head(names.ln_final(gathered))
         values[read.name] = featurizers[read.featurizer].featurize(gathered)[0].clone()
@@ -211,7 +242,7 @@ def _apply(
 
 
 def intervene_at(
-    tap: Tap, values: dict[str, Any], featurizers: dict[str, Any], names: Any
+    tap: Tap, values: dict[str, Any], featurizers: dict[str, Any], names: Any, clock: dict[str, Any]
 ) -> Callable[[Any, Any, Any], Any]:
     """The hook for one address: its writes, then its reads, on the way out.
 
@@ -228,8 +259,10 @@ def intervene_at(
     """
 
     def hook(module: Any, args: Any, output: Any) -> Any:
+        if not intervene.applies(tap.step, clock["step"]):
+            return None
         activation = output[0] if isinstance(output, tuple) else output
-        activation = _apply(tap, activation, values, featurizers, names)
+        activation = _apply(tap, activation, values, featurizers, names, clock["step"])
         return (activation, *output[1:]) if isinstance(output, tuple) else activation
 
     return hook

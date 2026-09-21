@@ -251,6 +251,10 @@ class Intervention(Node):
     writes: dict[str, Write] = Field(default_factory=dict)
     models: dict[str, IntervenedModel] = Field(default_factory=dict)
     metrics: dict[str, Metric] = Field(default_factory=dict)
+    #: Generate this many tokens after the prompt, greedily, on every
+    #: forward of this intervention. 0 is one forward pass. With it, a
+    #: position may be `{"step": k}` — the continuation frame.
+    decode: int = Field(default=0, ge=0)
 
 
 # --------------------------------------------------------------------- #
@@ -435,6 +439,10 @@ class Spec(Node):
                             f"(published so far: {sorted(published)})",
                         )
             produced = set(self.intervention_of(step).metrics) if isinstance(step, (Observe, Fit)) else set()
+            if isinstance(step, (Observe, Fit)) and self.intervention_of(step).decode:
+                one = self.intervention_of(step)
+                models = {"original"} | set(one.models)
+                produced |= {f"{model}.generated" for model in models}
             if isinstance(step, Observe):
                 for output_name, output in step.outputs.items():
                     _refuse(
@@ -532,6 +540,23 @@ class Spec(Node):
             _refuse(model.input in self.roles, f"{where}: model {name!r}: undeclared role")
             for write in model.writes:
                 _refuse(write in one.writes, f"{where}: model {name!r}: undeclared write {write!r}")
+        for name, read in one.reads.items():
+            step = encoding.step_of(read.pos)
+            if step is not None:
+                _refuse(step != "all", f"{where}: read {name!r}: a read is at one step; 'all' is for writes")
+                _refuse(one.decode > 0, f"{where}: read {name!r}: a step position needs `decode` > 0")
+                _refuse(
+                    isinstance(step, int) and step < one.decode,
+                    f"{where}: read {name!r}: step {step} of a {one.decode}-token decode",
+                )
+        for name, write in one.writes.items():
+            step = encoding.step_of(write.pos)
+            if step is not None:
+                _refuse(one.decode > 0, f"{where}: write {name!r}: a step position needs `decode` > 0")
+                _refuse(
+                    step == "all" or (isinstance(step, int) and step < one.decode),
+                    f"{where}: write {name!r}: step {step} of a {one.decode}-token decode",
+                )
         for name, metric in one.metrics.items():
             _refuse(
                 metric.of in one.reads,

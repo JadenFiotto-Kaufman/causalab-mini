@@ -90,6 +90,34 @@ def gaussian(f: Any, operand: Any, seed: int, scale: float = 1.0) -> Any:
     return f + scale * noise.to(f)
 
 
+def applies(frame: int | str | None, step: int | None) -> bool:
+    """Whether a tap in `frame` acts at decode `step` (None: a plain forward).
+    The prompt frame is the prefill, step 0; `"all"` is every step."""
+    if frame is None:
+        return step in (None, 0)
+    if frame == "all":
+        return step is not None
+    return step == frame
+
+
+def at_step(positions: Positions, tensor: Any, seq_axis: int, frame: int | str | None, step: int | None) -> Positions:
+    """Where a tap's positions land in *this* forward's tensor.
+
+    In the prompt frame at the prefill the plan's positions are right. Past
+    the prefill a forward sees one position, and so does the head at the
+    prefill under generation (transformers keeps only the last row of
+    logits) — both are the last index of whatever the sequence axis has,
+    which is what a step tap means anyway, and what a prompt-frame `-1` at
+    the head meant. A tensor with one position is one position; the plan's
+    index into the prompt cannot apply to it.
+    """
+    length = tensor.shape[seq_axis]
+    if frame is not None or (step is not None and length == 1):
+        last = length - 1
+        return tuple((last,) if window else () for window in positions)
+    return positions
+
+
 def resolve_operand(values: dict[str, Any], operand: Any) -> Any:
     """What a write acts with: a named value read earlier, a literal number
     (zero ablation is `0.0`), or nothing for a mechanism that takes none."""

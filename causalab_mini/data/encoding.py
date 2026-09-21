@@ -69,6 +69,9 @@ def positions(batch: Batch, pos: Any, column_texts: list[str] | None = None) -> 
         {"index": i}         the same, spelled out
         {"last": n}          the last n content tokens
         {"span": [a, b]}     content-relative, half-open, negatives allowed
+        {"step": k}          decode step k, at the one position it processes —
+                             the continuation frame; k=0 is the prefill's last
+                             prompt token. Needs a forward that decodes.
         {"all": true}        every content token — RAGGED: widths differ by row
         {"column": "c"}      the tokens of the row's column-`c` text, located
                              in the prompt — RAGGED, and a row whose text is
@@ -82,6 +85,11 @@ def positions(batch: Batch, pos: Any, column_texts: list[str] | None = None) -> 
     resolved = []
     for index, (start, end) in enumerate(zip(batch.starts, batch.ends)):
         length = end - start
+        if isinstance(pos, dict) and set(pos) == {"step"}:
+            # the last prompt token: right for the prefill, and for a decode
+            # step the engine takes the last position of whatever it sees
+            resolved.append((end - 1,))
+            continue
         if isinstance(pos, dict) and set(pos) == {"all"}:
             resolved.append(tuple(range(start, end)))
             continue
@@ -123,12 +131,22 @@ def is_ragged(pos: Any) -> bool:
     return isinstance(pos, dict) and (set(pos) == {"all"} or set(pos) == {"column"})
 
 
+def step_of(pos: Any) -> int | str | None:
+    """The decode step a form names, or None for the prompt frame."""
+    return pos["step"] if isinstance(pos, dict) and set(pos) == {"step"} else None
+
+
 def width_of(pos: Any) -> int | None:
     """How many positions a form names, knowable without a row — which is
     what lets the compiler check a write against its operand — or `None`
     for a ragged form, whose widths are only known once the rows are."""
     if is_ragged(pos):
         return None
+    if step_of(pos) is not None:
+        step = pos["step"]
+        if not (step == "all" or (isinstance(step, int) and not isinstance(step, bool) and step >= 0)):
+            raise EncodingError(f"position {pos!r}: a step is a non-negative integer, or 'all'")
+        return 1
     lo, hi = _window(pos, 1 << 30)
     return hi - lo
 

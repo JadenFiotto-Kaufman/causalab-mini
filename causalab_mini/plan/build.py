@@ -270,11 +270,12 @@ def _spec_saves(
     published output is a tensor and goes to a safetensors file as it is."""
     built = []
     for save in saves:
-        if save.value in outputs:
+        if save.value in outputs or save.value.endswith(".generated"):
+            # an output, or a decoding forward's generated ids: a tensor
             if not save.file_path.endswith(".safetensors"):
                 raise PlanError(
-                    f"save {save.value!r}: an output is a tensor, not a table; give it "
-                    f"a .safetensors path, not {save.file_path!r}"
+                    f"save {save.value!r}: a tensor, not a table; give it a "
+                    f".safetensors path, not {save.file_path!r}"
                 )
             built.append(SaveFile(file_path=save.file_path, value=save.value))
             continue
@@ -333,6 +334,7 @@ class _Experiment:
     writes: dict[str, Any]
     models: dict[str, Any]
     metrics: dict[str, Any]
+    decode: int = 0
 
     @classmethod
     def of_document(cls, document: Document) -> "_Experiment":
@@ -360,6 +362,7 @@ class _Experiment:
             },
             models=dict(intervention.models),
             metrics=dict(intervention.metrics),
+            decode=intervention.decode,
         )
 
 
@@ -737,11 +740,12 @@ def _forward(
             texts = [rows_module.field_text(row, pos["column"]) for row in rows]
         return encoding.positions(batch, pos, texts)
 
-    writes: dict[Address, list[WriteOp]] = {}
+    # a tap is one place: an address, and — when the forward decodes — a step
+    writes: dict[tuple[Address, Any], list[WriteOp]] = {}
     if name in experiment.models:
         for write_name in experiment.models[name].writes:
             spec = experiment.writes[write_name]
-            writes.setdefault(addresses[spec.site], []).append(
+            writes.setdefault((addresses[spec.site], encoding.step_of(spec.pos)), []).append(
                 WriteOp(
                     name=write_name,
                     positions=resolve(spec.pos),
@@ -751,11 +755,11 @@ def _forward(
                     params=dict(getattr(spec, "params", {})),
                 )
             )
-    reads: dict[Address, list[ReadOp]] = {}
+    reads: dict[tuple[Address, Any], list[ReadOp]] = {}
     for read_name, spec in experiment.reads.items():
         if (spec.model, spec.input) != (name, role):
             continue
-        reads.setdefault(addresses[spec.site], []).append(
+        reads.setdefault((addresses[spec.site], encoding.step_of(spec.pos)), []).append(
             ReadOp(
                 name=read_name,
                 positions=resolve(spec.pos),
@@ -765,14 +769,20 @@ def _forward(
         )
 
     taps = []
-    for tap_address in sorted(set(writes) | set(reads), key=lambda one: one.key):
+    # forward order within a step; the prompt frame (None) before any step
+    def order(place: tuple[Address, Any]) -> tuple[int, int, tuple[int, int, int]]:
+        address, step = place
+        return (0 if step is None else 1, -1 if step == "all" else (step if step is not None else -1), address.key)
+
+    for place in sorted(set(writes) | set(reads), key=order):
         taps.append(
             Tap(
-                address=tap_address,
+                address=place[0],
                 # A read in model M sees M's writes applied, upstream and at the
                 # same address — so at one address the writes go first.
-                writes=tuple(writes.get(tap_address, ())),
-                reads=tuple(reads.get(tap_address, ())),
+                writes=tuple(writes.get(place, ())),
+                reads=tuple(reads.get(place, ())),
+                step=place[1],
             )
         )
     return Forward(
@@ -781,5 +791,6 @@ def _forward(
         input_ids=batch.input_ids,
         attention_mask=batch.attention_mask,
         taps=tuple(taps),
+        decode=experiment.decode,
     )
 

@@ -1,0 +1,98 @@
+{
+  "header": {
+    "description": "Generation: the interchange at layer 0 of the prompt, then three greedy tokens, with the head read at each decode step \u2014 {'step': k} is the continuation frame, swept here so each step is a point. Does the patch, made once at the prefill, still move what the model says two tokens later? It reaches the continuation only through the cache. The generated ids come home as a result too."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "roles": {
+    "base": {
+      "field": "input"
+    },
+    "counterfactual": {
+      "field": "counterfactual_inputs[0]"
+    }
+  },
+  "sites": {
+    "target": {
+      "component": "block_output",
+      "layers": [
+        0
+      ]
+    },
+    "head": {
+      "component": "lm_head"
+    }
+  },
+  "interventions": {
+    "generate": {
+      "reads": {
+        "v_cf": {
+          "site": "target",
+          "pos": -1,
+          "model": "original",
+          "input": "counterfactual"
+        },
+        "logits": {
+          "site": "head",
+          "pos": {
+            "step": {
+              "sweep": [
+                0,
+                1,
+                2
+              ]
+            }
+          },
+          "model": "patched",
+          "input": "base"
+        }
+      },
+      "writes": {
+        "patch": {
+          "site": "target",
+          "pos": -1,
+          "mechanism": "swap",
+          "operand": "v_cf"
+        }
+      },
+      "models": {
+        "patched": {
+          "input": "base",
+          "writes": [
+            "patch"
+          ]
+        }
+      },
+      "metrics": {
+        "p_answer": {
+          "kind": "token_prob",
+          "of": "logits",
+          "token": "cf_answer"
+        }
+      },
+      "decode": 3
+    }
+  },
+  "steps": {
+    "score": {
+      "kind": "observe",
+      "rows": {
+        "base": "weekdays/train",
+        "counterfactual": "weekdays/train"
+      },
+      "saves": [
+        {
+          "value": "p_answer",
+          "file_path": "p_answer.json"
+        },
+        {
+          "value": "patched.generated",
+          "file_path": "generated.safetensors"
+        }
+      ]
+    }
+  }
+}

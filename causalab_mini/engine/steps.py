@@ -105,6 +105,11 @@ def observe(engine: Any, step: Observe, state: State) -> dict[str, Any]:
         for metric in step.metrics
     }
     step.results.update({name: value.detach().cpu() for name, value in scored.items()})
+    # a decoding forward leaves its generated ids in `values`; they are a
+    # result of the pass like a metric is
+    step.results.update(
+        {name: value.detach().cpu() for name, value in values.items() if name.endswith(".generated")}
+    )
     for output in step.outputs:
         tensor = values[output.read]
         if output.reduce == "mean":

@@ -100,8 +100,21 @@ class NNterpEngine(Engine):
         featurizers: dict[str, Any],
     ) -> None:
         model = self.model
-        with model.trace(batch(forward)):
-            apply_taps(model, forward, values, featurizers)
+        if not forward.decode:
+            with model.trace(batch(forward)):
+                apply_taps(model, forward, values, featurizers)
+            return
+        # The continuation frame: one generate trace, `tracer.iter` walking
+        # the steps. Prompt-frame taps apply at step 0, the prefill; a step's
+        # taps at that step; an `"all"` write at every step. Greedy, and EOS
+        # held off so the bound holds and the loop never outruns the run.
+        decode, prompt = forward.decode, len(forward.input_ids[0])
+        with model.generate(
+            batch(forward), max_new_tokens=decode, min_new_tokens=decode, do_sample=False
+        ) as tracer:
+            for step in tracer.iter[:decode]:
+                apply_taps(model, forward, values, featurizers, step)
+            values[f"{forward.name}.generated"] = tracer.result[:, prompt:].clone()
 
 
 def batch(forward: Forward) -> dict[str, Any]:
@@ -113,7 +126,11 @@ def batch(forward: Forward) -> dict[str, Any]:
 
 
 def apply_taps(
-    model: Any, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any]
+    model: Any,
+    forward: Forward,
+    values: dict[str, Any],
+    featurizers: dict[str, Any],
+    step: int | None = None,
 ) -> None:
     """One pass over the addresses of one forward, in forward order.
 
@@ -122,12 +139,19 @@ def apply_taps(
     featurizer is applied here too — `v_cf` is `Qᵀx`, not `x` — and it is the
     same object the write's `inverse` will use, which is what makes one
     featurizer name one parameter set.
+
+    `step` is None for a plain forward, and the decode step inside a
+    generate trace. A tap applies when its frame is this step: the prompt
+    frame at step 0 (or a plain forward), a step's own taps at that step,
+    an `"all"` write at every step.
     """
     for tap in forward.taps:
+        if not intervene.applies(tap.step, step):
+            continue
         for write_op in tap.writes:
             patched = intervene.apply_write(
                 read(model, tap.address),
-                write_op.positions,
+                intervene.at_step(write_op.positions, read(model, tap.address), tap.address.seq_axis, tap.step, step),
                 intervene.resolve_operand(values, write_op.operand),
                 write_op.mechanism,
                 featurizers[write_op.featurizer],
@@ -136,8 +160,11 @@ def apply_taps(
             )
             write(model, tap.address, patched)
         for read_op in tap.reads:
+            tensor = read(model, tap.address)
             gathered = intervene.gather(
-                read(model, tap.address), read_op.positions, tap.address.seq_axis
+                tensor,
+                intervene.at_step(read_op.positions, tensor, tap.address.seq_axis, tap.step, step),
+                tap.address.seq_axis,
             )
             if read_op.view == "logits":
                 # The logit lens: the residual pushed through the final norm and

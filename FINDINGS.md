@@ -975,3 +975,50 @@ correct.
 What did **not** need to change: `apply_write`. A ragged read gathers flat,
 `(total, width)`; featurizers are pointwise; a mean over it is one vector
 that broadcasts into any window. The seam held.
+
+
+## 12. The continuation frame: what a decode loop looks like from a tap
+
+`decode: N` on an intervention turns every forward into a prefill plus N
+greedy steps. Four facts shaped the design, all measured on the tiny Llama
+under nnsight 0.8's `generate` trace.
+
+### 12.1 Step 0 is the whole prompt; every later step is one position
+
+At step 0 a layer's output is `(rows, prompt, width)`; at step k ≥ 1 it is
+`(rows, 1, width)` — the cache carries the rest. So a prompt-frame tap
+applies at step 0 with the plan's positions as compiled, and a step-k tap
+means the one position that step processes. The engine takes the last index
+of whatever the sequence axis has, which is the same thing on both sides.
+
+### 12.2 The head keeps one row under generation, even at the prefill
+
+`lm_head.output` is `(rows, 1, vocab)` at *every* step of a generate trace,
+including step 0 — transformers' `logits_to_keep` computes logits for the
+last position only. In a plain forward it is `(rows, prompt, vocab)`. A
+prompt-frame read at the head with position 10 therefore cannot index it
+under generation; the engine treats a one-position tensor as one position.
+This is the runtime's layout, not the experiment's, which is why the rule
+lives in `ops.at_step` beside the frame rule and not in the compiler.
+
+### 12.3 A prefill write reaches the continuation only through the cache
+
+A write at layer 0 of the prompt's last token changed the generated ids on
+both rows, in a run where no tap touched a decode step. The protocol's
+"prefill-only" semantics are exactly this, and steering is the other case:
+`{"step": "all"}`, a write at every step.
+
+### 12.4 EOS must be held off for a bounded loop to be a bound
+
+`max_new_tokens` is an upper bound — an EOS ends the run early, and then a
+`tracer.iter[:N]` loop outruns it, warns, keeps what it saved and drops the
+statements after it. `min_new_tokens=N` is what makes N steps N steps; the
+engine passes both. A hooks engine counts steps with a forward hook on the
+root module, which fires once per pass.
+
+### 12.5 nnsight cannot see a `with` it cannot read
+
+Run from stdin or `python -c`, `with model.generate(...) as tracer:` returned
+a tensor and the `with` failed — nnsight decides "traced or direct" by
+reading the calling frame's source, and stdin has none. From a file it
+traces. Worth knowing before concluding that generation is broken.

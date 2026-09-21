@@ -332,7 +332,7 @@ def test_an_unreduced_output_must_match_the_rows_it_is_swapped_over(mean_raw, da
 
 def test_an_output_saves_as_a_tensor_not_a_table(mean_raw, data_root, model_engine):
     mean_raw["steps"]["harvest"]["saves"] = [{"value": "mean", "file_path": "mean.json"}]
-    with pytest.raises(plan.PlanError, match="an output is a tensor, not a table"):
+    with pytest.raises(plan.PlanError, match="a tensor, not a table"):
         plan.build_request(mean_raw, data_root, model_engine)
 
 
