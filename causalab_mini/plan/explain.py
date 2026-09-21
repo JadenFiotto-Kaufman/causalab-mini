@@ -35,9 +35,10 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
     elif isinstance(step, Featurizers):
         out.append(f"{pad}{name}: Featurizers{tail}")
         for one in step.specs:
+            origin = f"loaded from {one.source}" if one.source else f"seed={one.seed}"
             out.append(
                 f"{pad}    {one.name}: {one.kind} k={one.k} d={one.d} "
-                f"{one.parametrization} seed={one.seed} trained={one.trained}"
+                f"{one.parametrization} {origin} trained={one.trained}"
             )
     elif isinstance(step, Fit):
         out.append(
@@ -48,7 +49,11 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
         out += _lines(step.epochs[0][0], "epochs[0][0]", depth + 2)
         out += _lines(step.evaluation, "evaluation", depth + 2)
     elif isinstance(step, Observe):
-        outputs = f"  outputs={[o.name + ('=' + o.reduce + '(' + o.read + ')' if o.reduce != 'none' else '=' + o.read) for o in step.outputs]}" if step.outputs else ""
+        def _out(o):
+            if o.reduce == "none":
+                return f"{o.name}={o.read}"
+            return f"{o.name}={o.reduce}{'' if o.k is None else o.k}({o.read})"
+        outputs = f"  outputs={[_out(o) for o in step.outputs]}" if step.outputs else ""
         out.append(f"{pad}{name}: Observe  metrics={[m.name + '/' + m.kind for m in step.metrics]}{outputs}{tail}")
         for forward in step.forwards:
             rows, width = len(forward.input_ids), len(forward.input_ids[0]) if forward.input_ids else 0

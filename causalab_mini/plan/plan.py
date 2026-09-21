@@ -112,7 +112,10 @@ class OutputOp:
 
     name: str
     read: str
-    reduce: str = "none"  # "none" keeps (rows, width); "mean" averages the rows away
+    #: "none" keeps the read; "mean" averages the rows away; "pca" reduces
+    #: the rows to their top-k principal directions, a `(d, k)` basis.
+    reduce: str = "none"
+    k: int | None = None
 
 
 @dataclass(frozen=True)
@@ -136,6 +139,13 @@ class FeaturizerOp:
     parametrization: str
     seed: int
     trained: bool
+    #: A loaded parameter or basis, `(d, k)`, as plain floats — the one
+    #: tensor-shaped thing a fresh plan carries, and it is an *input* of the
+    #: experiment like the token ids are. None: drawn from `seed` in the
+    #: block.
+    weight: tuple[tuple[float, ...], ...] | None = None
+    #: Where it was loaded from, for the record.
+    source: str = ""
 
 
 @dataclass(frozen=True)

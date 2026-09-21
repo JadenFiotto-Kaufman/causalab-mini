@@ -89,7 +89,46 @@ class Subspace:
         return f @ basis.T + (x - (x @ basis) @ basis.T)
 
 
+class Basis:
+    """A fixed orthonormal `(d, k)` basis — loaded, never trained. The same
+    `featurize`/`inverse` as a `Subspace`, with `Q` stored rather than
+    parametrized: what a PCA of harvested activations gives you, and the
+    untrained control a DAS fit is compared against.
+
+    `weight` is the basis itself, so a `Weights` step can publish it and a
+    save can stamp it exactly as it would a rotation's parameter.
+    """
+
+    def __init__(self, basis: torch.Tensor) -> None:
+        self.weight = basis
+
+    @property
+    def basis(self) -> torch.Tensor:
+        return self.weight
+
+    def featurize(self, x: Any) -> tuple[Any, None]:
+        return x.to(self.weight.dtype) @ self.basis, None
+
+    def inverse(self, f: Any, err: Any, x: Any) -> Any:
+        basis = self.basis
+        x = x.to(basis.dtype)
+        return f @ basis.T + (x - (x @ basis) @ basis.T)
+
+
+def pca(rows: torch.Tensor, k: int) -> torch.Tensor:
+    """The top-`k` principal directions of `rows`, `(n, d) -> (d, k)`,
+    orthonormal by construction: the right singular vectors of the centered
+    rows. A harvest reduced this way is the basis a `pca` featurizer loads."""
+    flat = rows.reshape(-1, rows.shape[-1]).to(torch.float32)
+    if not 0 < k <= min(flat.shape):
+        raise ValueError(f"k={k} principal directions of {tuple(flat.shape)} rows is not a basis")
+    centered = flat - flat.mean(dim=0, keepdim=True)
+    _, _, vt = torch.linalg.svd(centered, full_matrices=False)
+    return vt[:k].T.contiguous()
+
+
 #: The featurizer kinds a document may declare. Unlike `ops.FEATURIZERS` this is
 #: a table of *constructors*, not of instances: a subspace carries a trained
-#: parameter, so one exists per run and not one per process.
-KINDS = {"subspace": Subspace}
+#: parameter, so one exists per run and not one per process. Each takes the
+#: one tensor it is made of — a Cayley parameter, a basis.
+KINDS = {"subspace": Subspace, "pca": Basis}

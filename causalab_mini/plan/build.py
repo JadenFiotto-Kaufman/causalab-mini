@@ -19,6 +19,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+import torch
+
 from ..address import Address
 from ..data import encoding, rows as rows_module
 from ..ops import metrics as metrics_module
@@ -86,7 +88,7 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
     #: needs the same rows and the same window. The compiler knows all of it;
     #: the block would only find out from a shape error.
     output_rows: dict[str, int | None] = {}
-    output_widths: dict[str, tuple[tuple[int, ...], bool]] = {}  # per-row widths, reduced?
+    output_widths: dict[str, tuple[tuple[int, ...], Any]] = {}  # per-row widths, how reduced
     for name, step in spec.steps.items():
         kind = type(step).__name__
         experiment = (
@@ -106,6 +108,12 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
                             "rows; reduce the output or run over the same rows"
                         )
                     per_row, reduced = output_widths[write.operand.ref]
+                    if reduced == "pca":
+                        raise PlanError(
+                            f"step {name!r}: write {write_name!r} names {write.operand.ref!r}, a "
+                            "pca basis, as its operand; a basis is loaded as a featurizer, "
+                            "not written at a site"
+                        )
                     ragged_source = len(set(per_row)) > 1
                     want = encoding.width_of(write.pos)  # None: the write is ragged
                     # What an output may land in. A mean over a ragged read is
@@ -133,7 +141,7 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
             assert experiment is not None
             rows = table(step.rows)
             outputs = tuple(
-                OutputOp(name=out_name, read=out.read, reduce=out.reduce)
+                OutputOp(name=out_name, read=out.read, reduce=out.reduce, k=out.k)
                 for out_name, out in step.outputs.items()
             )
             observe = _pass(experiment, rows, addresses, engine.tokenizer)
@@ -142,10 +150,22 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
                 for forward in observe.forwards for tap in forward.taps for read in tap.reads
             }
             for out in outputs:
+                if out.reduce == "pca":
+                    # k directions need more than k vectors: the rows are
+                    # centered first, which costs one rank. Known here, from
+                    # the positions, before any forward.
+                    vectors = sum(len(window) for window in read_positions[out.read])
+                    assert out.k is not None
+                    if out.k > vectors - 1:
+                        raise PlanError(
+                            f"step {name!r}: output {out.name!r} asks for {out.k} principal "
+                            f"directions of {vectors} vector(s); centered, they span at most "
+                            f"{max(vectors - 1, 0)}. Harvest more rows, or more positions per row"
+                        )
                 output_rows[out.name] = None if out.reduce == "mean" else len(rows["base"])
                 output_widths[out.name] = (
                     tuple(len(window) for window in read_positions[out.read]),
-                    out.reduce == "mean",
+                    out.reduce if out.reduce == "pca" else out.reduce == "mean",
                 )
             steps[name] = replace(
                 observe,
@@ -224,6 +244,9 @@ def _spec_featurizer(
     seed = one.seed
     if seed is None:
         seed = next((fit.seed for fit in fits if name in fit.params), 0)
+    weight = None
+    if one.file_path is not None:
+        weight = _load_featurizer(name, one, spec, site, d)
     return FeaturizerOp(
         name=name,
         kind=one.kind,
@@ -232,7 +255,71 @@ def _spec_featurizer(
         parametrization=one.parametrization,
         seed=seed,
         trained=trained,
+        weight=weight,
+        source=one.file_path or "",
     )
+
+
+def _identity(spec: Any, name: str, site: str, d: int) -> dict[str, str]:
+    """What a saved featurizer is *of*: the stamp a bundle carries, and the
+    expectation a load is checked against. One function, so the two cannot
+    disagree about which keys matter."""
+    one = spec.featurizers[name]
+    return {
+        "model_key": spec.model.key,
+        "model_revision": spec.model.revision,
+        "model_dtype": spec.model.dtype,
+        "site": site,
+        "component": spec.sites[site].component,
+        "layer": str(spec.sites[site].layers[0] if spec.sites[site].layers else None),
+        "k": str(one.k),
+        "d": str(d),
+        "parametrization": one.parametrization,
+        "featurizer_dtype": "fp32",
+        "engine": "causalab-mini",
+    }
+
+
+#: Stamp keys that may differ between the run that wrote a bundle and the
+#: one that loads it without making the bundle a different thing: the site's
+#: *name* is the document's, not the tensor's (component and layer are
+#: checked), and the parametrization of a pca basis is not a thing.
+_FREE = {"site", "engine"}
+
+
+def _load_featurizer(name: str, one: Any, spec: Any, site: str, d: int) -> tuple[tuple[float, ...], ...]:
+    """A saved parameter, checked against this document key by key.
+
+    A rotation is a grid of numbers; nothing in the numbers says which model
+    or which layer it came from. The header does, and this is where it is
+    read. A mismatch on any key is refused naming the key — a rotation
+    fitted at layer 13 loaded at layer 14 would run, and would be nonsense.
+    """
+    from safetensors import safe_open
+
+    path = Path(one.file_path)
+    if not path.exists():
+        raise PlanError(f"featurizer {name!r}: no bundle at {one.file_path!r}")
+    with safe_open(str(path), "pt") as bundle:
+        stamp = dict(bundle.metadata() or {})
+        keys = list(bundle.keys())
+        if keys != ["weight"]:
+            raise PlanError(f"featurizer {name!r}: {one.file_path!r} holds {keys}, not one `weight`")
+        tensor = bundle.get_tensor("weight")
+    expected = _identity(spec, name, site, d)
+    checked = {key for key in expected if key in stamp} - _FREE
+    if one.kind == "pca":
+        checked.discard("parametrization")
+    mismatched = {key: (stamp[key], expected[key]) for key in sorted(checked) if stamp[key] != expected[key]}
+    if mismatched:
+        detail = "; ".join(f"{key}: bundle says {got!r}, document says {want!r}" for key, (got, want) in mismatched.items())
+        raise PlanError(f"featurizer {name!r}: {one.file_path!r} is not this featurizer — {detail}")
+    if tuple(tensor.shape) != (d, one.k):
+        raise PlanError(
+            f"featurizer {name!r}: {one.file_path!r} is {tuple(tensor.shape)}, not the "
+            f"({d}, {one.k}) this document declares"
+        )
+    return tuple(tuple(float(x) for x in row) for row in tensor.to(torch.float32).tolist())
 
 
 def _sites_of(spec: Any) -> dict[str, str]:
@@ -280,25 +367,11 @@ def _spec_saves(
             built.append(SaveFile(file_path=save.file_path, value=save.value))
             continue
         if sites is not None and save.value in sites:
-            site = sites[save.value]
-            one = spec.featurizers[save.value]
             built.append(
                 SaveFile(
                     file_path=save.file_path,
                     value=save.value,
-                    identity={
-                        "model_key": spec.model.key,
-                        "model_revision": spec.model.revision,
-                        "model_dtype": spec.model.dtype,
-                        "site": site,
-                        "component": spec.sites[site].component,
-                        "layer": str(spec.sites[site].layers[0] if spec.sites[site].layers else None),
-                        "k": str(one.k),
-                        "d": str(widths[save.value]),
-                        "parametrization": one.parametrization,
-                        "featurizer_dtype": "fp32",
-                        "engine": "causalab-mini",
-                    },
+                    identity=_identity(spec, save.value, sites[save.value], widths[save.value]),
                 )
             )
             continue

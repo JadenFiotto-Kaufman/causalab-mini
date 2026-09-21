@@ -347,10 +347,13 @@ Recorded so they are not rediscovered.
    by both engines. `documents/v2/generate_probe.json` sweeps the step.
    FINDINGS §12.
 
-> All six landed 2026-09-21. What the plan did not cover and remains: the
-> artifact round trip (`file_path` on a featurizer, which `pca` also
-> needs), the `gate` family, the remaining components, and eligibility
-> reaching a metric table — each in SURVEY §3–§5.
+> All six landed 2026-09-21. Of what the plan did not cover, the artifact
+> round trip landed the same day: `file_path` on a featurizer loads a bundle
+> a previous run wrote and checks its header key by key against the
+> document; `pca` is both an output reduction (a harvest to its top-k
+> directions) and a loadable kind that is never trained. Remaining, in the
+> owner's order: the rest of the components, the `gate` family, and
+> eligibility reaching a metric table.
 
 The test of each item is the same one this project has used from the start:
 write the document first, see whether it needs anything beyond a new kind of

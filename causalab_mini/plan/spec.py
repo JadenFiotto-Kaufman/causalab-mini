@@ -77,11 +77,27 @@ class Site(Node):
 
 
 class Featurizer(Node):
-    kind: Literal["subspace"]
+    """A parameter set. `subspace` is a Cayley-parametrized rotation, drawn
+    from a seed or loaded, and trainable; `pca` is a fixed basis, always
+    loaded, never trained — the control a fit is compared against."""
+
+    kind: Literal["subspace", "pca"]
     k: int = Field(gt=0)
-    parametrization: Literal["cayley"]
+    parametrization: Literal["cayley"] = "cayley"
     #: The draw the initial basis comes from. Absent, the fit's seed, or 0.
     seed: int | None = None
+    #: Load the parameter from a safetensors bundle a previous run wrote,
+    #: instead of drawing it. Its header is checked against this document —
+    #: model, site, layer, k, d — and a mismatch is refused by key.
+    file_path: str | None = None
+
+    @model_validator(mode="after")
+    def _drawn_or_loaded(self) -> "Featurizer":
+        if self.kind == "pca" and self.file_path is None:
+            raise ValueError("a pca featurizer is loaded from a file; nothing draws or trains one")
+        if self.file_path is not None and self.seed is not None:
+            raise ValueError("a loaded featurizer has no seed: its weights are its bytes")
+        return self
 
 
 #: The components whose tensor is the residual stream — the only ones a
@@ -264,11 +280,20 @@ class Intervention(Node):
 
 class Output(Node):
     """One value a pass publishes for the steps after it: a read, kept as it
-    is (`rows x width`) or averaged over rows to one vector — which is how a
-    corpus mean gets made without the un-reduced activations ever leaving."""
+    is (`rows x width`), averaged over rows to one vector — which is how a
+    corpus mean gets made without the un-reduced activations ever leaving —
+    or reduced to its top-k principal directions, a basis a later document
+    loads as a `pca` featurizer."""
 
     read: str
-    reduce: Literal["none", "mean"] = "none"
+    reduce: Literal["none", "mean", "pca"] = "none"
+    k: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _k_iff_pca(self) -> "Output":
+        if (self.reduce == "pca") != (self.k is not None):
+            raise ValueError("`k` is for `reduce: pca`, and pca needs it")
+        return self
 
 
 class Save(Node):
@@ -472,6 +497,12 @@ class Spec(Node):
                     f"step {name!r}: trains {sorted(set(step.params) - set(self.featurizers))}, "
                     "which is not a declared featurizer",
                 )
+                for param in step.params:
+                    _refuse(
+                        self.featurizers[param].kind != "pca",
+                        f"step {name!r}: trains {param!r}, a pca basis, which is fixed by "
+                        "definition — declare a subspace loaded from it to fine-tune",
+                    )
                 _refuse(
                     step.early_stop.metric in produced,
                     f"step {name!r}: early_stop watches {step.early_stop.metric!r}, not a metric",

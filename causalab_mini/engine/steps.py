@@ -78,7 +78,10 @@ def build(step: Featurizers, state: State) -> None:
     rotates by.
     """
     for spec in step.specs:
-        weight = featurizer_module.start_weight(spec.d, spec.k, spec.seed)
+        if spec.weight is not None:
+            weight = torch.tensor(spec.weight, dtype=torch.float32)
+        else:
+            weight = featurizer_module.start_weight(spec.d, spec.k, spec.seed)
         state.featurizers[spec.name] = featurizer_module.KINDS[spec.kind](
             weight.requires_grad_(spec.trained)
         )
@@ -116,6 +119,9 @@ def observe(engine: Any, step: Observe, state: State) -> dict[str, Any]:
             # over rows for a rectangle, keeping the window; over every
             # position for a ragged read, which has no window axis to keep
             tensor = tensor.mean(dim=0)
+        elif output.reduce == "pca":
+            assert output.k is not None
+            tensor = featurizer_module.pca(tensor, output.k)
         state.outputs[output.name] = tensor.detach()
         step.results[output.name] = tensor.detach().cpu()
     return scored
