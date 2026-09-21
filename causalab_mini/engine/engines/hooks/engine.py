@@ -88,7 +88,7 @@ class HooksEngine(Engine):
     # what the run asks
     # ----------------------------------------------------------------- #
 
-    def execute(self, plan: Plan, remote: bool | str = False) -> Plan:
+    def execute(self, plan: Plan, remote: bool | str = False, batch_size: int | None = None) -> Plan:
         if not self._dispatched:
             raise EngineError(
                 "this engine was loaded with dispatch=False: a meta-device shell, "
@@ -102,8 +102,8 @@ class HooksEngine(Engine):
                 "the model in another one — there is nothing here to ship. Remote is "
                 "the nnterp engine's, where the whole request is one nnsight session."
             )
-        plan.provenance.update(provenance.record(self, remote))
-        steps.run(self, plan)
+        plan.provenance.update(provenance.record(self, remote, batch_size))
+        steps.run(self, plan, batch_size=batch_size)
         return plan
 
     def forward(

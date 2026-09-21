@@ -40,7 +40,7 @@ same pass over different rows.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -103,6 +103,28 @@ class Forward:
     #: bound holds, and the generated ids come back as a value named
     #: `<forward>.generated`.
     decode: int = 0
+
+
+def window(forward: Forward, start: int, stop: int) -> Forward:
+    """Rows `start:stop` of a forward: the same taps over fewer rows. Every
+    per-row thing a forward holds is a tuple with one entry per row — its
+    token ids, its mask, each op's positions — so a window is a slice of
+    each, and an engine cannot tell it from a forward compiled that small.
+    Positions are absolute indices into the batch's padded width, which the
+    client fixed once for all rows, so they survive the slice unchanged."""
+    return replace(
+        forward,
+        input_ids=forward.input_ids[start:stop],
+        attention_mask=forward.attention_mask[start:stop],
+        taps=tuple(
+            replace(
+                tap,
+                writes=tuple(replace(op, at=replace(op.at, positions=op.at.positions[start:stop])) for op in tap.writes),
+                reads=tuple(replace(op, at=replace(op.at, positions=op.at.positions[start:stop])) for op in tap.reads),
+            )
+            for tap in forward.taps
+        ),
+    )
 
 
 @dataclass(frozen=True)

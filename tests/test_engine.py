@@ -28,8 +28,8 @@ class FakeEngine(Engine):
         self.model = None
         self.calls: list[str] = []
 
-    def execute(self, plan: Plan, remote: bool | str = False) -> Plan:
-        steps.run(self, plan)
+    def execute(self, plan: Plan, remote: bool | str = False, batch_size: int | None = None) -> Plan:
+        steps.run(self, plan, batch_size=batch_size)
         return plan
 
     def forward(

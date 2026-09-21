@@ -39,6 +39,11 @@ class Selection:
     positions: Positions
     groups: int | None = None
     take: tuple[int, ...] | None = None
+    #: Gathered flat, `(total, width)`, because the windows' widths vary by
+    #: row. Decided once, over *every* row of the pass, and carried — not
+    #: re-derived from the positions in hand, because a window of a ragged
+    #: pass's rows can happen to be rectangular and must still come back flat.
+    flat: bool = False
 
 
 #: One integer per row: a row's content start, a row's content end.

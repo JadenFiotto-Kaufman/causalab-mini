@@ -73,6 +73,8 @@ def main(argv: list[str] | None = None) -> int:
         if verb == "run":
             one.add_argument("--out", default="out")
             one.add_argument("--device-map", default="auto", help="ignored by ndif, whose weights are the server's")
+            one.add_argument("--batch-size", type=int, default=None,
+                             help="rows per model call; bounds memory, moves only the last bit (default: every row at once)")
 
     args = parser.parse_args(argv)
     result = VERBS[args.verb](args)
@@ -215,7 +217,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if not remote:
         loading = {**loading, "device_map": args.device_map}
     engine, built = _compile(args, **loading)
-    written = engine.execute(built, remote=remote).write(args.out)
+    written = engine.execute(built, remote=remote, batch_size=args.batch_size).write(args.out)
     return {"text": "\n".join(str(path) for path in written), "written": [str(path) for path in written]}
 
 

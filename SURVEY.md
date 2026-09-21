@@ -114,7 +114,7 @@ stand.
 | 1 | **Read a featurizer bundle back** (`file_path` + identity check) | 2 | Mini already *writes* a 14-field stamp and can never consume one, so the header is inert and the fit→apply chain — half of causalab's shipped templates — is unreachable. |
 | 2 | **Write the canonical document into the output directory** | 2 | An output dir currently holds a 64-hex `produced_by` that cannot be inverted: **a mini result does not contain the experiment that produced it.** |
 | 3 | ~~**Real eligibility columns**~~ — **DONE**, FINDINGS §15 | 2 | `"eligible": True` is a literal in `write.py`. An excluded measurement and a genuine zero are indistinguishable in mini's output today. |
-| 4 | **Freeze the model at load** (`eval()`, `requires_grad_(False)`) | 1 | Two lines per loader. `FINDINGS.md` §1.15 already diagnoses this and mini declined to fix it; every backward accumulates `.grad` on model weights for no reason. |
+| 4 | ~~**Freeze the model at load**~~ — **DONE** (FINDINGS §1.15) | 1 | Two lines per loader. `FINDINGS.md` §1.15 already diagnoses this and mini declined to fix it; every backward accumulates `.grad` on model weights for no reason. |
 | 5 | **Record engine, dependency versions, and a code digest** | 2 | ~20 lines. nnsight and nnterp are editable checkouts that move underneath the project, and two engines exist whose attention defaults are known to differ. |
 | ~~6~~ | ~~**Endpoint-disjoint fit splits**~~ | — | **SURVEY ERROR — already implemented.** `plan/build.py:239` refuses two refs that share a row, by name ("the two must be endpoint-disjoint"), and deliberately permits one ref named twice as the visible train-equals-test ablation. The learning survey reported this absent; it is not. |
 | 7 | **`fit_diagnostics.json`** | 2 | Two numbers for a subspace, computed where `Weights` already stands — and what stops a meaningless fit reporting a perfect score. |
@@ -125,7 +125,7 @@ stand.
 | 12 | ~~**Per-head feature slice on an address**~~ — **DONE**, as `heads` on a *site* (FINDINGS §17) | 2 | One field plus a slice in `gather`/`scatter`. Head-level work is a large share of real interpretability. |
 | 13 | **Sweep `{"range": …}` and multi-field cross products** | 1–2 | The two commonest sweep spellings; the plan tree already carries the results. |
 | 14 | **Refuse a non-differentiable metric in an objective** | 1 | Mini will happily put `match` in a loss and train on a zero gradient. |
-| 15 | **Microbatching by row window inside `forward`** | 2 | Entirely behind the existing seam, and the precondition for running anything bigger than a tiny model. |
+| 15 | ~~**Microbatching by row window**~~ — **DONE**, in the shared walk rather than inside `forward` (FINDINGS §18) | 2 | Entirely behind the existing seam, and the precondition for running anything bigger than a tiny model. |
 | 16 | **The faithful-server harness** (test-only) | 2 | Mini's whole remote claim rests on `remote="local"`, which causalab documents as checking "pickling and imports, and nothing past them". |
 | 17 | **`validate` / `explain` / `digest` verbs, `--set`, `--engine`, CI** | 1–2 | Mini already computes everything these print. `--engine` is unwired rather than unwanted. |
 

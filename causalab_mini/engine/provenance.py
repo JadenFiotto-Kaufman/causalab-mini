@@ -31,10 +31,12 @@ from typing import Any
 WATCHED = ("torch", "transformers", "nnsight", "nnterp", "pydantic")
 
 
-def record(engine: Any, remote: bool | str) -> dict[str, Any]:
+def record(engine: Any, remote: bool | str, batch_size: int | None = None) -> dict[str, Any]:
     return {
         "engine": type(engine).__name__,
         "remote": remote,
+        # not part of the experiment, but it moves the last bit of every number
+        "batch_size": batch_size,
         "versions": {name: _version(name) for name in WATCHED},
         "causalab_mini": code_digest(),
     }

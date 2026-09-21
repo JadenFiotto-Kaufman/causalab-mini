@@ -23,6 +23,7 @@ import torch
 
 from ..address import Address
 from ..data import encoding, rows as rows_module
+from ..ops import intervene as intervene_module
 from ..ops import metrics as metrics_module
 from . import sweep
 from ..shapes import Positions, Selection
@@ -861,6 +862,13 @@ def _schedule(experiment: _Experiment) -> list[tuple[str, str]]:
     return ordered
 
 
+def _selection(positions: Positions, features: Any) -> Selection:
+    """Where an op is. Whether it gathers flat is decided here, over every
+    row of the pass, so a window of those rows cannot decide differently."""
+    groups, take = features or (None, None)
+    return Selection(positions, groups, take, flat=intervene_module.is_ragged(positions))
+
+
 def _forward(
     name: str,
     role: str,
@@ -885,7 +893,7 @@ def _forward(
             writes.setdefault((addresses[spec.site], encoding.step_of(spec.pos)), []).append(
                 WriteOp(
                     name=write_name,
-                    at=Selection(resolve(spec.pos), *experiment.features.get(spec.site, ())),
+                    at=_selection(resolve(spec.pos), experiment.features.get(spec.site)),
                     operand=spec.operand,
                     mechanism=spec.mechanism,
                     featurizer=spec.featurizer,
@@ -899,7 +907,7 @@ def _forward(
         reads.setdefault((addresses[spec.site], encoding.step_of(spec.pos)), []).append(
             ReadOp(
                 name=read_name,
-                at=Selection(resolve(spec.pos), *experiment.features.get(spec.site, ())),
+                at=_selection(resolve(spec.pos), experiment.features.get(spec.site)),
                 featurizer=spec.featurizer,
                 view=getattr(spec, "view", "raw"),
             )

@@ -101,11 +101,13 @@ class Engine:
     # what the run asks
     # ----------------------------------------------------------------- #
 
-    def execute(self, plan: Plan, remote: bool | str = False) -> Plan:
+    def execute(self, plan: Plan, remote: bool | str = False, batch_size: int | None = None) -> Plan:
         """Run `plan` and return it, filled in.
 
         The plan that comes back is not always the one passed in: an engine
         whose run happens elsewhere fills in a copy and hands that back.
+        `batch_size` bounds how many rows one model call holds; the shared
+        walk does the windowing, so an engine only passes it on.
         """
         raise NotImplementedError
 

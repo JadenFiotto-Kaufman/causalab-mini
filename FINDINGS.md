@@ -1314,3 +1314,54 @@ carries a stray `intermediate_size: 37` its 128-wide MLPs never read. The
 test compares against the module the activation feeds, not the config,
 which is the only reason that was caught. Width now lives once, in
 `address.width(config, address)`, and both engines call it.
+
+
+## 18. Batching is a window of rows, and it lives in the walk
+
+`execute(plan, batch_size=N)` bounds how many rows one model call holds. It
+is absent from the plan — the same experiment however it is run — and
+recorded in `run.json`, because it moves the last bit of every number.
+
+**Where it lives is the design.** Not in the compiler (chunked `Observe`
+steps would need their results, their `mean`/`pca` reductions and their
+per-row references re-joined by something) and not in each engine (twice the
+code, and the engines would have to agree). It is one function in the shared
+walk, `steps.passes`: a window of rows is a whole small pass — every forward
+of the pass, in order, over a slice of the rows — handed to an **unchanged**
+`engine.forward`. What the windows read is concatenated in row order, and
+everything after it — metrics, eligibility, outputs, saves, a fit's loss —
+sees one pass. Neither engine changed; the hooks engine got batching for
+free; with no `batch_size` there is one window, which is the pass exactly as
+compiled (bit-equal, pinned).
+
+Two slices make it work, both pure data:
+
+- `plan.window(forward, a, b)` — every per-row thing a forward holds is a
+  tuple with one entry per row (ids, mask, each op's positions), so a window
+  is a slice of each. Positions are absolute indices into the padded width
+  the client fixed once for all rows, so they survive unchanged.
+- `intervene.rows(tensor, positions, a, b)` — the rows of a *published*
+  value. A window's write must meet the operand of **its** rows, so `State`
+  now remembers the positions a per-row output was read over (`layout`). A
+  reduced value (a mean, a basis) has no layout and every window shares it
+  whole. This is the case a careless windowing gets wrong silently — right
+  shape, wrong examples — and it has its own test.
+
+**The bug the tests caught:** raggedness was re-derived from the positions
+in hand, and a *window* of a ragged pass's rows can happen to be
+rectangular — so one window came back `(rows, w, d)` and the next `(total,
+d)`, and the concatenation failed. Whether a selection gathers flat is now
+decided once by the compiler, over every row, and carried on the
+`Selection` (`flat`).
+
+Pinned across patching, windows, literal operands, the logit lens,
+generation, heads, neurons, a published mean, a ragged harvest, a per-row
+reference, a DAS fit and `remote="local"`, at batch sizes 1 and 3 (3 does
+not divide the 4 rows): agreement to 1e-6, not bit-equality — a GEMM over
+fewer rows rounds differently (§8).
+
+**What it does not do:** free memory inside a fit's update. The loss is the
+mean over the concatenated rows, so the graph of every window is alive until
+the backward; a fit's memory knob is `pairs`. It does bound the held-out
+pass, which runs under `no_grad`. Gradient accumulation across windows would
+be the next step and is not built.

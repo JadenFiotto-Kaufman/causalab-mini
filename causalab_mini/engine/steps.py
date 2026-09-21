@@ -33,6 +33,7 @@ import torch
 
 from ..ops import featurizer as featurizer_module, intervene, metrics
 from ..plan import Featurizers, Fit, Observe, Plan, Step, Weights
+from ..plan import plan as plan_module
 
 
 @dataclass
@@ -41,19 +42,26 @@ class State:
 
     featurizers: dict[str, Any] = field(default_factory=dict)
     outputs: dict[str, Any] = field(default_factory=dict)
+    #: For an output that still has its rows: the positions it was read over,
+    #: which say where each row is in it. Absent for one reduced over rows.
+    layout: dict[str, Any] = field(default_factory=dict)
+    #: How many rows one model call may hold. None: all of them. A property
+    #: of the run and not of the experiment — it bounds memory and moves the
+    #: last bit, nothing else — so it arrives with `execute`, not the plan.
+    batch_size: int | None = None
 
     def child(self) -> "State":
         """A nested plan's state: the same live featurizers, its own outputs."""
-        return State(featurizers=self.featurizers, outputs={})
+        return State(featurizers=self.featurizers, batch_size=self.batch_size)
 
 
-def run(engine: Any, step: Step, state: State | None = None) -> None:
+def run(engine: Any, step: Step, state: State | None = None, batch_size: int | None = None) -> None:
     """Execute one step. A `Plan` is a step, so this is the whole walk."""
     if state is None:
         # The stateless featurizers exist before any document declares
         # anything: `identity` is what a read or a write with no `featurizer`
         # names, and it is never declared.
-        state = State(featurizers=dict(intervene.FEATURIZERS))
+        state = State(featurizers=dict(intervene.FEATURIZERS), batch_size=batch_size)
     if isinstance(step, Plan):
         for child in step.steps.values():
             run(engine, child, state.child() if isinstance(child, Plan) else state)
@@ -98,9 +106,7 @@ def observe(engine: Any, step: Observe, state: State) -> dict[str, Any]:
     the engine cannot tell the difference and does not need to. What this
     pass declares as its own outputs is published at the end.
     """
-    values: dict[str, Any] = dict(state.outputs)
-    for forward in step.forwards:
-        engine.forward(forward, values, state.featurizers)
+    values = passes(engine, step, state)
     # A metric reads one position per row — the compiler refused anything
     # else — so its (rows, 1, vocab) is (rows, vocab) with the unit window off.
     # A metric with excluded rows scores the others: the compiler said which,
@@ -129,8 +135,54 @@ def observe(engine: Any, step: Observe, state: State) -> dict[str, Any]:
             assert output.k is not None
             tensor = featurizer_module.pca(tensor, output.k)
         state.outputs[output.name] = tensor.detach()
+        if output.reduce == "none":
+            state.layout[output.name] = _positions_of(step, output.read)
         step.results[output.name] = tensor.detach().cpu()
     return scored
+
+
+def passes(engine: Any, step: Observe, state: State) -> dict[str, Any]:
+    """Every forward of a pass, over every row, `batch_size` rows at a time.
+
+    A window of rows is a whole small pass: the same forwards in the same
+    order over a slice of the rows, with the published values it reads
+    sliced the same way — so a write still meets the operand of *its* row.
+    An engine is handed a forward that is merely shorter and cannot tell;
+    what the windows read is concatenated back in row order, and everything
+    after this function sees one pass. With no `batch_size` there is one
+    window, which is the pass exactly as compiled.
+
+    Rows were padded to one width on the client, so a window's positions are
+    already right. What a smaller batch does change is the last bit: a GEMM
+    over fewer rows rounds differently (FINDINGS §8).
+    """
+    count = len(step.forwards[0].input_ids) if step.forwards else 0
+    size = state.batch_size or count or 1
+    parts = []
+    for start in range(0, count, size):
+        stop = min(start + size, count)
+        values = {
+            name: intervene.rows(tensor, state.layout.get(name), start, stop)
+            for name, tensor in state.outputs.items()
+        }
+        published = set(values)
+        for forward in step.forwards:
+            engine.forward(plan_module.window(forward, start, stop), values, state.featurizers)
+        parts.append({name: value for name, value in values.items() if name not in published})
+    merged = dict(state.outputs)
+    for name in parts[0] if parts else ():
+        merged[name] = parts[0][name] if len(parts) == 1 else torch.cat([part[name] for part in parts])
+    return merged
+
+
+def _positions_of(step: Observe, read: str) -> Any:
+    return next(
+        op.at.positions
+        for forward in step.forwards
+        for tap in forward.taps
+        for op in tap.reads
+        if op.name == read
+    )
 
 
 def fit(engine: Any, step: Fit, state: State) -> None:

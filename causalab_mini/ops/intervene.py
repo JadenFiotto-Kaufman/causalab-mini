@@ -115,8 +115,22 @@ def at_step(at: Selection, tensor: Any, seq_axis: int, frame: int | str | None, 
     length = tensor.shape[seq_axis]
     if frame is not None or (step is not None and length == 1):
         last = length - 1
-        return replace(at, positions=tuple((last,) if window else () for window in at.positions))
+        moved = tuple((last,) if window else () for window in at.positions)
+        return replace(at, positions=moved, flat=at.flat or is_ragged(moved))
     return at
+
+
+def rows(tensor: Any, positions: Positions | None, start: int, stop: int) -> Any:
+    """Rows `start:stop` of a gathered value. A rectangle is sliced; a ragged
+    value is flat, so its rows are wherever their windows' lengths put them.
+    `positions` None is a value with no row axis — a mean, a basis — which
+    every window of rows shares whole."""
+    if positions is None:
+        return tensor
+    if is_ragged(positions):
+        before = sum(len(window) for window in positions[:start])
+        return tensor[before : before + sum(len(window) for window in positions[start:stop])]
+    return tensor[start:stop]
 
 
 def resolve_operand(values: dict[str, Any], operand: Any) -> Any:
@@ -164,7 +178,9 @@ def _flat(positions: Positions, device: Any) -> tuple[Any, Any]:
 
 
 def _selection(at: Selection | Positions) -> Selection:
-    return at if isinstance(at, Selection) else Selection(at)
+    """A bare `Positions` is every feature at those positions, flat if they
+    are ragged."""
+    return at if isinstance(at, Selection) else Selection(at, flat=is_ragged(at))
 
 
 def gather(tensor: Any, at: Selection | Positions, seq_axis: int = 1) -> Any:
@@ -183,7 +199,7 @@ def gather(tensor: Any, at: Selection | Positions, seq_axis: int = 1) -> Any:
     tensor, so it is passed in.
     """
     at = _selection(at)
-    window = _window(tensor, at.positions, seq_axis)
+    window = _window(tensor, at, seq_axis)
     if at.groups is None:
         return window
     split = window.reshape(*_lead(window, at), at.groups, -1)
@@ -192,9 +208,10 @@ def gather(tensor: Any, at: Selection | Positions, seq_axis: int = 1) -> Any:
     return split.flatten(-2)
 
 
-def _window(tensor: Any, positions: Positions, seq_axis: int) -> Any:
+def _window(tensor: Any, at: Selection, seq_axis: int) -> Any:
+    positions = at.positions
     moved = tensor.movedim(seq_axis, 1)
-    if is_ragged(positions):
+    if _is_flat(at):
         rows, index = _flat(positions, tensor.device)
         return moved[rows, index]
     rows = torch.arange(tensor.shape[0], device=tensor.device)[:, None]
@@ -202,10 +219,16 @@ def _window(tensor: Any, positions: Positions, seq_axis: int) -> Any:
     return moved[rows, index]
 
 
+def _is_flat(at: Selection) -> bool:
+    """Ragged positions can only come back flat; `flat` says so for a window
+    of a ragged pass whose own rows happen to line up."""
+    return at.flat or is_ragged(at.positions)
+
+
 def _lead(window: Any, at: Selection) -> tuple[int, ...]:
     """The axes of a gathered window that are not features: `(total,)` for a
     ragged one, `(rows, w)` for a rectangle."""
-    return tuple(window.shape[: 1 if is_ragged(at.positions) else 2])
+    return tuple(window.shape[: 1 if _is_flat(at) else 2])
 
 
 def scatter(tensor: Any, at: Selection | Positions, values: Any, seq_axis: int = 1) -> Any:
@@ -216,7 +239,7 @@ def scatter(tensor: Any, at: Selection | Positions, values: Any, seq_axis: int =
     at = _selection(at)
     positions = at.positions
     if at.groups is not None:
-        window = _window(tensor, positions, seq_axis)
+        window = _window(tensor, at, seq_axis)
         lead = _lead(window, at)
         split = window.reshape(*lead, at.groups, -1).clone()
         take = tuple(range(at.groups)) if at.take is None else at.take
@@ -225,7 +248,7 @@ def scatter(tensor: Any, at: Selection | Positions, values: Any, seq_axis: int =
         values = split.reshape(window.shape)
     out = tensor.clone()
     moved = out.movedim(seq_axis, 1)  # a view of `out`
-    if is_ragged(positions):
+    if _is_flat(at):
         rows, index = _flat(positions, tensor.device)
         moved[rows, index] = values.to(out.dtype)
         return out

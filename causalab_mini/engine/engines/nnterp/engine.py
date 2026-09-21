@@ -79,16 +79,16 @@ class NNterpEngine(Engine):
     # what the run asks
     # ----------------------------------------------------------------- #
 
-    def execute(self, plan: Plan, remote: bool | str = False) -> Plan:
+    def execute(self, plan: Plan, remote: bool | str = False, batch_size: int | None = None) -> Plan:
         if remote:
             # Our own package is not installed on an NDIF server, so the
             # functions the block calls have to ship by value.
             nnsight.register("causalab_mini")
-        plan.provenance.update(provenance.record(self, remote))
+        plan.provenance.update(provenance.record(self, remote, batch_size))
         engine, model = self, self.model
         with model.session(remote=remote):
             executed = nnsight.save(plan)
-            steps.run(engine, executed)
+            steps.run(engine, executed, batch_size=batch_size)
         return executed
 
     def forward(

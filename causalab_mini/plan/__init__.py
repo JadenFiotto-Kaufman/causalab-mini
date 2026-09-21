@@ -42,6 +42,7 @@ from .plan import (
     WriteOp,
     children,
     steps_of,
+    window,
 )
 
 __all__ = [
