@@ -62,19 +62,26 @@ def _file(step: Step, save: SaveFile, out: Path) -> Path:
         # One auto-declared slot per featurizer, named `<featurizer>.weight`.
         save_file({"weight": value.contiguous()}, str(path), metadata=save.identity)
         return path
-    rows = [
-        {
-            "example_id": example_id,
-            "metric": save.value,
-            # JSON has no NaN or Infinity: `json.dumps` would emit a bare
-            # `NaN`, which Python reads back and a strict parser refuses.
-            "value": float(number) if math.isfinite(number) else None,
-            "eligible": True,
-            "unit": save.unit,
-            "estimand_version": save.estimand_version,
-            "produced_by": save.produced_by,
-        }
-        for example_id, number in zip(save.example_ids, value.tolist())
-    ]
+    # The result holds one value per eligible row; an excluded measurement
+    # is still a row of the table, with no value and `eligible: false` — so
+    # it can never be read as a zero, or silently shorten a denominator.
+    eligible = save.eligible or (True,) * len(save.example_ids)
+    numbers = iter(value.tolist())
+    rows = []
+    for example_id, included in zip(save.example_ids, eligible):
+        number = next(numbers) if included else None
+        rows.append(
+            {
+                "example_id": example_id,
+                "metric": save.value,
+                # JSON has no NaN or Infinity: `json.dumps` would emit a bare
+                # `NaN`, which Python reads back and a strict parser refuses.
+                "value": float(number) if number is not None and math.isfinite(number) else None,
+                "eligible": included,
+                "unit": save.unit,
+                "estimand_version": save.estimand_version,
+                "produced_by": save.produced_by,
+            }
+        )
     path.write_text(json.dumps(rows, indent=1) + "\n")
     return path

@@ -109,7 +109,7 @@ stand.
 |---|---|---|---|
 | 1 | **Read a featurizer bundle back** (`file_path` + identity check) | 2 | Mini already *writes* a 14-field stamp and can never consume one, so the header is inert and the fit→apply chain — half of causalab's shipped templates — is unreachable. |
 | 2 | **Write the canonical document into the output directory** | 2 | An output dir currently holds a 64-hex `produced_by` that cannot be inverted: **a mini result does not contain the experiment that produced it.** |
-| 3 | **Real eligibility columns** | 2 | `"eligible": True` is a literal in `write.py`. An excluded measurement and a genuine zero are indistinguishable in mini's output today. |
+| 3 | ~~**Real eligibility columns**~~ — **DONE**, FINDINGS §15 | 2 | `"eligible": True` is a literal in `write.py`. An excluded measurement and a genuine zero are indistinguishable in mini's output today. |
 | 4 | **Freeze the model at load** (`eval()`, `requires_grad_(False)`) | 1 | Two lines per loader. `FINDINGS.md` §1.15 already diagnoses this and mini declined to fix it; every backward accumulates `.grad` on model weights for no reason. |
 | 5 | **Record engine, dependency versions, and a code digest** | 2 | ~20 lines. nnsight and nnterp are editable checkouts that move underneath the project, and two engines exist whose attention defaults are known to differ. |
 | ~~6~~ | ~~**Endpoint-disjoint fit splits**~~ | — | **SURVEY ERROR — already implemented.** `plan/build.py:239` refuses two refs that share a row, by name ("the two must be endpoint-disjoint"), and deliberately permits one ref named twice as the visible train-equals-test ablation. The learning survey reported this absent; it is not. |

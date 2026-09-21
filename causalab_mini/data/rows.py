@@ -66,20 +66,27 @@ def field_text(row: Row, field: str) -> str:
     return value
 
 
-def column(rows: list[Row], name: str) -> list[str]:
+def column(rows: list[Row], name: str) -> list[str | None]:
     """A metric's column, off the *base* rows. A row whose value is null or
-    empty is an excluded measurement in causalab; nothing in this corpus has
-    one, so we refuse rather than pretend to have eligibility machinery."""
-    values = []
+    empty is an **excluded measurement** — None here — which is not a zero:
+    the metric is not computed for it, and its row in the table says so. A
+    column no row has at all is a misspelling, and is refused."""
+    if not any(name in row for row in rows):
+        raise DataError(f"no row has a column {name!r}")
+    values: list[str | None] = []
     for index, row in enumerate(rows):
         value = row.get(name)
-        if not isinstance(value, str) or not value.strip():
-            raise DataError(
-                f"row {index}: column {name!r} is missing or empty; per-row "
-                "eligibility is not implemented"
-            )
-        values.append(value)
+        if value is not None and not isinstance(value, str):
+            raise DataError(f"row {index}: column {name!r}: expected a string, got {type(value).__name__}")
+        values.append(value if value and value.strip() else None)
     return values
+
+
+def eligible(rows: list[Row], names: tuple[str, ...]) -> tuple[bool, ...]:
+    """Which rows a metric over these columns can be computed for: the ones
+    where every column has a value."""
+    columns = [column(rows, name) for name in names]
+    return tuple(all(one[index] is not None for one in columns) for index in range(len(rows)))
 
 
 def example_ids(rows: list[Row]) -> ExampleIds:

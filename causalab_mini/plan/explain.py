@@ -59,7 +59,7 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
                 return f"{o.name}={o.read}"
             return f"{o.name}={o.reduce}{'' if o.k is None else o.k}({o.read})"
         outputs = f"  outputs={[_out(o) for o in step.outputs]}" if step.outputs else ""
-        out.append(f"{pad}{name}: Observe  metrics={[m.name + '/' + m.kind for m in step.metrics]}{outputs}{tail}")
+        out.append(f"{pad}{name}: Observe  metrics={[m.name + '/' + m.kind + ('' if m.rows is None else f' rows={list(m.rows)}') for m in step.metrics]}{outputs}{tail}")
         for forward in step.forwards:
             rows, width = len(forward.input_ids), len(forward.input_ids[0]) if forward.input_ids else 0
             decode = f"  decode={forward.decode}" if forward.decode else ""

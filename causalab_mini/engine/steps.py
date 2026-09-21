@@ -103,8 +103,14 @@ def observe(engine: Any, step: Observe, state: State) -> dict[str, Any]:
         engine.forward(forward, values, state.featurizers)
     # A metric reads one position per row — the compiler refused anything
     # else — so its (rows, 1, vocab) is (rows, vocab) with the unit window off.
+    # A metric with excluded rows scores the others: the compiler said which,
+    # so this indexes and the mean downstream needs no mask.
     scored = {
-        metric.name: metrics.compute(metric.kind, values[metric.of][:, 0], metric.ids)
+        metric.name: metrics.compute(
+            metric.kind,
+            values[metric.of][:, 0] if metric.rows is None else values[metric.of][list(metric.rows), 0],
+            metric.ids,
+        )
         for metric in step.metrics
     }
     step.results.update({name: value.detach().cpu() for name, value in scored.items()})

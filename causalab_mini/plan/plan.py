@@ -123,7 +123,12 @@ class MetricOp:
     name: str
     kind: str
     of: str  # the read it binds to
-    ids: tuple[TokenIds, ...]  # one vocabulary id per row, per operand
+    ids: tuple[TokenIds, ...]  # one vocabulary id per scored row, per operand
+    #: The rows this metric is computed for, when that is not all of them: a
+    #: row whose answer column is null is an excluded measurement. Decided on
+    #: the client, so the run indexes and never masks — a mean is a mean, and
+    #: a NaN is still a bug rather than a convention.
+    rows: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -153,6 +158,9 @@ class SaveFile:
     file_path: str
     value: str  # the result this file holds, by name, from this plan's subtree
     example_ids: ExampleIds = ()
+    #: Per example id, whether the metric was computed for it. Empty: all.
+    #: The result holds one value per *eligible* row, in order.
+    eligible: tuple[bool, ...] = ()
     unit: str = ""
     estimand_version: str = ""
     produced_by: str = ""

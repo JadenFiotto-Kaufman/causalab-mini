@@ -1123,3 +1123,40 @@ forward-sharing cache keyed on the mode. None is here. The one most likely
 to be wanted first is a gate over **heads** at `attention_z` — which needs
 that component to publish its `(heads, head_dim)` shape, which it does not
 yet (`width` is refused for interiors).
+
+
+## 15. Eligibility is a row list, decided where the data is
+
+`"eligible": True` was a literal in `plan/write.py`, and `rows.column`
+refused a null. Now a row whose answer column is null or empty is an
+**excluded measurement** for every metric naming that column, and only for
+those.
+
+The design question was where the mask lives, and the answer is that there
+is none. Which rows have an answer is a fact about the dataset, so the
+compiler resolves it: a `MetricOp` carries `rows`, the indices it scores
+(`None` when that is all of them, so every earlier plan is unchanged), and
+`ids` only for those. At run time `observe` indexes the read by that list
+and the metric functions are untouched. Consequences that fall out rather
+than being written:
+
+- a fit's loss, its held-out score and its early stop are means over
+  measured rows, because they are means over what the metric returned;
+- a genuine NaN is still loud — nothing was taught to skip NaNs, which is
+  what a `nanmean` design would have cost;
+- the other rows score **bit-equal** to the un-holed run, on both engines.
+
+The table keeps the row: `{"value": null, "eligible": false}`, so an
+excluded measurement cannot be read as a zero or quietly shorten a
+denominator. The result tensor holds one value per eligible row, and the
+`SaveFile` carries the booleans that re-align it.
+
+Two refusals, both before any forward: a metric with **no** eligible row in
+a pass (including one minibatch of a fit — its loss would be the mean of
+nothing), and a column **no** row has, which is a misspelling and not an
+exclusion. `causalab-mini data <ref>` now reports which columns have holes.
+
+Not done: a *position's* ineligibility (a `{"column": …}` window the row
+does not contain) reaching a metric. A metric reads a unit window, so that
+case cannot be authored yet; when a metric over a located position exists,
+its `rows` is this same field.

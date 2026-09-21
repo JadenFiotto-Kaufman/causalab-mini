@@ -389,8 +389,8 @@ def _spec_saves(
                 )
             )
             continue
-        kind = next(
-            one.metrics[save.value].kind
+        metric = next(
+            one.metrics[save.value]
             for one in spec.interventions.values()
             if save.value in one.metrics
         )
@@ -399,8 +399,9 @@ def _spec_saves(
                 file_path=save.file_path,
                 value=save.value,
                 example_ids=rows_module.example_ids(base_rows),
-                unit=metrics_module.UNITS[kind][0],
-                estimand_version=metrics_module.UNITS[kind][1],
+                eligible=_eligible(base_rows, metric),
+                unit=metrics_module.UNITS[metric.kind][0],
+                estimand_version=metrics_module.UNITS[metric.kind][1],
             )
         )
     return tuple(built)
@@ -583,18 +584,48 @@ def _pass(
     _check_ragged(forwards, experiment)
     base_rows = rows["base"]  # base is the schema of the pair: metrics read its columns
     metrics = tuple(
-        MetricOp(
-            name=name,
-            kind=spec.kind,
-            of=spec.of,
-            ids=tuple(
-                tuple(encoding.token_id(tokenizer, value, spec.token_form) for value in rows_module.column(base_rows, column))
-                for column in spec.columns
-            ),
-        )
-        for name, spec in experiment.metrics.items()
+        _metric(name, spec, base_rows, tokenizer) for name, spec in experiment.metrics.items()
     )
     return Observe(forwards=forwards, metrics=metrics)
+
+
+def _metric(name: str, spec: Any, base_rows: list[rows_module.Row], tokenizer: Any) -> MetricOp:
+    """One metric over one batch of rows, with the rows it cannot be computed
+    for taken out here, where the data is."""
+    keep = rows_module.eligible(base_rows, tuple(spec.columns))
+    if not any(keep):
+        raise PlanError(
+            f"metric {name!r}: none of these {len(base_rows)} row(s) has a value in "
+            f"{list(spec.columns)}; a metric of nothing has no mean"
+        )
+    return MetricOp(
+        name=name,
+        kind=spec.kind,
+        of=spec.of,
+        ids=_ids(spec, base_rows, keep, tokenizer),
+        rows=None if all(keep) else tuple(index for index, one in enumerate(keep) if one),
+    )
+
+
+def _eligible(base_rows: list[rows_module.Row], metric: Any) -> tuple[bool, ...]:
+    """A table's eligibility column; empty when every row is in, which is
+    what a plan compiled before this existed says too. (A fit's own saves
+    have no rows, and so nothing to be eligible.)"""
+    if not base_rows:
+        return ()
+    keep = rows_module.eligible(base_rows, tuple(metric.columns))
+    return () if all(keep) else keep
+
+
+def _ids(spec: Any, base_rows: list[rows_module.Row], keep: tuple[bool, ...], tokenizer: Any) -> tuple[Any, ...]:
+    return tuple(
+        tuple(
+            encoding.token_id(tokenizer, value, spec.token_form)
+            for value, kept in zip(rows_module.column(base_rows, column), keep)
+            if kept and value is not None
+        )
+        for column in spec.columns
+    )
 
 
 def _featurizer(
@@ -668,6 +699,7 @@ def _save(
         file_path=entry.file_path,
         value=entry.value,
         example_ids=rows_module.example_ids(base_rows),
+        eligible=_eligible(base_rows, document.metrics[entry.value]),
         unit=metrics_module.UNITS[kind][0],
         estimand_version=metrics_module.UNITS[kind][1],
         produced_by=document.digest,

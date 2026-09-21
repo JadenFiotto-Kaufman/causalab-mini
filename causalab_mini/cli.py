@@ -165,10 +165,19 @@ def data(args: argparse.Namespace) -> dict[str, Any]:
     table = rows_module.load(args.data_root, args.ref)
     columns = sorted({key for row in table for key in row})
     splits = sorted({str(row.get("split")) for row in table})
-    payload = {"ref": args.ref, "rows": len(table), "columns": columns, "splits": splits, "sample": table[:1]}
+    # A null or empty value is an excluded measurement for any metric naming
+    # that column, so which columns have holes is worth knowing up front.
+    empty = {
+        name: count
+        for name in columns
+        if (count := sum(1 for row in table if row.get(name) in (None, "")))
+    }
+    payload = {"ref": args.ref, "rows": len(table), "columns": columns, "empty": empty,
+               "splits": splits, "sample": table[:1]}
     lines = [
         f"{args.ref}: {len(table)} rows",
         f"  columns: {', '.join(columns)}",
+        *([f"  empty:   {', '.join(f'{name} ({count} rows)' for name, count in empty.items())}"] if empty else []),
         f"  splits:  {', '.join(splits)}",
         f"  sample:  {json.dumps(table[0]) if table else '(empty)'}",
     ]

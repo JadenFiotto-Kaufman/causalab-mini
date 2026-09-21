@@ -327,8 +327,8 @@ Recorded so they are not rediscovered.
    ragged write policy is `refuse`, row by row, before any forward; the
    protocol's other two are not implemented. `documents/v2/
    entity_mean_ablation.json` averages a ragged read into one vector.
-   Eligibility does not yet reach a metric table, because a metric reads
-   the unit window; it shows in `explain` and in what a harvest excludes.
+   A *position's* eligibility still does not reach a metric table, because
+   a metric reads the unit window; a *column's* does (FINDINGS §15).
 5. **Vocabulary throughout**, in whatever order the documents being written
    demand. Landed 2026-09-21: literal operands (`documents/v2/
    zero_ablation.json`), `add_scaled` / `lerp` / `gaussian` with their
@@ -356,8 +356,10 @@ Recorded so they are not rediscovered.
 > so the hooks engine reaches them too — FINDINGS §13. Then the `gate`
 > featurizer (DBM): one class, a `training` flag the fit sets, `fit.anneal`,
 > and `<gate>.mask` as an objective term; `documents/v2/dbm.json` is the
-> sparsity curve as one document — FINDINGS §14. Remaining: eligibility
-> reaching a metric table.
+> sparsity curve as one document — FINDINGS §14. Then eligibility: a null
+> answer column is an excluded measurement, resolved on the client into a
+> row list, written as `eligible: false` with no value — FINDINGS §15. The
+> owner's list is empty.
 
 The test of each item is the same one this project has used from the start:
 write the document first, see whether it needs anything beyond a new kind of
