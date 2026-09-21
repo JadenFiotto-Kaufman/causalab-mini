@@ -1501,3 +1501,33 @@ name, so `build` is `KINDS[kind](**tensors)` for all five.
 Not done: top-k and JumpReLU activations, a published SAE run for real
 (hakone has `Qwen/SAE-Res-Qwen3-8B-Base-W64K-L0_50` cached — the obvious
 next real run), and featurizer chains (standardize then rotate).
+
+
+## 22. Swapping a counterfactual's attention pattern, and the check that makes it safe
+
+§17.2 left this undone for one reason: the last axis of `attention_probs` is
+the **keys of the padded batch**. Key `j` of the operand lands on key `j`
+of the target, and that is the same *token* only if the two prompts are laid
+out identically. If they are not, attention mass meant for a word lands on a
+pad or on a different word — with every shape correct and no error from
+anything.
+
+Both masks are in the plan before any forward, so the compiler checks them
+(`_check_keys`): a write at a key-axis component whose operand was read in
+another forward requires the two forwards' attention masks to be equal, and
+says which rows differ and by how many tokens. The table marks the two
+components (`keys=True`); nothing else changed — the swap itself was already
+expressible. A pattern published by an earlier step is refused, because its
+layout is not in hand to check.
+
+Pinned on the tiny Llama (`documents/data/weekdays_aligned`, the pairs that
+tokenize to equal length): the patched head's pattern, read back in the
+patched model, **equals** the counterfactual's bit for bit and is still a
+distribution; a bystander head's is untouched; a pattern taken from the same
+prompt changes nothing; the misaligned `weekdays/train` is refused by name.
+
+On Llama-3.2-1B it answered a real question in 15 s. Head patching had found
+one mover head, L12 H28. Swapping only its *pattern* at the last token does
+nothing (logit-diff −2.396 against a −2.403 median over 32 heads); swapping
+its whole result had given +0.05. The head looks at the same place whatever
+the day is — what differs between prompts is what it reads there.

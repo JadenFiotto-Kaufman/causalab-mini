@@ -303,3 +303,70 @@ def test_what_a_site_of_units_may_not_say(data_root, model_engine):
     raw["sites"]["target"]["units"] = [16]
     with pytest.raises(plan.PlanError, match="unit 16 of a 16-unit tensor"):
         plan.build_request(raw, data_root, model_engine)
+
+
+# --------------------------------------------------------------------- #
+# swapping a counterfactual's pattern in
+# --------------------------------------------------------------------- #
+
+PATTERN = REPO / "documents" / "v2" / "attention_pattern_patching.json"
+
+
+def _pattern_raw(heads):
+    from causalab_mini.plan import sweep
+
+    raw = sweep.points(json.loads(PATTERN.read_text()))[0][1]
+    raw["sites"]["one_head"]["heads"] = heads
+    return raw
+
+
+def test_the_patched_head_looks_where_it_did_on_the_counterfactual(data_root, eager_engine):
+    """Read the pattern back in the patched model — a read sees its model's
+    writes — for the patched head and for a bystander."""
+    raw = _pattern_raw([2])
+    raw["sites"]["bystander"] = {"component": "attention_probs", "layers": [0], "heads": [1]}
+    one = raw["interventions"]["pattern_patching"]
+    one["reads"]["ours_after"] = {"site": "one_head", "pos": -1, "model": "patched", "input": "base"}
+    one["reads"]["bystander_after"] = {"site": "bystander", "pos": -1, "model": "patched", "input": "base"}
+    one["reads"]["bystander_before"] = {"site": "bystander", "pos": -1, "model": "original", "input": "base"}
+    raw["steps"]["score"]["outputs"] = {name: {"read": read} for name, read in (
+        ("theirs", "their_pattern"), ("after", "ours_after"), ("by_after", "bystander_after"), ("by_before", "bystander_before"))}
+    got = eager_engine.execute(plan.build_request(raw, data_root, eager_engine)).step("score", plan.Observe).results
+
+    assert torch.equal(got["after"], got["theirs"]), "head 2 now attends as it did on the counterfactual"
+    assert torch.equal(got["by_after"], got["by_before"]), "head 1 was not touched"
+    assert torch.allclose(got["after"].sum(-1), torch.ones(got["after"].shape[:2]), atol=1e-6), "still a distribution"
+
+
+def test_a_pattern_from_the_same_prompt_changes_nothing(data_root, eager_engine):
+    raw = _pattern_raw([0, 1, 2, 3])
+    patched = _score(raw, data_root, eager_engine)
+    raw["roles"]["counterfactual"]["field"] = raw["roles"]["base"]["field"]
+    same = _score(raw, data_root, eager_engine)
+    raw["interventions"]["pattern_patching"]["models"]["patched"]["writes"] = []
+    clean = _score(raw, data_root, eager_engine)
+    assert torch.allclose(same, clean, rtol=0, atol=1e-6)
+    assert not torch.allclose(patched, clean, rtol=0, atol=1e-6)
+
+
+def test_prompts_laid_out_differently_are_refused_before_any_forward(data_root, eager_engine):
+    """A pattern is over *keys*. In `weekdays/train` the base and
+    counterfactual days tokenize to different lengths, so key j there is a
+    different word — or a pad — here, and every shape would still be right."""
+    raw = _pattern_raw([0])
+    raw["steps"]["score"]["rows"] = {"base": "weekdays/train", "counterfactual": "weekdays/train"}
+    with pytest.raises(plan.PlanError, match="must tokenize to the same length, row by row"):
+        plan.build_request(raw, data_root, eager_engine)
+
+
+def test_a_pattern_published_by_an_earlier_step_cannot_be_checked(data_root, eager_engine):
+    raw = _pattern_raw([0])
+    one = raw["interventions"]["pattern_patching"]
+    raw["interventions"]["harvest"] = {"reads": {"their_pattern": one["reads"].pop("their_pattern")}}
+    one["writes"]["look_there"]["operand"] = {"ref": "kept"}
+    score = raw["steps"].pop("score")
+    raw["steps"] = {"harvest": {"kind": "observe", "intervention": "harvest", "rows": score["rows"],
+                                "outputs": {"kept": {"read": "their_pattern"}}},
+                    "score": {**score, "intervention": "pattern_patching"}}
+    with pytest.raises(plan.PlanError, match="swap one read in the same pass"):
+        plan.build_request(raw, data_root, eager_engine)

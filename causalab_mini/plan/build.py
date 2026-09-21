@@ -815,9 +815,12 @@ def _check_ragged(forwards: tuple[Forward, ...], experiment: _Experiment) -> Non
     reads = {
         read.name: read.at.positions for forward in forwards for tap in forward.taps for read in tap.reads
     }
+    read_in = {read.name: forward for forward in forwards for tap in forward.taps for read in tap.reads}
     for forward in forwards:
         for tap in forward.taps:
             for write in tap.writes:
+                if tap.address.key_axis and isinstance(write.operand, str):
+                    _check_keys(write, forward, read_in.get(write.operand))
                 empty = [row for row, window in enumerate(write.at.positions) if not window]
                 if empty:
                     raise PlanError(
@@ -837,6 +840,37 @@ def _check_ragged(forwards: tuple[Forward, ...], experiment: _Experiment) -> Non
                             "is a policy this slice does not implement — the protocol's "
                             "`exact_length_buckets` and `padded_masked` — so it refuses"
                         )
+
+
+def _check_keys(write: Any, forward: Forward, source: Forward | None) -> None:
+    """A pattern swapped in from another prompt must line up key for key.
+
+    The last axis of `attention_probs` is the keys of the padded batch: key
+    `j` of the operand lands on key `j` here. That is only the same *token*
+    if the two prompts are laid out identically — the same padded width and,
+    row by row, the same number of real tokens (the rows are left-padded, so
+    equal counts means equal masks). Otherwise attention mass meant for a
+    token would land on a pad, or on a different word, with every shape
+    correct. Both masks are in hand before any forward, so this is refused
+    here rather than discovered — or not discovered — later.
+    """
+    if source is None:
+        raise PlanError(
+            f"write {write.name!r}: an attention pattern from an earlier step cannot be checked "
+            "against these prompts' layout; swap one read in the same pass"
+        )
+    if source.attention_mask == forward.attention_mask:
+        return
+    ours = [sum(row) for row in forward.attention_mask]
+    theirs = [sum(row) for row in source.attention_mask]
+    rows = [row for row, (a, b) in enumerate(zip(ours, theirs)) if a != b]
+    raise PlanError(
+        f"write {write.name!r} swaps in the attention pattern {write.operand!r}, read from "
+        f"prompts laid out differently: " + (
+            f"rows {rows} have {[theirs[r] for r in rows]} tokens there and {[ours[r] for r in rows]} here"
+            if rows else f"padded to {len(source.attention_mask[0])} there and {len(forward.attention_mask[0])} here"
+        ) + ". A pattern is over keys, so the two prompts must tokenize to the same length, row by row"
+    )
 
 
 def _take(rows: dict[str, list[rows_module.Row]], picked: list[int]) -> dict[str, list[rows_module.Row]]:

@@ -95,6 +95,10 @@ class _Component:
     #: model holds it flat (`o_proj`'s input) or as two axes (the query) —
     #: so a site may name `heads`, and a featurizer sees one width.
     heads: str | None = None
+    #: Its last axis is the *keys* of the padded batch, not a feature width:
+    #: true of the attention pattern and the scores under it. A value read
+    #: here only means something beside a prompt laid out the same way.
+    keys: bool = False
     seq_axis: int = 1  # which axis of the tensor the sequence runs along
     width: str | None = None  # the nnterp handle attribute holding this tap's width
     #: A tensor that may be read and never written: the token ids are the
@@ -161,6 +165,7 @@ _COMPONENTS = {
         seq_axis=2,
         needs="eager",
         heads="num_attention_heads",
+        keys=True,
     ),
     "attention_probs": _Component(
         # The same softmax's return: the attention pattern, before dropout
@@ -176,6 +181,7 @@ _COMPONENTS = {
         seq_axis=2,
         needs="eager",
         heads="num_attention_heads",
+        keys=True,
     ),
     "attention_z": _Component(
         # The same call's *return*, element 0: the mixer's per-head result
@@ -364,6 +370,11 @@ class Address:
     def needs(self) -> str | None:
         """The attention implementation this place exists under, if any."""
         return self._entry.needs
+
+    @property
+    def key_axis(self) -> bool:
+        """Whether this tensor's last axis is the keys of the padded batch."""
+        return self._entry.keys
 
     @property
     def heads_attribute(self) -> str | None:
