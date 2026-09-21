@@ -61,6 +61,8 @@ class ReadOp:
     #: through the model's final norm and head — the logit lens: what the
     #: model would say if this layer were its last.
     view: str = "raw"
+    #: At a per-head tensor: `(how many heads, which of them)`.
+    heads: tuple[int, tuple[int, ...] | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -75,6 +77,7 @@ class WriteOp:
     featurizer: str
     #: The mechanism's numbers: a scale, a seed.
     params: dict[str, float] = field(default_factory=dict)
+    heads: tuple[int, tuple[int, ...] | None] | None = None
 
 
 @dataclass(frozen=True)

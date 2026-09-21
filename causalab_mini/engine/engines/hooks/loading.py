@@ -41,7 +41,8 @@ def load(spec: Any, device_map: str = "cpu", dispatch: bool = True) -> tuple[Any
     """
     if dispatch:
         model = AutoModelForCausalLM.from_pretrained(
-            spec.key, revision=spec.revision, dtype=DTYPES[spec.dtype], device_map=device_map
+            spec.key, revision=spec.revision, dtype=DTYPES[spec.dtype], device_map=device_map,
+            attn_implementation=getattr(spec, "attn_implementation", None),
         )
     else:
         config = AutoConfig.from_pretrained(spec.key, revision=spec.revision)

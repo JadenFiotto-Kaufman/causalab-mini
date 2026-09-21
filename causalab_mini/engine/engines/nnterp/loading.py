@@ -28,6 +28,10 @@ def load(spec: Any, **options: Any) -> StandardizedTransformer:
     """
     if options.get("dispatch") is False:
         options.setdefault("device_map", None)
+    if getattr(spec, "attn_implementation", None) is not None:
+        # the document's, because it decides which tensors exist (the
+        # attention pattern is only ever materialized under "eager")
+        options.setdefault("attn_implementation", spec.attn_implementation)
     return StandardizedTransformer(
         spec.key, revision=spec.revision, dtype=DTYPES[spec.dtype], **options
     )

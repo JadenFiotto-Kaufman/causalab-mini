@@ -66,7 +66,11 @@ express "run the prefill, then walk N decode steps and accumulate". Three
 features break the rules outright — cross-point interning, prefix resume and
 cohorts — all for the same reason: they need mutable state that outlives a
 step and spans sibling plans, against "nothing crosses steps except the
-featurizers".
+featurizers". *(Since superseded: a `steps` list now shares a `State` — the
+live featurizers and the named `outputs` a step publishes — so values do
+cross steps. What still does not exist, and what these three need, is state
+shared between **sibling plans**: each sweep point gets fresh outputs by
+design.)*
 
 **The write seam holds, and a gate is a featurizer.** Settled by causalab's
 own code (`class Gate(Stage)`, `featurizers.py:833`; `MECHANISMS` has no mask
@@ -114,11 +118,11 @@ stand.
 | 5 | **Record engine, dependency versions, and a code digest** | 2 | ~20 lines. nnsight and nnterp are editable checkouts that move underneath the project, and two engines exist whose attention defaults are known to differ. |
 | ~~6~~ | ~~**Endpoint-disjoint fit splits**~~ | — | **SURVEY ERROR — already implemented.** `plan/build.py:239` refuses two refs that share a row, by name ("the two must be endpoint-disjoint"), and deliberately permits one ref named twice as the visible train-equals-test ablation. The learning survey reported this absent; it is not. |
 | 7 | **`fit_diagnostics.json`** | 2 | Two numbers for a subspace, computed where `Weights` already stands — and what stops a meaningless fit reporting a perfect score. |
-| 8 | ~~**The nine module-boundary components**~~ | 1 | **DONE.** Eight added (`embeddings`, `block_input`, `attention_output`, `mlp_input`, `mlp_output`, `ln_final`, plus the interiors `attention_key` and `attention_z`); eleven then, **eighteen now**: `input_ids` (read-only), `attention_input_norm`, `attention_premix`, `block_mid`, `mlp_input_norm`, `mlp_activation` and `mlp_neuron_output` followed as module boundaries of named children, with no `.source` and no family column — FINDINGS §13. `attention_scores`/`attention_probs` (eager attention, nested `.source`) and pre-RoPE q/k (GPT-2's fused `c_attn`) are still left. |
+| 8 | ~~**The nine module-boundary components**~~ | 1 | **DONE.** Eight added (`embeddings`, `block_input`, `attention_output`, `mlp_input`, `mlp_output`, `ln_final`, plus the interiors `attention_key` and `attention_z`); eleven then, **eighteen now**: `input_ids` (read-only), `attention_input_norm`, `attention_premix`, `block_mid`, `mlp_input_norm`, `mlp_activation` and `mlp_neuron_output` followed as module boundaries of named children, with no `.source` and no family column — FINDINGS §13. `attention_scores`/`attention_probs` (eager attention, nested `.source`) and pre-RoPE q/k (GPT-2's fused `c_attn`) are still left. **`attention_scores` and `attention_probs` landed** as a nested operation under eager attention — twenty components; FINDINGS §17. |
 | 9 | **Literal scalar operands** (`{"swap": 0.0}`) | 1–2 | Zero ablation, the cheapest baseline there is, is a type widening on `WriteOp.operand`. |
 | 10 | **`add_scaled`, `lerp`, `clamp`, `gaussian`** | 1–2 | One function each behind the existing `Mechanism` protocol. (`renormalize` is cost 3 — it needs the ordering rule.) |
 | 11 | ~~Authorable `subspace.seed`~~ ✓, `pca` kind, `early_stop.mode: "min"` | 1–2 | The seed is **DONE** and bought `random_subspace_cpu.json`. `pca` and the minimizing objective remain. |
-| 12 | **Per-head feature slice on an address** | 2 | One field plus a slice in `gather`/`scatter`. Head-level work is a large share of real interpretability. |
+| 12 | ~~**Per-head feature slice on an address**~~ — **DONE**, as `heads` on a *site* (FINDINGS §17) | 2 | One field plus a slice in `gather`/`scatter`. Head-level work is a large share of real interpretability. |
 | 13 | **Sweep `{"range": …}` and multi-field cross products** | 1–2 | The two commonest sweep spellings; the plan tree already carries the results. |
 | 14 | **Refuse a non-differentiable metric in an objective** | 1 | Mini will happily put `match` in a loss and train on a zero gradient. |
 | 15 | **Microbatching by row window inside `forward`** | 2 | Entirely behind the existing seam, and the precondition for running anything bigger than a tiny model. |

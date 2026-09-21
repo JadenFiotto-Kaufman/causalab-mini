@@ -56,6 +56,11 @@ class Model(Node):
     key: str
     revision: str
     dtype: Literal["fp32", "bf16"]
+    #: Which attention code the model runs. Absent, the library's default
+    #: (sdpa). It is part of the experiment and not of the run: `eager` is
+    #: the only one under which `attention_scores` and `attention_probs`
+    #: exist, and the implementations differ in the last bits.
+    attn_implementation: Literal["eager", "sdpa"] | None = None
 
 
 class Role(Node):
@@ -66,9 +71,21 @@ class Role(Node):
 class Site(Node):
     component: str
     layers: list[int] | None = None
+    #: At a per-head tensor, the heads this site is. The site's width is then
+    #: theirs — `len(heads) · head_dim` — so a featurizer, a swap or a harvest
+    #: here is of those heads and leaves the others alone.
+    heads: list[int] | None = None
 
     @model_validator(mode="after")
     def _one_layer(self) -> "Site":
+        if self.heads is not None:
+            if not address.describe().get(self.component, {}).get("heads", False):
+                per_head = sorted(n for n, one in address.describe().items() if one["heads"])
+                raise ValueError(
+                    f"{self.component!r} is not a per-head tensor; `heads` applies at {per_head}"
+                )
+            if not self.heads or len(set(self.heads)) != len(self.heads) or min(self.heads) < 0:
+                raise ValueError("heads is a non-empty list of distinct head indices")
         if self.layers is not None and len(self.layers) != 1:
             raise ValueError(
                 "layers must be a one-element band; a band spanning several "

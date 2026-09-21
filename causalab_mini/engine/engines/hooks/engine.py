@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 import torch
 
+from .... import address as address_module
 from ....address import Address, AddressError
 from ....ops import intervene
 from ....plan import Forward, Plan, Tap
@@ -76,6 +77,9 @@ class HooksEngine(Engine):
                 "engine."
             )
         return address
+
+    def heads(self, address: Address) -> int:
+        return address_module.head_count(self.model.config, address)
 
     def width(self, address: Address) -> int:
         """The tap's width, off the config.
@@ -228,12 +232,14 @@ def _apply(
             featurizers[write.featurizer],
             tap.address.seq_axis,
             write.params,
+            write.heads,
         )
     for read in tap.reads:
         gathered = intervene.gather(
             activation,
             intervene.at_step(read.positions, activation, tap.address.seq_axis, tap.step, step),
             tap.address.seq_axis,
+            read.heads,
         )
         if read.view == "logits":
             gathered = names.lm_head(names.ln_final(gathered))

@@ -40,4 +40,4 @@ def test_a_module_boundary_cannot_carry_an_operation():
 
 def test_a_component_with_no_address_is_refused_here():
     with pytest.raises(AddressError, match="no address here"):
-        Address("attention_probs", 0)
+        Address("attention_pattern", 0)

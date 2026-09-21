@@ -162,7 +162,7 @@ def _flat(positions: Positions, device: Any) -> tuple[Any, Any]:
     return torch.as_tensor(rows, device=device), torch.as_tensor(index, device=device)
 
 
-def gather(tensor: Any, positions: Positions, seq_axis: int = 1) -> Any:
+def gather(tensor: Any, positions: Positions, seq_axis: int = 1, heads: Heads | None = None) -> Any:
     """A window per row.
 
     Uniform windows keep the rectangle: (batch, seq, width) -> (batch, w,
@@ -177,6 +177,10 @@ def gather(tensor: Any, positions: Positions, seq_axis: int = 1) -> Any:
     head_dim). Which one it is is a fact about the address, not about the
     tensor, so it is passed in.
     """
+    return _heads_out(_window(tensor, positions, seq_axis), positions, heads)
+
+
+def _window(tensor: Any, positions: Positions, seq_axis: int) -> Any:
     moved = tensor.movedim(seq_axis, 1)
     if is_ragged(positions):
         rows, index = _flat(positions, tensor.device)
@@ -186,10 +190,45 @@ def gather(tensor: Any, positions: Positions, seq_axis: int = 1) -> Any:
     return moved[rows, index]
 
 
-def scatter(tensor: Any, positions: Positions, values: Any, seq_axis: int = 1) -> Any:
+#: A per-head tensor: how many heads it has, and which a site named (None:
+#: all of them). Whether the model holds it as one head-major axis or as
+#: `(heads, per_head)`, it is handed on flat — `(…, n · per_head)`.
+Heads = tuple[int, tuple[int, ...] | None]
+
+
+def _heads_out(window: Any, positions: Positions, heads: Heads | None) -> Any:
+    if heads is None:
+        return window
+    count, chosen = heads
+    lead = window.shape[: 1 if is_ragged(positions) else 2]
+    split = window.reshape(*lead, count, -1)
+    if chosen is not None:
+        split = split[..., list(chosen), :]
+    return split.flatten(-2)
+
+
+def _heads_in(window: Any, positions: Positions, heads: Heads | None, values: Any) -> Any:
+    """`window` with the named heads replaced by `values`, in the shape the
+    model holds it."""
+    if heads is None:
+        return values
+    count, chosen = heads
+    lead = window.shape[: 1 if is_ragged(positions) else 2]
+    split = window.reshape(*lead, count, -1).clone()
+    chosen = tuple(range(count)) if chosen is None else chosen
+    piece = values.to(split.dtype).expand(*lead, len(chosen) * split.shape[-1])
+    split[..., list(chosen), :] = piece.reshape(*lead, len(chosen), -1)
+    return split.reshape(window.shape)
+
+
+def scatter(
+    tensor: Any, positions: Positions, values: Any, seq_axis: int = 1, heads: Heads | None = None
+) -> Any:
     """A copy of `tensor` with each row's window replaced by `values`: the
     shape `gather` would return for these positions, or anything that
     broadcasts to it — a published (w, width) or (width,) mean, say."""
+    if heads is not None:
+        values = _heads_in(_window(tensor, positions, seq_axis), positions, heads, values)
     out = tensor.clone()
     moved = out.movedim(seq_axis, 1)  # a view of `out`
     if is_ragged(positions):
@@ -210,9 +249,10 @@ def apply_write(
     featurizer: str | Featurizer = "identity",
     seq_axis: int = 1,
     params: dict[str, Any] | None = None,
+    heads: Heads | None = None,
 ) -> Any:
     featurize = FEATURIZERS[featurizer] if isinstance(featurizer, str) else featurizer
-    x = gather(tensor, positions, seq_axis)
+    x = gather(tensor, positions, seq_axis, heads)
     f, err = featurize.featurize(x)
     f = MECHANISMS[mechanism](f, operand, **(params or {}))
-    return scatter(tensor, positions, featurize.inverse(f, err, x), seq_axis)
+    return scatter(tensor, positions, featurize.inverse(f, err, x), seq_axis, heads)

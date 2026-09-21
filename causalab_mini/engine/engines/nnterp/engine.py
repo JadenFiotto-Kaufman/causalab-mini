@@ -28,6 +28,7 @@ from typing import Any
 import nnsight
 import torch
 
+from .... import address as address_module
 from ....address import Address, AddressError
 from ....ops import intervene
 from ....plan import Forward, Plan
@@ -62,13 +63,20 @@ class NNterpEngine(Engine):
         that cannot be addressed should fail at compile time and not inside
         someone else's process."""
         address = Address(component, layer, family=getattr(self.model.config, "model_type", None))
+        address_module.check(self.model.config, address)
         if address.call_site is None:
             return address
         source = address.resolve(self.model).source
         return replace(address, op=find_op(source, address.call_site))
 
+    def heads(self, address: Address) -> int:
+        return address_module.head_count(self.model.config, address)
+
     def width(self, address: Address) -> int:
         attribute = address.width_attribute
+        if attribute == "head_dim":
+            # a per-head tensor is handed on flat: every head, side by side
+            return self.heads(address) * address_module.head_dim(self.model.config)
         if attribute is None:
             raise AddressError(
                 f"the width of {address.component!r} is not derivable here; "
@@ -157,6 +165,7 @@ def apply_taps(
                 featurizers[write_op.featurizer],
                 tap.address.seq_axis,
                 write_op.params,
+                write_op.heads,
             )
             write(model, tap.address, patched)
         for read_op in tap.reads:
@@ -165,6 +174,7 @@ def apply_taps(
                 tensor,
                 intervene.at_step(read_op.positions, tensor, tap.address.seq_axis, tap.step, step),
                 tap.address.seq_axis,
+                read_op.heads,
             )
             if read_op.view == "logits":
                 # The logit lens: the residual pushed through the final norm and
@@ -215,7 +225,7 @@ def read(model: Any, address: Address) -> Any:
         return address.get(getattr(address.resolve(model), address.side))
     call = operation(model, address)
     if address.handle == "output":
-        return call.output[address.arg]
+        return call.output if address.arg is None else call.output[address.arg]
     args, _ = call.inputs
     return args[address.arg]
 
@@ -229,6 +239,10 @@ def write(model: Any, address: Address, tensor: Any) -> None:
         return
     call = operation(model, address)
     index = address.arg
+    if address.handle == "output" and index is None:
+        call.output = tensor
+        return
+    assert index is not None
     if address.handle == "output":
         current = call.output
         call.output = (*current[:index], tensor, *current[index + 1 :])
@@ -244,4 +258,15 @@ def operation(model: Any, address: Address) -> Any:
             f"component {address.component!r} is an interior; build its address "
             "with engine.locate(...) so the operation is resolved"
         )
-    return getattr(address.resolve(model).source, address.op)
+    outer = getattr(address.resolve(model).source, address.op)
+    if address.inner is None:
+        return outer
+    # The callee's own source: only openable here, inside the trace, because
+    # which function the call dispatches to is a run-time fact.
+    inner = outer.source
+    if address.inner not in inner.names:
+        raise AddressError(
+            f"component {address.component!r}: the function {address.op!r} dispatches to "
+            f"has no operation {address.inner!r}; it has {list(inner.names)}"
+        )
+    return getattr(inner, address.inner)

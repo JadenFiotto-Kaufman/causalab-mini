@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import random
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +65,14 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
         name: engine.locate(site.component, site.layers[0] if site.layers else None)
         for name, site in spec.sites.items()
     }
+    heads = {}
+    for name, site in spec.sites.items():
+        if addresses[name].heads_attribute is None:
+            continue
+        count = engine.heads(addresses[name])
+        if site.heads is not None and max(site.heads) >= count:
+            raise PlanError(f"site {name!r}: head {max(site.heads)} of a {count}-head tensor")
+        heads[name] = (count, None if site.heads is None else tuple(site.heads))
     fits = [one for one in spec.steps.values() if type(one).__name__ == "Fit"]
     featurizers = tuple(
         _spec_featurizer(name, one, spec, addresses, engine, fits)
@@ -92,7 +100,7 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
     for name, step in spec.steps.items():
         kind = type(step).__name__
         experiment = (
-            _Experiment.of_spec(spec, spec.intervention_of(step))
+            replace(_Experiment.of_spec(spec, spec.intervention_of(step)), heads=heads)
             if kind in ("Observe", "Fit")
             else None
         )
@@ -241,6 +249,8 @@ def _spec_featurizer(
 ) -> FeaturizerOp:
     site = _sites_of(spec)[name]
     d = engine.width(addresses[site])
+    if spec.sites[site].heads is not None:
+        d = d // engine.heads(addresses[site]) * len(spec.sites[site].heads)
     # a gate's features are the site's units, so its k is d
     k = d if one.k is None else one.k
     if not 0 < k <= d:
@@ -423,6 +433,8 @@ class _Experiment:
     models: dict[str, Any]
     metrics: dict[str, Any]
     decode: int = 0
+    #: site -> `(head count, the heads it names)`, for the per-head sites.
+    heads: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def of_document(cls, document: Document) -> "_Experiment":
@@ -872,6 +884,7 @@ def _forward(
                     mechanism=spec.mechanism,
                     featurizer=spec.featurizer,
                     params=dict(getattr(spec, "params", {})),
+                    heads=experiment.heads.get(spec.site),
                 )
             )
     reads: dict[tuple[Address, Any], list[ReadOp]] = {}
@@ -884,6 +897,7 @@ def _forward(
                 positions=resolve(spec.pos),
                 featurizer=spec.featurizer,
                 view=getattr(spec, "view", "raw"),
+                heads=experiment.heads.get(spec.site),
             )
         )
 

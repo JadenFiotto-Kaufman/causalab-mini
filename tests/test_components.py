@@ -41,6 +41,21 @@ def gpt2_engine():
 
 
 @pytest.fixture(scope="session")
+def eager_engine():
+    """The same tiny Llama running eager attention — the only implementation
+    under which the attention pattern is a tensor at all."""
+    return NNterpEngine.load(
+        document.Document.load(REPO / "documents" / "minimal_cpu.json").model,
+        device_map="cpu", attn_implementation="eager",
+    )
+
+
+@pytest.fixture(scope="session")
+def eager_gpt2_engine():
+    return NNterpEngine.load(document.Document.load(GPT2).model, device_map="cpu", attn_implementation="eager")
+
+
+@pytest.fixture(scope="session")
 def hooks_engine():
     return HooksEngine.load(
         document.Document.load(REPO / "documents" / "minimal_cpu.json").model,
@@ -72,13 +87,13 @@ def _at(raw, component, layer):
 
 
 @pytest.mark.parametrize("component", list(_COMPONENTS))
-def test_one_address_serves_both_families(component, model_engine, gpt2_engine):
+def test_one_address_serves_both_families(component, eager_engine, eager_gpt2_engine):
     """FINDINGS §1.11, extended from three components to eleven: the address
     is *equal* on tiny Llama and tiny GPT-2, whose module trees share no path,
     because nnterp absorbs the family axis and the interior's operation is
     resolved per checkpoint rather than tabulated."""
     layer = 0 if _COMPONENTS[component].band == 1 else None
-    assert model_engine.locate(component, layer).where == gpt2_engine.locate(component, layer).where
+    assert eager_engine.locate(component, layer).where == eager_gpt2_engine.locate(component, layer).where
 
 
 #: What each standardized name resolves to in a raw HuggingFace tree. This is
@@ -159,7 +174,8 @@ def test_the_addresses_sort_into_forward_order():
     assert ordered[:2] == ["input_ids", "embeddings"] and ordered[-2:] == ["ln_final", "lm_head"]
 
 
-def test_every_component_can_be_read_in_one_forward(model_engine):
+def test_every_component_can_be_read_in_one_forward(eager_engine):
+    model_engine = eager_engine  # eager, so the pattern is among them
     """The ordering claim, against the library rather than against itself:
     nnsight raises `OutOfOrderError` if an address is reached after the model
     has run past it, so reading all eleven in sorted order in one trace is

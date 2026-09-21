@@ -179,7 +179,7 @@ def test_the_engine_specific_surface_is_exactly_the_contract():
     it is worth more here: a second runtime, sharing nothing with the first,
     still added no member of its own to the contract."""
     overridden = {name for name in vars(HooksEngine) if not name.startswith("_")}
-    assert overridden == {"load", "tokenizer", "num_layers", "locate", "width",
+    assert overridden == {"load", "tokenizer", "num_layers", "locate", "width", "heads",
                           "execute", "forward"}
 
 

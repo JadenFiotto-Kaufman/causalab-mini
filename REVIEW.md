@@ -358,8 +358,19 @@ Recorded so they are not rediscovered.
 > and `<gate>.mask` as an objective term; `documents/v2/dbm.json` is the
 > sparsity curve as one document — FINDINGS §14. Then eligibility: a null
 > answer column is an excluded measurement, resolved on the client into a
-> row list, written as `eligible: false` with no value — FINDINGS §15. The
-> owner's list is empty.
+> row list, written as `eligible: false` with no value — FINDINGS §15.
+> After the list: `select` for where an activation sits in a boundary's
+> value (§16), and `heads` on a site plus `attention_scores` /
+> `attention_probs` (§17).
+>
+> **Noted, not built — a general module call on a read.** `view: "logits"`
+> is hardwired to one chain, `lm_head(ln_final(x))`. The general form is a
+> read field like `"through": ["ln_final", "lm_head"]`: layerless (or
+> layered) component names applied in order, inside the forward, by calling
+> the envoy / module on the gathered value — which is all `view` does today.
+> It would cover "norm only", a tuned lens loaded as a featurizer followed
+> by the head, and pushing a vector through a later block. Build it when a
+> document needs a second chain; `view` then becomes its first spelling.
 
 The test of each item is the same one this project has used from the start:
 write the document first, see whether it needs anything beyond a new kind of

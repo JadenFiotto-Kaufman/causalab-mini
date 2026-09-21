@@ -1205,3 +1205,71 @@ weights and is refused by name. A select that does not reach a tensor is an
 Not covered: interiors keep their own `handle`/`arg`, and the hooks
 engine's *input* side still picks the first positional or the single tensor
 keyword before `select` could apply.
+
+
+## 17. Heads are a slice of a place; the pattern is an operation inside the operation
+
+### 17.1 `heads` belongs to the site, not the address
+
+A site may say `"heads": [1, 3]` at any per-head tensor — `attention_query`,
+`attention_key`, `attention_scores`, `attention_probs`, `attention_z`,
+`attention_premix`. It compiles onto the **read and write ops**, beside their
+positions, and not into the `Address`: heads are *where in the tensor*, as
+positions are, and two sites naming disjoint heads of one component are one
+address, hence one tap, hence ordered correctly for free. (Pinned: heads
+{0,1} and {2,3} as two sites equal the unsliced patch bit for bit.)
+
+A per-head tensor is handed on **flat**, `(rows, w, n·per_head)`, however the
+model holds it — head-major in one axis (`o_proj`'s input) or as
+`(heads, head_dim)` (the query, `z`). `gather` splits, picks and flattens;
+`scatter` rebuilds the model's own shape with the named heads replaced.
+Nothing downstream knows heads exist, which is why **DAS inside a pair of
+heads needed no code**: the site is 8 wide and a `k=4` rotation fits it.
+This changed what an *unsliced* interior read returns, from `(rows, w, heads,
+head_dim)` to flat; no test or document depended on the old shape.
+
+`attention_z` and `attention_premix` are the same tensor held two ways, and
+the per-head patch agrees **bit for bit** between them — which is also what
+lets the hooks engine do head patching at all, since `premix` is a module
+boundary.
+
+The engine contract grew to **eight** members: `heads(address)`. Like
+`width`, it is a question about the checkpoint only its holder can answer,
+and it is per address because key-head space is narrower under GQA. The
+per-head width is the config's own `head_dim` where it has one —
+`hidden/heads` is not always true.
+
+### 17.2 The pattern
+
+`attention_scores` and `attention_probs` are the argument and the return of
+the softmax inside `eager_attention_forward`, the function the attention
+module's `attention_interface(...)` call dispatches to. Three facts, each
+found by probing:
+
+- **nnsight opens a nested `.source` only inside a trace**, because the
+  callee is a run-time fact. So unlike every other interior, this one cannot
+  be resolved on the client against a meta shell. The table therefore holds
+  the inner operation's *name* (`nn_functional_softmax_0`, identical on
+  Llama and GPT-2), and the engine resolves it where the run runs, refusing
+  with the callee's operation list if it is absent.
+- **A needle would not have worked**: `softmax(` matches three operations on
+  its one line (the call, the `.to`, the assignment) — the rule §13.1 said
+  mini would eventually have to learn. A name sidesteps it.
+- **It exists only under eager attention.** What *can* be checked on the
+  client is the config's `_attn_implementation`, so `locate` refuses at
+  compile time and says what to write: `"attn_implementation": "eager"` in
+  the document's model block — the document's, because it decides which
+  tensors exist and changes the last bits.
+
+Pinned on the tiny Llama: all twenty components read in one forward in
+sorted order (so the two new stages are in the right place); `softmax(scores)
+== probs` bit for bit; each head's pattern sums to 1; zeroing head 2's
+pattern at a position equals zeroing head 2's `z` there (1e-6) — the write
+lands where it says; `remote="local"` reads the same pattern bit for bit,
+so the nested source opens inside a serialized session too.
+
+Not done: swapping a *counterfactual's* pattern in. The key axis is the
+padded batch's length, so base and counterfactual patterns only line up when
+their batches pad to the same width; nothing checks that on the client yet,
+and torch is what would complain. The hooks engine refuses both components,
+as it does every interior.

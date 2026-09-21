@@ -66,6 +66,8 @@ def test_the_base_engine_has_no_implementation():
     with pytest.raises(NotImplementedError):
         bare.width(Address("block_output", 0))
     with pytest.raises(NotImplementedError):
+        bare.heads(Address("attention_z", 0))
+    with pytest.raises(NotImplementedError):
         bare.tokenizer
     with pytest.raises(NotImplementedError):
         bare.num_layers
@@ -73,11 +75,13 @@ def test_the_base_engine_has_no_implementation():
 
 def test_the_engine_specific_surface_is_exactly_the_contract():
     """The finding this project exists to produce: an engine is how you load a
-    model, how you address it and how you run one forward — seven members. The
+    model, how you address it and how you run one forward — eight members
+    (`heads` joined when a site could name them: like `width`, it is a
+    question about the checkpoint that only its holder can answer). The
     walk over steps, the fit loop, the metrics and the write algebra are
     shared, and an engine adds nothing of its own to them."""
     overridden = {name for name in vars(NNterpEngine) if not name.startswith("_")}
-    assert overridden == {"load", "tokenizer", "num_layers", "locate", "width",
+    assert overridden == {"load", "tokenizer", "num_layers", "locate", "width", "heads",
                           "execute", "forward"}
 
 

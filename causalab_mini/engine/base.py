@@ -88,6 +88,10 @@ class Engine:
         """
         raise NotImplementedError
 
+    def heads(self, address: Address) -> int:
+        """How many heads the per-head tensor at `address` has."""
+        raise NotImplementedError
+
     def width(self, address: Address) -> int:
         """The size of the tap's last axis — the `d` a featurizer's `k` is a
         subspace of. Derived from (model, site) and never authored."""

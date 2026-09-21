@@ -79,7 +79,22 @@ class _Component:
     #: For an interior, which handle of that call carries the tensor: one of
     #: its positional arguments ("inputs") or its return ("output").
     handle: str = "inputs"
-    arg: int = 0  # which positional argument, or which element of the return
+    #: Which positional argument, or which element of the return; None when
+    #: the return is the tensor itself rather than a tuple holding it.
+    arg: int | None = 0
+    #: For an operation *inside* the operation: its name in the outer call's
+    #: own `.source`. nnsight can only open that inside a trace — the callee
+    #: is whatever the call dispatches to at run time — so unlike `op` this is
+    #: a name, resolved where the run runs, and not a needle resolved here.
+    inner: str | None = None
+    #: The attention implementation this place exists under. sdpa and flash
+    #: never materialize the pattern, so there is no tensor to address.
+    needs: str | None = None
+    #: The config attribute counting the heads of a head-major tensor. Such a
+    #: tensor is handed on flat, `(rows, w, heads · per_head)`, whether the
+    #: model holds it flat (`o_proj`'s input) or as two axes (the query) —
+    #: so a site may name `heads`, and a featurizer sees one width.
+    heads: str | None = None
     seq_axis: int = 1  # which axis of the tensor the sequence runs along
     width: str | None = None  # the nnterp handle attribute holding this tap's width
     #: A tensor that may be read and never written: the token ids are the
@@ -114,6 +129,8 @@ _COMPONENTS = {
         op="attention_interface(",
         arg=1,
         seq_axis=2,
+        heads="num_attention_heads",
+        width="head_dim",
     ),
     "attention_key": _Component(
         # The same call as the query, argument 2: the keys *before* GQA's
@@ -126,6 +143,39 @@ _COMPONENTS = {
         op="attention_interface(",
         arg=2,
         seq_axis=2,
+        heads="num_key_value_heads",
+        width="head_dim",
+    ),
+    "attention_scores": _Component(
+        # Inside the eager attention function the call dispatches to: the
+        # softmax's argument — QKᵀ·scale with the causal and padding mask
+        # already added, so a masked key is -inf here and 0 after.
+        # (batch, head, query, key): the sequence axis is the *query's*, and
+        # the last axis is the keys, whose length is the padded batch's.
+        path="attentions.{layer}",
+        side="input",
+        stage=3,
+        op="attention_interface(",
+        inner="nn_functional_softmax_0",
+        arg=0,
+        seq_axis=2,
+        needs="eager",
+        heads="num_attention_heads",
+    ),
+    "attention_probs": _Component(
+        # The same softmax's return: the attention pattern, before dropout
+        # (a no-op in eval) and before it meets the values. A write here is
+        # "make this head attend there".
+        path="attentions.{layer}",
+        side="input",
+        stage=4,
+        op="attention_interface(",
+        inner="nn_functional_softmax_0",
+        handle="output",
+        arg=None,
+        seq_axis=2,
+        needs="eager",
+        heads="num_attention_heads",
     ),
     "attention_z": _Component(
         # The same call's *return*, element 0: the mixer's per-head result
@@ -134,11 +184,13 @@ _COMPONENTS = {
         # reason `handle` exists.
         path="attentions.{layer}",
         side="input",
-        stage=3,
+        stage=5,
         op="attention_interface(",
         handle="output",
         arg=0,
         seq_axis=1,
+        heads="num_attention_heads",
+        width="head_dim",
     ),
     "input_ids": _Component(
         # The model's input: integer token ids, (batch, seq), no width axis.
@@ -165,42 +217,42 @@ _COMPONENTS = {
         # The output projection's *input*: the heads' results, merged
         # head-major and not yet mixed — where a per-head edit belongs.
         path="attentions.{layer}.o_proj|attentions.{layer}.c_proj",
-        side="input", stage=4, width="hidden_size",
+        side="input", stage=6, width="hidden_size", heads="num_attention_heads",
     ),
     "attention_output": _Component(
         # The mixer's contribution to the residual stream, before it is added:
         # block_mid = block_input + attention_output.
-        path="attentions.{layer}", side="output", stage=5, width="hidden_size"
+        path="attentions.{layer}", side="output", stage=7, width="hidden_size"
     ),
     "block_mid": _Component(
         # The residual stream after the mixer is added: the second norm's input.
         path="layers.{layer}.post_attention_layernorm|layers.{layer}.ln_2",
-        side="input", stage=6, width="hidden_size",
+        side="input", stage=8, width="hidden_size",
     ),
     "mlp_input_norm": _Component(
         path="layers.{layer}.post_attention_layernorm|layers.{layer}.ln_2",
-        side="output", stage=7, width="hidden_size",
+        side="output", stage=9, width="hidden_size",
     ),
     "mlp_input": _Component(
-        path="mlps.{layer}", side="input", stage=8, width="hidden_size"
+        path="mlps.{layer}", side="input", stage=10, width="hidden_size"
     ),
     "mlp_activation": _Component(
         # The activation function's output. No width: nnterp publishes no
         # intermediate size, which refuses a featurizer here.
-        path="mlps.{layer}.act_fn|mlps.{layer}.act", side="output", stage=9,
+        path="mlps.{layer}.act_fn|mlps.{layer}.act", side="output", stage=11,
     ),
     "mlp_neuron_output": _Component(
         # The down-projection's input: act(gate)·up on a gated MLP, and the
         # activation itself on GPT-2, which has no gate — the same *place*,
         # a different tensor, and the table says so rather than hiding it.
-        path="mlps.{layer}.down_proj|mlps.{layer}.c_proj", side="input", stage=10,
+        path="mlps.{layer}.down_proj|mlps.{layer}.c_proj", side="input", stage=12,
     ),
     "mlp_output": _Component(
         # block_output = block_mid + mlp_output.
-        path="mlps.{layer}", side="output", stage=11, width="hidden_size"
+        path="mlps.{layer}", side="output", stage=13, width="hidden_size"
     ),
     "block_output": _Component(
-        path="layers.{layer}", side="output", stage=12, width="hidden_size"
+        path="layers.{layer}", side="output", stage=14, width="hidden_size"
     ),
     "ln_final": _Component(
         path="ln_final", side="output", stage=0, band=2, width="hidden_size"
@@ -297,10 +349,26 @@ class Address:
         return self._entry.op is not None
 
     @property
-    def arg(self) -> int:
+    def arg(self) -> int | None:
         """For an interior: which positional argument of the call the tensor
-        is, or which element of its return."""
+        is, or which element of its return — None when the return is the
+        tensor."""
         return self._entry.arg
+
+    @property
+    def inner(self) -> str | None:
+        """For an operation inside the operation: its name there."""
+        return self._entry.inner
+
+    @property
+    def needs(self) -> str | None:
+        """The attention implementation this place exists under, if any."""
+        return self._entry.needs
+
+    @property
+    def heads_attribute(self) -> str | None:
+        """The config attribute counting this tensor's heads, if it has any."""
+        return self._entry.heads
 
     @property
     def handle(self) -> str:
@@ -352,6 +420,33 @@ class Address:
         return found[0]
 
 
+def head_count(config: Any, address: Address) -> int:
+    """How many heads the tensor at `address` has. Key-head space is
+    narrower than the query's on a model that groups, and a config that
+    does not group does not say so."""
+    attribute = address.heads_attribute
+    if attribute is None:
+        raise AddressError(f"component {address.component!r} is not a per-head tensor")
+    return int(getattr(config, attribute, None) or config.num_attention_heads)
+
+
+def head_dim(config: Any) -> int:
+    """One head's width: the config's own `head_dim` where it has one (it is
+    not always hidden/heads), else the quotient."""
+    return int(getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads)
+
+
+def check(config: Any, address: Address) -> None:
+    """Refuse a place this checkpoint, as loaded, does not have."""
+    have = getattr(config, "_attn_implementation", None)
+    if address.needs is not None and have != address.needs:
+        raise AddressError(
+            f"component {address.component!r} exists only under {address.needs!r} attention, "
+            f"and this model runs {have!r}: say \"attn_implementation\": \"{address.needs}\" "
+            "in the document's model block"
+        )
+
+
 def _walk(value: Any, path: tuple[int | str, ...]) -> Any:
     for step in path:
         try:
@@ -392,6 +487,8 @@ def describe() -> dict[str, dict[str, Any]]:
             "seq_axis": entry.seq_axis,
             "width": entry.width,
             "read_only": entry.read_only,
+            "heads": entry.heads is not None,
+            "needs": entry.needs,
             # the families this row has an exception for, and what differs
             "overrides": {
                 family: {key: repr(value) for key, value in differs.items()}
