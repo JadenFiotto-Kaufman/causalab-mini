@@ -67,6 +67,7 @@ dependencies = [
     { name = "accelerate" },
     { name = "nnsight" },
     { name = "nnterp" },
+    { name = "pydantic" },
     { name = "safetensors" },
     { name = "torch" },
 ]
@@ -81,6 +82,7 @@ requires-dist = [
     { name = "accelerate" },
     { name = "nnsight", editable = "/home/localjadenfk/wd/nnsight" },
     { name = "nnterp", editable = "/home/localjadenfk/wd/nnterp" },
+    { name = "pydantic" },
     { name = "safetensors" },
     { name = "torch" },
 ]
