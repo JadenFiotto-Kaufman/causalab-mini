@@ -16,6 +16,7 @@ import pathlib
 
 import pytest
 import torch
+from conftest import same_numbers
 from pydantic import ValidationError
 
 from causalab_mini import plan
@@ -290,8 +291,8 @@ def test_the_two_engines_agree_on_mean_ablation(mean_raw, data_root, model_engin
     hooks = HooksEngine.load(Spec.model_validate(mean_raw).model, device_map="cpu")
     traced = model_engine.execute(plan.build_request(mean_raw, data_root, model_engine))
     hooked = hooks.execute(plan.build_request(mean_raw, data_root, hooks))
-    assert torch.equal(traced.result("mean"), hooked.result("mean"))
-    assert torch.equal(
+    assert same_numbers(traced.result("mean"), hooked.result("mean"))
+    assert same_numbers(
         traced.step("ablated", plan.Observe).results["logit_diff"],
         hooked.step("ablated", plan.Observe).results["logit_diff"],
     )

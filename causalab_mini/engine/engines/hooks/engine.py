@@ -129,11 +129,11 @@ class HooksEngine(Engine):
             handles.append(self.model.register_forward_hook(lambda *_: _tick(clock)))
         try:
             if not forward.decode:
-                self.model(**batch(forward))
+                self.model(**batch(forward, self.model.get_input_embeddings().weight.device))
             else:
                 prompt = len(forward.input_ids[0])
                 ids = self.model.generate(
-                    **batch(forward),
+                    **batch(forward, self.model.get_input_embeddings().weight.device),
                     max_new_tokens=forward.decode,
                     min_new_tokens=forward.decode,
                     do_sample=False,
@@ -145,11 +145,13 @@ class HooksEngine(Engine):
                 handle.remove()
 
 
-def batch(forward: Forward) -> dict[str, Any]:
-    """The plan's integers, as the tensors a forward takes."""
+def batch(forward: Forward, device: Any = None) -> dict[str, Any]:
+    """The plan's integers, as the tensors a forward takes — where the model's
+    first layer is. nnsight does this move for its engine; here nothing does,
+    which a CPU-only suite never noticed."""
     return {
-        "input_ids": torch.tensor(forward.input_ids),
-        "attention_mask": torch.tensor(forward.attention_mask),
+        "input_ids": torch.tensor(forward.input_ids, device=device),
+        "attention_mask": torch.tensor(forward.attention_mask, device=device),
     }
 
 
@@ -228,7 +230,8 @@ def _apply(
         )
         if read.view == "logits":
             gathered = names.lm_head(names.ln_final(gathered))
-        values[read.name] = featurizers[read.featurizer].featurize(gathered)[0].clone()
+        with intervene.exact(gathered):
+            values[read.name] = featurizers[read.featurizer].featurize(gathered)[0].clone()
     return activation
 
 

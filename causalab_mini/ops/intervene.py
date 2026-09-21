@@ -243,18 +243,18 @@ def scatter(tensor: Any, at: Selection | Positions, values: Any, seq_axis: int =
         lead = _lead(window, at)
         split = window.reshape(*lead, at.groups, -1).clone()
         take = tuple(range(at.groups)) if at.take is None else at.take
-        piece = values.to(split.dtype).expand(*lead, len(take) * split.shape[-1])
+        piece = values.to(split).expand(*lead, len(take) * split.shape[-1])
         split[..., list(take), :] = piece.reshape(*lead, len(take), -1)
         values = split.reshape(window.shape)
     out = tensor.clone()
     moved = out.movedim(seq_axis, 1)  # a view of `out`
     if _is_flat(at):
         rows, index = _flat(positions, tensor.device)
-        moved[rows, index] = values.to(out.dtype)
+        moved[rows, index] = values.to(out)
         return out
     rows = torch.arange(tensor.shape[0], device=tensor.device)[:, None]
     index = torch.as_tensor(positions, device=tensor.device)
-    moved[rows, index] = values.to(out.dtype)
+    moved[rows, index] = values.to(out)
     return out
 
 
@@ -269,6 +269,21 @@ def apply_write(
 ) -> Any:
     featurize = FEATURIZERS[featurizer] if isinstance(featurizer, str) else featurizer
     x = gather(tensor, at, seq_axis)
-    f, err = featurize.featurize(x)
-    f = MECHANISMS[mechanism](f, operand, **(params or {}))
-    return scatter(tensor, at, featurize.inverse(f, err, x), seq_axis)
+    with exact(x):
+        f, err = featurize.featurize(x)
+        f = MECHANISMS[mechanism](f, operand, **(params or {}))
+        written = featurize.inverse(f, err, x)
+    return scatter(tensor, at, written, seq_axis)
+
+
+def exact(x: Any) -> Any:
+    """Featurizer math runs outside autocast.
+
+    A server may wrap a whole request in `torch.autocast` (NDIF does, at the
+    served dtype). Inside it a matmul of two fp32 tensors comes back bf16
+    while a subtraction stays fp32 — so half of a Cayley solve is downcast
+    and `linalg.solve` refuses the pair; and a rotation that *did* run would
+    be orthonormal only to bf16. A featurizer declares its own dtype, fp32,
+    and this is where that declaration is kept. Found on the first real NDIF
+    run; no local run autocasts. FINDINGS §19."""
+    return torch.autocast(device_type=x.device.type, enabled=False)

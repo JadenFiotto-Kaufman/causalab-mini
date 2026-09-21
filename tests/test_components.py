@@ -19,6 +19,7 @@ import pathlib
 import nnsight
 import pytest
 import torch
+from conftest import same_numbers
 
 from causalab_mini import ops, plan
 from causalab_mini.address import Address, _COMPONENTS
@@ -341,7 +342,7 @@ def test_the_two_engines_agree_at_the_new_components(
     hooked = hooks_engine.execute(plan.build_request(raw, data_root, hooks_engine))
 
     for name in ("iia", "logit_diff"):
-        assert torch.equal(traced.result(name), hooked.result(name)), (component, name)
+        assert same_numbers(traced.result(name), hooked.result(name)), (component, name)
 
 
 def test_the_token_ids_can_be_read_and_never_written(minimal_raw, data_root, model_engine):

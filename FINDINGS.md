@@ -1365,3 +1365,79 @@ mean over the concatenated rows, so the graph of every window is alive until
 the backward; a fit's memory knob is `pairs`. It does bound the held-out
 pass, which runs under `no_grad`. Gradient accumulation across windows would
 be the next step and is not built.
+
+
+## 19. The first real runs: what a toy model and `remote="local"` could not show
+
+2026-09-21, hakone: Llama-3.2-1B on an A100, and through a self-hosted NDIF.
+The results are in `documents/real/README.md` and are the kind the library
+exists to produce (a layer-12 crossover, one mover head, a 16-dimensional
+subspace). This section is the **seven defects** the runs found. Every one
+was invisible to 409 passing tests, because every test ran a 16-wide random
+model on a CPU in one process.
+
+### Found by a real width
+
+1. **The Cayley start did not train.** `start_weight` drew unit-variance
+   entries, so the skew matrix's singular values grow like √d; the Cayley
+   transform saturates (→ −I, derivative ~1/σ²) and at d = 2048 the basis
+   stops responding to its parameter. Measured: loss 3.23 → 3.29 over 60
+   updates, held-out IIA 0.00 at every k. Scaled by 1/√d: 3.22 → 0.11, IIA
+   1.00. At d = 16 the two are indistinguishable, which is the only reason
+   DAS "worked" before.
+
+### Found by a GPU
+
+2. A featurizer's parameter was built on the CPU and met a CUDA activation.
+   Fixed generally rather than by threading a device: a featurizer computes
+   **where its activation is** (`_on`), the parameter staying one leaf for
+   the optimizer — which also covers `device_map="auto"` over several GPUs
+   and a server whose placement the client never learns.
+3. The hooks engine left its input ids on the CPU (nnsight moves them for
+   its own engine; nothing did here).
+4. A gate's mask (CPU) was stacked with metrics (CUDA) in a fit's record.
+
+### Found by a real server
+
+5. **Python minor versions must match.** The plan's classes ship by value,
+   and a 3.13 dataclass carries `__replace__ = dataclasses._replace`, which
+   3.12 does not have: the payload could not be read. A property of shipping
+   dataclasses by value, not fixable here; the client env was rebuilt on
+   3.12. (nnsight versions must match too — the module layout moved between
+   0.8.0rc1 and the dev checkout.)
+6. **A filled-in plan cannot come home.** The server can *run* by-value
+   classes but cannot pickle an instance of one back. `execute` now brings
+   home `{step path: {name: tensor}}` — no class of ours in it, asserted on
+   the pickle bytes — and fills the plan the client never gave up. It is
+   also the better design: `execute` returns the plan it was passed.
+7. **NDIF runs a request under autocast**, which downcast half of the
+   Cayley solve (`linalg.solve: A Float, B BFloat16`). Featurizer math now
+   runs outside autocast (`intervene.exact`): a featurizer declares fp32 and
+   this is where that is kept. It also sidesteps the autocast weight cache
+   that once froze remote training outright.
+
+And one thing that is not a defect but was unrecorded: **the server serves
+the dtype it chose** (bf16) whatever the document says. `run.json` now has
+`served_dtype`.
+
+### What held
+
+Every design claim that could have broken did not: one document is one
+NDIF job (16 experiments, or 96, or four fits with their optimizer loops);
+the walk, the fit, the windowing, generation-free and nested-`.source`-free
+paths all ran server-side unmodified; the hooks and nnterp engines agree
+**exactly** on the real model on the GPU (672 numbers); and the same suite
+passes on both machines once nine cross-engine assertions stopped claiming
+bit-equality — on hakone's CPU the engines differ by one ulp (1.49e-08)
+where on bippu they do not, so that was a fact about a laptop.
+
+### A format gap the documents exposed
+
+The layer sweep wants `pos` swept on a read **and** its write *together*.
+Two `{"sweep": …}` wrappers are a cross product — 64 points, half of them
+reading one position and writing another — so it is two documents instead.
+A linked sweep (one axis, several fields) is the missing spelling.
+
+Not yet run for real: generation, the attention pattern (the deployment is
+sdpa), ragged reads, and a gate — all pass on the GPU with the tiny model,
+none has met a real one.

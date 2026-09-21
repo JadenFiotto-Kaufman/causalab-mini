@@ -73,7 +73,9 @@ def test_the_lens_projection_matches_the_head_within_an_ulp(model_engine):
         whole = m.lm_head(m.ln_final(resid))[:, -1:, :].save()
         true = m.lm_head.output[:, -1:, :].save()
     assert torch.equal(whole, true), "the whole sequence, then sliced: exact"
-    assert not torch.equal(one, true), "one position: the GEMM rounds differently"
+    # On bippu the one-position projection differs from the head by an ulp
+    # (the GEMM has fewer rows); on hakone it does not. Either way it is
+    # within one — which way a GEMM rounds is the platform's business.
     assert (one - true).abs().max() < 1e-7
     assert torch.equal(one.argmax(-1), true.argmax(-1))
 

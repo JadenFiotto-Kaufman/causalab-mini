@@ -32,6 +32,7 @@ from .... import address as address_module
 from ....address import Address, AddressError
 from ....ops import intervene
 from ....plan import Forward, Plan
+from ....plan import plan as plan_module
 from ... import provenance, steps
 from ...base import Engine
 from .loading import load
@@ -87,9 +88,20 @@ class NNterpEngine(Engine):
         plan.provenance.update(provenance.record(self, remote, batch_size))
         engine, model = self, self.model
         with model.session(remote=remote):
-            executed = nnsight.save(plan)
-            steps.run(engine, executed, batch_size=batch_size)
-        return executed
+            # What comes home is plain — strings and tensors. The plan goes
+            # out by value, so a server can run it but cannot pickle one of
+            # its classes back; and the client already has the plan, so only
+            # what fills it in needs the trip. (`remote="local"` never
+            # noticed: it does not serialize the way back. FINDINGS §19.)
+            home = nnsight.save({})
+            steps.run(engine, plan, batch_size=batch_size)
+            home.update(plan_module.results_of(plan))
+            # A server serves the dtype *it* chose; the document's is only a
+            # request. Say what ran, where the run record is.
+            home["served_dtype"] = str(model.lm_head.weight.dtype)
+        plan.provenance["served_dtype"] = home.pop("served_dtype")
+        plan_module.fill(plan, home)
+        return plan
 
     def forward(
         self,
@@ -171,7 +183,8 @@ def apply_taps(
                 # rows·seq, which rounds differently from the model's own
                 # logits by an ulp or so (FINDINGS §10).
                 gathered = model.lm_head(model.ln_final(gathered))
-            values[read_op.name] = featurizers[read_op.featurizer].featurize(gathered)[0].clone()
+            with intervene.exact(gathered):
+                values[read_op.name] = featurizers[read_op.featurizer].featurize(gathered)[0].clone()
 
 
 def find_op(source: Any, call_site: str) -> str:

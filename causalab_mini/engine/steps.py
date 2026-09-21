@@ -219,14 +219,16 @@ def fit(engine: Any, step: Fit, state: State) -> None:
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            losses.append(loss.detach())
+            losses.append(loss.detach().cpu())
         # The eval pass runs in eval mode: no gradients, and on rows the fit
         # never saw.
         _training(featurizers, step.params, False)
         with torch.no_grad():
             evaluated = dict(observe(engine, step.evaluation, state))
             evaluated.update({f"{name}.mask": gate.mask for name, gate in gates.items()})
-        scores.append(torch.stack([evaluated[name].mean() for name in step.eval_metrics]))
+        # each on the CPU first: a metric is wherever the model is, a gate's mask
+        # wherever its parameter is, and a record is neither's
+        scores.append(torch.stack([evaluated[name].mean().cpu() for name in step.eval_metrics]))
         watched = float(evaluated[step.early_stop].mean())
         improved = best is None or (watched > best if step.mode == "max" else watched < best)
         if improved:

@@ -28,6 +28,7 @@ uv run causalab-mini run documents/v2/das.json --device-map cpu --out out
 | [`FINDINGS.md`](FINDINGS.md) | every fact about model internals and runtimes this project had to learn the hard way |
 | [`NOTES.md`](NOTES.md) | a close reading of the protocol the copied documents are written in |
 | [`examples/`](examples/) | a notebook that runs one document end to end and shows the plan filling in |
+| [`documents/real/`](documents/real/) | Llama-3.2-1B on the weekday task, with measured results: behaviour, layer sweeps, head patching, DAS — run locally and on NDIF |
 | [`documents/v2/`](documents/v2/) | the plan-shaped format: patching, DAS, mean ablation, zero ablation, a window, an entity harvest, a logit lens, generation, a PCA control, DBM, head-by-head and neuron patching, attention knockout |
 
 The CLI's read-only verbs — `schema`, `vocab`, `model`, `tokens`, `data`,

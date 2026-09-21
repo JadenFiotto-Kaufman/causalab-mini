@@ -1,0 +1,171 @@
+{
+  "header": {
+    "description": "DAS on a real model: a k-dimensional subspace of the day token's residual stream that, swapped alone, carries 'today' from the counterfactual. Fit on 30 pairs, scored on 12 held-out pairs; k is swept, so the document is the rank curve."
+  },
+  "model": {
+    "key": "meta-llama/Llama-3.2-1B",
+    "revision": "4e20de362430cd3b72f300e6b0f18e50e7166e08",
+    "dtype": "fp32"
+  },
+  "roles": {
+    "base": {
+      "field": "input"
+    },
+    "counterfactual": {
+      "field": "counterfactual_inputs[0]"
+    }
+  },
+  "sites": {
+    "target": {
+      "component": "block_output",
+      "layers": [
+        8
+      ]
+    },
+    "head": {
+      "component": "lm_head"
+    }
+  },
+  "featurizers": {
+    "rot": {
+      "kind": "subspace",
+      "k": {
+        "sweep": [
+          1,
+          4,
+          16,
+          64
+        ]
+      }
+    }
+  },
+  "interventions": {
+    "das": {
+      "reads": {
+        "v_cf": {
+          "site": "target",
+          "pos": -4,
+          "model": "original",
+          "input": "counterfactual",
+          "featurizer": "rot"
+        },
+        "logits": {
+          "site": "head",
+          "pos": -1,
+          "model": "patched",
+          "input": "base"
+        }
+      },
+      "writes": {
+        "patch": {
+          "site": "target",
+          "pos": -4,
+          "mechanism": "swap",
+          "operand": "v_cf",
+          "featurizer": "rot"
+        }
+      },
+      "models": {
+        "patched": {
+          "input": "base",
+          "writes": [
+            "patch"
+          ]
+        }
+      },
+      "metrics": {
+        "iia": {
+          "kind": "match",
+          "of": "logits",
+          "token_form": "space_prefixed",
+          "expected": "cf_answer"
+        },
+        "logit_diff": {
+          "kind": "logit_diff",
+          "of": "logits",
+          "token_form": "space_prefixed",
+          "a": "cf_answer",
+          "b": "base_answer"
+        },
+        "ce": {
+          "kind": "cross_entropy",
+          "of": "logits",
+          "token_form": "space_prefixed",
+          "target": "cf_answer"
+        }
+      }
+    }
+  },
+  "steps": {
+    "fit": {
+      "kind": "fit",
+      "rows": {
+        "base": "weekdays_full/data#train",
+        "counterfactual": "weekdays_full/data#train"
+      },
+      "params": [
+        "rot"
+      ],
+      "objective": [
+        [
+          1.0,
+          "ce"
+        ]
+      ],
+      "epochs": 20,
+      "pairs": 10,
+      "seed": 0,
+      "optimizer": {
+        "name": "adamw",
+        "lr": 0.003,
+        "weight_decay": 0.0
+      },
+      "early_stop": {
+        "metric": "iia",
+        "mode": "max",
+        "patience": 20
+      },
+      "eval": {
+        "rows": {
+          "base": "weekdays_full/data#test",
+          "counterfactual": "weekdays_full/data#test"
+        },
+        "saves": [
+          {
+            "value": "iia",
+            "file_path": "iia.json"
+          }
+        ]
+      }
+    },
+    "score": {
+      "kind": "observe",
+      "rows": {
+        "base": "weekdays_full/data#test",
+        "counterfactual": "weekdays_full/data#test"
+      },
+      "saves": [
+        {
+          "value": "iia",
+          "file_path": "iia.json"
+        },
+        {
+          "value": "logit_diff",
+          "file_path": "logit_diff.json"
+        }
+      ]
+    },
+    "weights": {
+      "kind": "weights",
+      "names": [
+        "rot"
+      ],
+      "saves": [
+        {
+          "value": "rot",
+          "file_path": "rot.safetensors"
+        }
+      ]
+    }
+  }
+}

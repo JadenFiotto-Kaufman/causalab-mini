@@ -14,6 +14,7 @@ import shutil
 
 import pytest
 import torch
+from conftest import same_numbers
 
 from causalab_mini import plan
 from causalab_mini.data import rows as rows_module
@@ -87,7 +88,7 @@ def test_the_hooks_engine_excludes_the_same_row(raw, holed_root, model_engine):
     hooks = HooksEngine.load(Spec.model_validate(raw).model, device_map="cpu")
     traced = model_engine.execute(plan.build_request(raw, holed_root, model_engine))
     hooked = hooks.execute(plan.build_request(raw, holed_root, hooks))
-    assert torch.equal(traced.result("logit_diff"), hooked.result("logit_diff"))
+    assert same_numbers(traced.result("logit_diff"), hooked.result("logit_diff"))
 
 
 def test_a_metric_of_nothing_is_refused(raw, holed_root, model_engine):

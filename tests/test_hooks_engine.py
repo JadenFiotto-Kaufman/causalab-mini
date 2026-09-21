@@ -16,6 +16,7 @@ from dataclasses import replace
 
 import pytest
 import torch
+from conftest import same_numbers
 
 from causalab_mini import plan
 from causalab_mini.address import AddressError
@@ -74,7 +75,7 @@ def test_the_two_engines_produce_the_same_numbers(
 
     assert set(traced.all_results()) == set(hooked.all_results())
     for name, values in traced.all_results().items():
-        assert torch.equal(values, hooked.result(name)), name
+        assert same_numbers(values, hooked.result(name)), name
 
 
 def test_the_two_engines_fit_the_same_rotation(das_raw, data_root):
@@ -91,7 +92,7 @@ def test_the_two_engines_fit_the_same_rotation(das_raw, data_root):
 
     assert set(fitted.all_results()) == set(hooks.all_results())
     for name, values in fitted.all_results().items():
-        assert torch.equal(values, hooks.result(name)), name
+        assert same_numbers(values, hooks.result(name), atol=1e-4), name  # through ten AdamW updates
 
 
 # --------------------------------------------------------------------- #

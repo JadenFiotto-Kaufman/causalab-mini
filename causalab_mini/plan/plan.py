@@ -363,6 +363,25 @@ def children(step: Step) -> tuple[tuple[str, Step], ...]:
     return ()
 
 
+def results_of(step: Step, path: str = "") -> dict[str, dict[str, Any]]:
+    """Everything a run produced, as `{step path: {name: value}}` — plain
+    strings and tensors, with none of this package's classes in it. That is
+    what may cross back from a server: the plan went out by value, so the
+    server can *use* its classes but cannot pickle an instance of one home.
+    The client still has the plan; only what filled it in has to travel."""
+    found = {path: dict(step.results)} if step.results else {}
+    for name, child in children(step):
+        found.update(results_of(child, f"{path}/{name}" if path else name))
+    return found
+
+
+def fill(step: Step, results: dict[str, dict[str, Any]], path: str = "") -> None:
+    """The inverse of `results_of`: put a run's results into this plan."""
+    step.results.update(results.get(path, {}))
+    for name, child in children(step):
+        fill(child, results, f"{path}/{name}" if path else name)
+
+
 def _find(step: Step, name: str) -> list[Any]:
     found = [step.results[name]] if name in step.results else []
     for child in steps_of(step):

@@ -1,0 +1,506 @@
+[
+ {
+  "example_id": "Sun-Mon",
+  "input": "If today is Sunday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Monday, tomorrow is"
+  ],
+  "entity": "Sunday",
+  "cf_entity": "Monday",
+  "base_answer": " Monday",
+  "cf_answer": " Tuesday",
+  "split": "test"
+ },
+ {
+  "example_id": "Tue-Sun",
+  "input": "If today is Tuesday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Sunday, tomorrow is"
+  ],
+  "entity": "Tuesday",
+  "cf_entity": "Sunday",
+  "base_answer": " Wednesday",
+  "cf_answer": " Monday",
+  "split": "test"
+ },
+ {
+  "example_id": "Sat-Thu",
+  "input": "If today is Saturday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Thursday, tomorrow is"
+  ],
+  "entity": "Saturday",
+  "cf_entity": "Thursday",
+  "base_answer": " Sunday",
+  "cf_answer": " Friday",
+  "split": "test"
+ },
+ {
+  "example_id": "Mon-Tue",
+  "input": "If today is Monday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Tuesday, tomorrow is"
+  ],
+  "entity": "Monday",
+  "cf_entity": "Tuesday",
+  "base_answer": " Tuesday",
+  "cf_answer": " Wednesday",
+  "split": "test"
+ },
+ {
+  "example_id": "Sun-Tue",
+  "input": "If today is Sunday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Tuesday, tomorrow is"
+  ],
+  "entity": "Sunday",
+  "cf_entity": "Tuesday",
+  "base_answer": " Monday",
+  "cf_answer": " Wednesday",
+  "split": "test"
+ },
+ {
+  "example_id": "Thu-Wed",
+  "input": "If today is Thursday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Wednesday, tomorrow is"
+  ],
+  "entity": "Thursday",
+  "cf_entity": "Wednesday",
+  "base_answer": " Friday",
+  "cf_answer": " Thursday",
+  "split": "test"
+ },
+ {
+  "example_id": "Wed-Thu",
+  "input": "If today is Wednesday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Thursday, tomorrow is"
+  ],
+  "entity": "Wednesday",
+  "cf_entity": "Thursday",
+  "base_answer": " Thursday",
+  "cf_answer": " Friday",
+  "split": "test"
+ },
+ {
+  "example_id": "Tue-Wed",
+  "input": "If today is Tuesday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Wednesday, tomorrow is"
+  ],
+  "entity": "Tuesday",
+  "cf_entity": "Wednesday",
+  "base_answer": " Wednesday",
+  "cf_answer": " Thursday",
+  "split": "test"
+ },
+ {
+  "example_id": "Thu-Mon",
+  "input": "If today is Thursday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Monday, tomorrow is"
+  ],
+  "entity": "Thursday",
+  "cf_entity": "Monday",
+  "base_answer": " Friday",
+  "cf_answer": " Tuesday",
+  "split": "test"
+ },
+ {
+  "example_id": "Thu-Fri",
+  "input": "If today is Thursday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Friday, tomorrow is"
+  ],
+  "entity": "Thursday",
+  "cf_entity": "Friday",
+  "base_answer": " Friday",
+  "cf_answer": " Saturday",
+  "split": "test"
+ },
+ {
+  "example_id": "Wed-Mon",
+  "input": "If today is Wednesday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Monday, tomorrow is"
+  ],
+  "entity": "Wednesday",
+  "cf_entity": "Monday",
+  "base_answer": " Thursday",
+  "cf_answer": " Tuesday",
+  "split": "test"
+ },
+ {
+  "example_id": "Tue-Mon",
+  "input": "If today is Tuesday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Monday, tomorrow is"
+  ],
+  "entity": "Tuesday",
+  "cf_entity": "Monday",
+  "base_answer": " Wednesday",
+  "cf_answer": " Tuesday",
+  "split": "test"
+ },
+ {
+  "example_id": "Mon-Sun",
+  "input": "If today is Monday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Sunday, tomorrow is"
+  ],
+  "entity": "Monday",
+  "cf_entity": "Sunday",
+  "base_answer": " Tuesday",
+  "cf_answer": " Monday",
+  "split": "train"
+ },
+ {
+  "example_id": "Mon-Wed",
+  "input": "If today is Monday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Wednesday, tomorrow is"
+  ],
+  "entity": "Monday",
+  "cf_entity": "Wednesday",
+  "base_answer": " Tuesday",
+  "cf_answer": " Thursday",
+  "split": "train"
+ },
+ {
+  "example_id": "Thu-Sun",
+  "input": "If today is Thursday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Sunday, tomorrow is"
+  ],
+  "entity": "Thursday",
+  "cf_entity": "Sunday",
+  "base_answer": " Friday",
+  "cf_answer": " Monday",
+  "split": "train"
+ },
+ {
+  "example_id": "Wed-Fri",
+  "input": "If today is Wednesday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Friday, tomorrow is"
+  ],
+  "entity": "Wednesday",
+  "cf_entity": "Friday",
+  "base_answer": " Thursday",
+  "cf_answer": " Saturday",
+  "split": "train"
+ },
+ {
+  "example_id": "Tue-Sat",
+  "input": "If today is Tuesday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Saturday, tomorrow is"
+  ],
+  "entity": "Tuesday",
+  "cf_entity": "Saturday",
+  "base_answer": " Wednesday",
+  "cf_answer": " Sunday",
+  "split": "train"
+ },
+ {
+  "example_id": "Sun-Thu",
+  "input": "If today is Sunday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Thursday, tomorrow is"
+  ],
+  "entity": "Sunday",
+  "cf_entity": "Thursday",
+  "base_answer": " Monday",
+  "cf_answer": " Friday",
+  "split": "train"
+ },
+ {
+  "example_id": "Sat-Sun",
+  "input": "If today is Saturday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Sunday, tomorrow is"
+  ],
+  "entity": "Saturday",
+  "cf_entity": "Sunday",
+  "base_answer": " Sunday",
+  "cf_answer": " Monday",
+  "split": "train"
+ },
+ {
+  "example_id": "Fri-Sat",
+  "input": "If today is Friday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Saturday, tomorrow is"
+  ],
+  "entity": "Friday",
+  "cf_entity": "Saturday",
+  "base_answer": " Saturday",
+  "cf_answer": " Sunday",
+  "split": "train"
+ },
+ {
+  "example_id": "Fri-Thu",
+  "input": "If today is Friday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Thursday, tomorrow is"
+  ],
+  "entity": "Friday",
+  "cf_entity": "Thursday",
+  "base_answer": " Saturday",
+  "cf_answer": " Friday",
+  "split": "train"
+ },
+ {
+  "example_id": "Sun-Fri",
+  "input": "If today is Sunday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Friday, tomorrow is"
+  ],
+  "entity": "Sunday",
+  "cf_entity": "Friday",
+  "base_answer": " Monday",
+  "cf_answer": " Saturday",
+  "split": "train"
+ },
+ {
+  "example_id": "Wed-Sun",
+  "input": "If today is Wednesday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Sunday, tomorrow is"
+  ],
+  "entity": "Wednesday",
+  "cf_entity": "Sunday",
+  "base_answer": " Thursday",
+  "cf_answer": " Monday",
+  "split": "train"
+ },
+ {
+  "example_id": "Tue-Thu",
+  "input": "If today is Tuesday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Thursday, tomorrow is"
+  ],
+  "entity": "Tuesday",
+  "cf_entity": "Thursday",
+  "base_answer": " Wednesday",
+  "cf_answer": " Friday",
+  "split": "train"
+ },
+ {
+  "example_id": "Sat-Fri",
+  "input": "If today is Saturday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Friday, tomorrow is"
+  ],
+  "entity": "Saturday",
+  "cf_entity": "Friday",
+  "base_answer": " Sunday",
+  "cf_answer": " Saturday",
+  "split": "train"
+ },
+ {
+  "example_id": "Mon-Fri",
+  "input": "If today is Monday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Friday, tomorrow is"
+  ],
+  "entity": "Monday",
+  "cf_entity": "Friday",
+  "base_answer": " Tuesday",
+  "cf_answer": " Saturday",
+  "split": "train"
+ },
+ {
+  "example_id": "Sun-Sat",
+  "input": "If today is Sunday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Saturday, tomorrow is"
+  ],
+  "entity": "Sunday",
+  "cf_entity": "Saturday",
+  "base_answer": " Monday",
+  "cf_answer": " Sunday",
+  "split": "train"
+ },
+ {
+  "example_id": "Fri-Sun",
+  "input": "If today is Friday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Sunday, tomorrow is"
+  ],
+  "entity": "Friday",
+  "cf_entity": "Sunday",
+  "base_answer": " Saturday",
+  "cf_answer": " Monday",
+  "split": "train"
+ },
+ {
+  "example_id": "Tue-Fri",
+  "input": "If today is Tuesday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Friday, tomorrow is"
+  ],
+  "entity": "Tuesday",
+  "cf_entity": "Friday",
+  "base_answer": " Wednesday",
+  "cf_answer": " Saturday",
+  "split": "train"
+ },
+ {
+  "example_id": "Mon-Sat",
+  "input": "If today is Monday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Saturday, tomorrow is"
+  ],
+  "entity": "Monday",
+  "cf_entity": "Saturday",
+  "base_answer": " Tuesday",
+  "cf_answer": " Sunday",
+  "split": "train"
+ },
+ {
+  "example_id": "Sun-Wed",
+  "input": "If today is Sunday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Wednesday, tomorrow is"
+  ],
+  "entity": "Sunday",
+  "cf_entity": "Wednesday",
+  "base_answer": " Monday",
+  "cf_answer": " Thursday",
+  "split": "train"
+ },
+ {
+  "example_id": "Wed-Tue",
+  "input": "If today is Wednesday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Tuesday, tomorrow is"
+  ],
+  "entity": "Wednesday",
+  "cf_entity": "Tuesday",
+  "base_answer": " Thursday",
+  "cf_answer": " Wednesday",
+  "split": "train"
+ },
+ {
+  "example_id": "Thu-Sat",
+  "input": "If today is Thursday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Saturday, tomorrow is"
+  ],
+  "entity": "Thursday",
+  "cf_entity": "Saturday",
+  "base_answer": " Friday",
+  "cf_answer": " Sunday",
+  "split": "train"
+ },
+ {
+  "example_id": "Sat-Mon",
+  "input": "If today is Saturday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Monday, tomorrow is"
+  ],
+  "entity": "Saturday",
+  "cf_entity": "Monday",
+  "base_answer": " Sunday",
+  "cf_answer": " Tuesday",
+  "split": "train"
+ },
+ {
+  "example_id": "Thu-Tue",
+  "input": "If today is Thursday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Tuesday, tomorrow is"
+  ],
+  "entity": "Thursday",
+  "cf_entity": "Tuesday",
+  "base_answer": " Friday",
+  "cf_answer": " Wednesday",
+  "split": "train"
+ },
+ {
+  "example_id": "Fri-Tue",
+  "input": "If today is Friday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Tuesday, tomorrow is"
+  ],
+  "entity": "Friday",
+  "cf_entity": "Tuesday",
+  "base_answer": " Saturday",
+  "cf_answer": " Wednesday",
+  "split": "train"
+ },
+ {
+  "example_id": "Sat-Tue",
+  "input": "If today is Saturday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Tuesday, tomorrow is"
+  ],
+  "entity": "Saturday",
+  "cf_entity": "Tuesday",
+  "base_answer": " Sunday",
+  "cf_answer": " Wednesday",
+  "split": "train"
+ },
+ {
+  "example_id": "Sat-Wed",
+  "input": "If today is Saturday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Wednesday, tomorrow is"
+  ],
+  "entity": "Saturday",
+  "cf_entity": "Wednesday",
+  "base_answer": " Sunday",
+  "cf_answer": " Thursday",
+  "split": "train"
+ },
+ {
+  "example_id": "Wed-Sat",
+  "input": "If today is Wednesday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Saturday, tomorrow is"
+  ],
+  "entity": "Wednesday",
+  "cf_entity": "Saturday",
+  "base_answer": " Thursday",
+  "cf_answer": " Sunday",
+  "split": "train"
+ },
+ {
+  "example_id": "Mon-Thu",
+  "input": "If today is Monday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Thursday, tomorrow is"
+  ],
+  "entity": "Monday",
+  "cf_entity": "Thursday",
+  "base_answer": " Tuesday",
+  "cf_answer": " Friday",
+  "split": "train"
+ },
+ {
+  "example_id": "Fri-Wed",
+  "input": "If today is Friday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Wednesday, tomorrow is"
+  ],
+  "entity": "Friday",
+  "cf_entity": "Wednesday",
+  "base_answer": " Saturday",
+  "cf_answer": " Thursday",
+  "split": "train"
+ },
+ {
+  "example_id": "Fri-Mon",
+  "input": "If today is Friday, tomorrow is",
+  "counterfactual_inputs": [
+   "If today is Monday, tomorrow is"
+  ],
+  "entity": "Friday",
+  "cf_entity": "Monday",
+  "base_answer": " Saturday",
+  "cf_answer": " Tuesday",
+  "split": "train"
+ }
+]

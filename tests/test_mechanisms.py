@@ -10,6 +10,7 @@ import pathlib
 
 import pytest
 import torch
+from conftest import same_numbers
 from pydantic import ValidationError
 
 from causalab_mini import ops, plan
@@ -81,7 +82,7 @@ def test_the_two_engines_agree_on_zero_ablation(zero_raw, data_root, model_engin
     traced = model_engine.execute(plan.build_request(zero_raw, data_root, model_engine))
     hooked = hooks.execute(plan.build_request(zero_raw, data_root, hooks))
     for name in ("logit_diff", "p_answer"):
-        assert torch.equal(
+        assert same_numbers(
             traced.step("zeroed", plan.Observe).results[name],
             hooked.step("zeroed", plan.Observe).results[name],
         ), name

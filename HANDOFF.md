@@ -36,7 +36,7 @@ It **imports nothing from causalab**. Only the JSON documents were copied.
 
 ## 2. State as of this handoff
 
-`master`, clean tree, pushed to GitHub (private). **409 tests passing**
+`master`, clean tree, pushed to GitHub (private). **415 tests passing**
 (`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~8 s), `uvx pyright` at 0
 errors. **4,381 source lines** across 30 files in `causalab_mini/`.
 

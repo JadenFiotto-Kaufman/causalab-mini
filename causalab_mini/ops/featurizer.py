@@ -34,6 +34,18 @@ from typing import Any
 import torch
 
 
+def _on(parameter: torch.Tensor, x: Any) -> torch.Tensor:
+    """`parameter`, where `x` is. A featurizer computes on the device of the
+    activation it is handed — which it cannot know ahead of time: one GPU, a
+    model spread over several by `device_map="auto"`, a server's. The
+    parameter itself stays a single leaf wherever it was built, so the
+    optimizer holds one tensor whatever the model's placement, and the
+    gradient comes home through this `.to`. (A `(d, k)` copy per access; the
+    Cayley solve then runs beside the activation, which is the part that
+    would have been slow.)"""
+    return parameter.to(x.device)
+
+
 def cayley(weight: torch.Tensor) -> torch.Tensor:
     """The `(d, k)` orthonormal basis a `(d, k)` parameter names."""
     d, k = weight.shape
@@ -51,7 +63,14 @@ def start_weight(d: int, k: int, seed: int) -> torch.Tensor:
     if not 0 < k <= d:
         raise ValueError(f"k must be in 1..{d} for a {d}-wide activation, got {k}")
     generator = torch.Generator().manual_seed(seed)
-    return torch.randn(d, k, generator=generator, dtype=torch.float32)
+    # Scaled by 1/√d so the skew matrix it names has singular values near 1
+    # at any width. Unscaled they grow like √d, and the Cayley transform
+    # saturates: (I − A)⁻¹(I + A) → −I as A grows, its derivative falling off
+    # like 1/σ², so at d = 2048 a unit-variance start is a rotation no
+    # gradient can move (measured: loss 3.23 → 3.29 over 60 updates, held-out
+    # IIA 0.00; with this scale 3.22 → 0.11 and IIA 1.00). At d = 16, where
+    # this was first written, the difference is invisible. FINDINGS §19.
+    return torch.randn(d, k, generator=generator, dtype=torch.float32) / d**0.5
 
 
 class Subspace:
@@ -74,7 +93,7 @@ class Subspace:
     def featurize(self, x: Any) -> tuple[Any, None]:
         """x -> (Qᵀx, 0). `err` is always zero for a subspace: nothing is
         thrown away that `inverse` could not recover from `x` itself."""
-        return x.to(self.weight.dtype) @ self.basis, None
+        return x.to(self.weight.dtype) @ cayley(_on(self.weight, x)), None
 
     def inverse(self, f: Any, err: Any, x: Any) -> Any:
         """(f, 0, x) -> Q f + (x − Q Qᵀ x).
@@ -84,7 +103,7 @@ class Subspace:
         counterfactual's features this is "take the subspace from there, keep
         everything else from here".
         """
-        basis = self.basis
+        basis = cayley(_on(self.weight, x))
         x = x.to(basis.dtype)
         return f @ basis.T + (x - (x @ basis) @ basis.T)
 
@@ -107,10 +126,10 @@ class Basis:
         return self.weight
 
     def featurize(self, x: Any) -> tuple[Any, None]:
-        return x.to(self.weight.dtype) @ self.basis, None
+        return x.to(self.weight.dtype) @ _on(self.basis, x), None
 
     def inverse(self, f: Any, err: Any, x: Any) -> Any:
-        basis = self.basis
+        basis = _on(self.basis, x)
         x = x.to(basis.dtype)
         return f @ basis.T + (x - (x @ basis) @ basis.T)
 
@@ -155,7 +174,7 @@ class Gate:
         return x.to(self.weight.dtype), None
 
     def inverse(self, f: Any, err: Any, x: Any) -> Any:
-        mask = self.mask
+        mask = _on(self.mask, x)
         return mask * f + (1 - mask) * x.to(mask.dtype)
 
 

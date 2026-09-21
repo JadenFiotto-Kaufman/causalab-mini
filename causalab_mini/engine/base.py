@@ -104,8 +104,9 @@ class Engine:
     def execute(self, plan: Plan, remote: bool | str = False, batch_size: int | None = None) -> Plan:
         """Run `plan` and return it, filled in.
 
-        The plan that comes back is not always the one passed in: an engine
-        whose run happens elsewhere fills in a copy and hands that back.
+        The plan that comes back is the one passed in. An engine whose run
+        happens elsewhere brings home only the results — plain tensors, by
+        step path — and fills this plan with them.
         `batch_size` bounds how many rows one model call holds; the shared
         walk does the windowing, so an engine only passes it on.
         """
