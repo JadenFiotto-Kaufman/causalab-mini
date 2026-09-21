@@ -108,3 +108,13 @@ def test_run_is_the_same_pipeline_with_weights(tmp_path, capsys):
     ]
     ran = json.loads((tmp_path / "run.json").read_text())
     assert ran["engine"] == "NNterpEngine"
+
+
+def test_ndif_is_the_nnterp_engine_with_no_local_weights_run_remotely():
+    """The third `--engine` is not a third engine. It is the nnterp engine
+    loaded as a meta shell — the weights are the server's — and executed with
+    `remote=True`. Compiling is the same shell for every engine."""
+    engine_class, loading, remote = cli.ENGINES["ndif"]
+    assert engine_class is cli.ENGINES["nnterp"][0]
+    assert loading == {"dispatch": False} and remote is True
+    assert cli.SHAPE_ONLY == {"dispatch": False}

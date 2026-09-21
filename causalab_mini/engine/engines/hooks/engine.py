@@ -28,17 +28,17 @@ from .loading import HooksEngineError, load, standardized
 
 
 class HooksEngine(Engine):
-    def __init__(self, model: Any, tokenizer: Any, weights: bool = True) -> None:
+    def __init__(self, model: Any, tokenizer: Any, dispatched: bool = True) -> None:
         self.model = model
-        self.weights = weights
+        self._dispatched = dispatched
         # Two things nnterp hands over with the model and nobody else does: the
         # tokenizer, and the standardized names an address is written in.
         self._tokenizer = tokenizer
         self._names = standardized(model)
 
     @classmethod
-    def load(cls, spec: Any, weights: bool = True, **options: Any) -> "HooksEngine":
-        return cls(*load(spec, weights=weights, **options), weights=weights)
+    def load(cls, spec: Any, **options: Any) -> "HooksEngine":
+        return cls(*load(spec, **options), dispatched=options.get("dispatch", True))
 
     # ----------------------------------------------------------------- #
     # what the compiler asks
@@ -98,11 +98,11 @@ class HooksEngine(Engine):
     # ----------------------------------------------------------------- #
 
     def execute(self, plan: Plan, remote: bool | str = False) -> Plan:
-        if not self.weights:
+        if not self._dispatched:
             raise EngineError(
-                "this engine was loaded with weights=False — enough to compile, "
-                "validate and explain a document, not to run one. Load it again "
-                "with weights to execute."
+                "this engine was loaded with dispatch=False: a meta-device shell, "
+                "enough to compile and explain a document. Hooks have no server to "
+                "run it on; load with weights to execute."
             )
         if remote:
             raise HooksEngineError(

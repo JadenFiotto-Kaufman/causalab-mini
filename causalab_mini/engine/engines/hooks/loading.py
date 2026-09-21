@@ -31,14 +31,15 @@ class HooksEngineError(ValueError):
 DTYPES = {"fp32": torch.float32, "bf16": torch.bfloat16}
 
 
-def load(spec: Any, device_map: str = "cpu", weights: bool = True) -> tuple[Any, Any]:
+def load(spec: Any, device_map: str = "cpu", dispatch: bool = True) -> tuple[Any, Any]:
     """The model and the tokenizer — two loads, because nothing pairs them.
 
-    `weights=False` builds the module tree from the config on the meta
-    device: the shape of the model and nothing else, which is all the
-    compiler needs and a third thing nnsight does with one keyword.
+    `dispatch=False`, spelled as nnsight spells it, builds the module tree
+    from the config on the meta device: the shape of the model and nothing
+    else, which is all the compiler needs. Unlike nnsight's, this shell can
+    never run — there is no server for hooks — so the engine remembers.
     """
-    if weights:
+    if dispatch:
         model = AutoModelForCausalLM.from_pretrained(
             spec.key, revision=spec.revision, dtype=DTYPES[spec.dtype], device_map=device_map
         )

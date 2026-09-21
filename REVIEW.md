@@ -63,7 +63,7 @@ the cost was never real:
 
 Resolving "as they happen" would move all three decisions into the session,
 which is exactly what HANDOFF rules 5 and 9 exist to prevent. The change
-needed is one member on the engine: `load(spec, weights=False)`. §2.A.
+needed is nothing new on the engine: `load(spec, dispatch=False)`. §2.A.
 
 ---
 
@@ -105,10 +105,12 @@ needed is one member on the engine: `load(spec, weights=False)`. §2.A.
 
 ### A. Weightless compilation
 
-`Engine.load(spec, weights=False)` returns an engine over a meta model. For
-nnterp that is `dispatch=False`; for hooks, `AutoConfig` + `AutoTokenizer` +
-`from_config` under `torch.device("meta")`. `build_spec` works unchanged
-against it. `execute` on a weightless engine refuses by name.
+`Engine.load(spec, **options)` passes the runtime's options through, and
+`dispatch=False` — nnsight's own spelling — gives a meta shell: for nnterp
+literally that keyword; for hooks, `from_config` under
+`torch.device("meta")`. `build_spec` works unchanged against it. Whether the
+shell can *run* is not the engine's question: nnsight's runs on NDIF, hooks'
+has nowhere to, and only the latter refuses.
 
 This unlocks every verb in §3 that is not `run`, and it is the precondition
 for an agent that authors on one machine and runs on another.
@@ -284,10 +286,13 @@ Recorded so they are not rediscovered.
 
 ## 7. Order of work
 
-> Status: step 1 landed 2026-09-21. `Engine.load(spec, weights=False)` on
-> both engines; `document.json` and `run.json` in every output directory;
-> the verbs `schema`, `vocab`, `model`, `tokens`, `data`, `validate`,
-> `explain`, `run`, each with `--json`.
+> Status: step 1 landed 2026-09-21. `Engine.load(spec, **options)` passes
+> the runtime's own options through, so `dispatch=False` is a meta shell on
+> both engines — and, for nnterp, the same shell that runs on NDIF, which
+> is why the CLI's third engine is `ndif`: nnterp, undispatched, executed
+> remotely. `document.json` and `run.json` in every output directory; the
+> verbs `schema`, `vocab`, `model`, `tokens`, `data`, `validate`, `explain`,
+> `run`, each with `--json`.
 
 1. **A + provenance + the read-only CLI verbs** (`schema`, `vocab`, `model`,
    `tokens`, `data`, `validate`, `explain`). This is goal 2 delivered: an

@@ -97,13 +97,12 @@ def test_an_engine_that_ships_holds_nothing_but_its_model(model_engine):
     passing the class and the model separately — which is why `execute` may
     pass `self` rather than `type(self)`.
 
-    That stays true only while the engine holds the model and nothing that
-    weighs anything. `weights` is a bool. An engine that also held a
-    tokenizer, a dataset or a document would ship it. (The hooks engine does
-    hold a tokenizer, and refuses `remote` outright, which is the other way
-    to be safe.)
+    That stays true only while the engine holds the model and nothing else.
+    An engine that also held a tokenizer, a dataset or a document would ship
+    it. (The hooks engine does hold a tokenizer, and refuses `remote`
+    outright, which is the other way to be safe.)
     """
-    assert set(vars(model_engine)) == {"model", "weights"}
+    assert set(vars(model_engine)) == {"model"}
 
 
 def test_an_engine_with_no_model_and_no_session_runs_the_same_plan(minimal_plan, tmp_path):
@@ -127,28 +126,32 @@ def test_an_engine_with_no_model_and_no_session_runs_the_same_plan(minimal_plan,
 
 
 @pytest.mark.parametrize("engine_class", [NNterpEngine, HooksEngine])
-def test_a_weightless_engine_compiles_the_same_plan_and_refuses_to_run(
-    engine_class, minimal_raw, data_root
-):
+def test_a_meta_shell_compiles_the_same_plan(engine_class, minimal_raw, data_root):
     """The compiler asks for the tokenizer, the layer count, the widths and an
-    interior's operation — none of which is a weight. A meta-device load
-    answers all four in well under a second, so a document can be validated
-    and explained on a machine that will never run it. What it cannot do is
-    run, and it says so."""
+    interior's operation — none of which is a weight. `dispatch=False`, in
+    nnsight's own spelling, answers all four in well under a second, so a
+    document can be validated and explained on a machine that will never run
+    it — and, for nnterp, the same shell is what runs on NDIF."""
     spec = document.Document.from_json(minimal_raw).model
-    light = engine_class.load(spec, weights=False)
-    heavy = engine_class.load(spec, device_map="cpu")
+    shell = engine_class.load(spec, dispatch=False)
+    full = engine_class.load(spec, device_map="cpu")
 
-    assert light.num_layers == heavy.num_layers
-    assert light.width(light.locate("block_output", 0)) == heavy.width(heavy.locate("block_output", 0))
-    assert build(document.Document.from_json(minimal_raw), data_root, light) == build(
-        document.Document.from_json(minimal_raw), data_root, heavy
+    assert shell.num_layers == full.num_layers
+    assert shell.width(shell.locate("block_output", 0)) == full.width(full.locate("block_output", 0))
+    assert build(document.Document.from_json(minimal_raw), data_root, shell) == build(
+        document.Document.from_json(minimal_raw), data_root, full
     )
-    with pytest.raises(EngineError, match="weights=False"):
-        light.execute(build(document.Document.from_json(minimal_raw), data_root, light))
 
 
-def test_a_weightless_nnterp_engine_still_locates_an_interior(minimal_raw):
+def test_a_meta_shell_still_locates_an_interior(minimal_raw):
     """`.source` is the forward's *code*; it exists on the meta device."""
-    light = NNterpEngine.load(document.Document.from_json(minimal_raw).model, weights=False)
-    assert light.locate("attention_query", 0).op == "attention_interface_1"
+    shell = NNterpEngine.load(document.Document.from_json(minimal_raw).model, dispatch=False)
+    assert shell.locate("attention_query", 0).op == "attention_interface_1"
+
+
+def test_a_hooks_shell_refuses_to_run_because_it_has_nowhere_to(minimal_raw, data_root):
+    """nnsight's shell can run remotely; a hooks shell has no server, so the
+    engine — not the base contract — is the one that refuses."""
+    shell = HooksEngine.load(document.Document.from_json(minimal_raw).model, dispatch=False)
+    with pytest.raises(EngineError, match="dispatch=False"):
+        shell.execute(build(document.Document.from_json(minimal_raw), data_root, shell))

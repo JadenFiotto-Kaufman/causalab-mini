@@ -26,7 +26,16 @@ from .plan import document, sweep
 from .plan.explain import explain
 from .plan.spec import METRIC_COLUMNS, Spec
 
-ENGINES = {"nnterp": NNterpEngine, "hooks": HooksEngine}
+#: What `--engine` means: the class, how it is loaded to *run*, and where it
+#: runs. `ndif` is the nnterp engine with no local weights — a meta shell —
+#: executed remotely; the server has the weights. Compiling, for every
+#: engine, is the same shell with nothing dispatched.
+ENGINES: dict[str, tuple[type, dict[str, Any], bool | str]] = {
+    "nnterp": (NNterpEngine, {}, False),
+    "ndif": (NNterpEngine, {"dispatch": False}, True),
+    "hooks": (HooksEngine, {}, False),
+}
+SHAPE_ONLY = {"dispatch": False}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -63,8 +72,7 @@ def main(argv: list[str] | None = None) -> int:
         one.add_argument("--engine", default="nnterp", choices=list(ENGINES))
         if verb == "run":
             one.add_argument("--out", default="out")
-            one.add_argument("--remote", default="", help="'local' for the serverless dry run, 'true' for NDIF")
-            one.add_argument("--device-map", default="auto")
+            one.add_argument("--device-map", default="auto", help="ignored by ndif, whose weights are the server's")
 
     args = parser.parse_args(argv)
     result = VERBS[args.verb](args)
@@ -107,7 +115,7 @@ def vocab(args: argparse.Namespace) -> dict[str, Any]:
 
 def model(args: argparse.Namespace) -> dict[str, Any]:
     spec = document.ModelSpec(args.key, args.revision, args.dtype)
-    engine = ENGINES[args.engine].load(spec, weights=False)
+    engine = ENGINES[args.engine][0].load(spec, **SHAPE_ONLY)
     components: dict[str, Any] = {}
     for name, entry in address.describe().items():
         layer = 0 if entry["layered"] else None
@@ -179,26 +187,28 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
     return {"text": f"ok: {args.document} is a valid {shape} document", "ok": True, "format": shape}
 
 
-def _compile(args: argparse.Namespace, weights: bool, **options: Any) -> tuple[Any, Any]:
+def _compile(args: argparse.Namespace, **options: Any) -> tuple[Any, Any]:
     raw = _read(args.document)
-    engine_class = ENGINES[args.engine]
+    engine_class = ENGINES[args.engine][0]
     if "steps" in raw:
         spec = Spec.model_validate(raw)
-        engine = engine_class.load(spec.model, weights=weights, **options)
+        engine = engine_class.load(spec.model, **options)
         return engine, plan_module.build_spec(spec, args.data_root, engine)
     first = sweep.points(raw)[0][1]
-    engine = engine_class.load(document.Document.from_json(first).model, weights=weights, **options)
+    engine = engine_class.load(document.Document.from_json(first).model, **options)
     return engine, plan_module.build_request(raw, args.data_root, engine)
 
 
 def explain_verb(args: argparse.Namespace) -> dict[str, Any]:
-    _, built = _compile(args, weights=False)
+    _, built = _compile(args, **SHAPE_ONLY)
     return {"text": explain(built), "steps": list(built.steps)}
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
-    remote = True if args.remote == "true" else (args.remote or False)
-    engine, built = _compile(args, weights=True, device_map=args.device_map)
+    _, loading, remote = ENGINES[args.engine]
+    if not remote:
+        loading = {**loading, "device_map": args.device_map}
+    engine, built = _compile(args, **loading)
     written = engine.execute(built, remote=remote).write(args.out)
     return {"text": "\n".join(str(path) for path in written), "written": [str(path) for path in written]}
 

@@ -30,11 +30,13 @@ uv run causalab-mini validate documents/v2/das.json
 uv run causalab-mini explain  documents/v2/das.json   # the compiled plan, printed
 ```
 
-Every verb takes `--json`. `run` is the one that needs the model:
+Every verb takes `--json`. `run` is the one that needs the model, and
+`--engine` says where: `nnterp` (nnsight, here), `ndif` (nnterp with no local
+weights, executed remotely), or `hooks` (plain torch, the measurement fixture):
 
 ```bash
 uv run causalab-mini run documents/minimal_cpu.json --data-root documents/data \
-    --out out --device-map cpu
+    --out out --device-map cpu --engine nnterp
 ```
 
 An output directory carries `document.json` (the experiment, verbatim) and
