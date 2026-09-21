@@ -63,8 +63,9 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
                         f"{write.mechanism}({', '.join(args)}) via {write.featurizer!r}"
                     )
                 for read in tap.reads:
+                    view = "" if read.view == "raw" else f" as {read.view}"
                     out.append(
-                        f"{pad}      read  {read.name!r} at {where} pos={_pos(read.positions)} via {read.featurizer!r}"
+                        f"{pad}      read  {read.name!r} at {where} pos={_pos(read.positions)} via {read.featurizer!r}{view}"
                     )
     elif isinstance(step, Weights):
         out.append(f"{pad}{name}: Weights  names={list(step.names)}{tail}")

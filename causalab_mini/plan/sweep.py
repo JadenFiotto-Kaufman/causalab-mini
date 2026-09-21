@@ -102,6 +102,8 @@ def _label(path: Path, value: Any) -> str:
     """What this point is called — in the plan tree, and as a directory on
     disk. The swept field's own name and the value it took: `pos=-1`."""
     name = next((step for step in reversed(path) if isinstance(step, str)), "point")
+    if isinstance(value, list) and len(value) == 1:
+        value = value[0]  # a one-layer band sweeps as its layer
     if isinstance(value, (str, int, float, bool)) or value is None:
         return f"{name}={value}"
     return f"{name}={json.dumps(value, separators=(',', ':'))}"

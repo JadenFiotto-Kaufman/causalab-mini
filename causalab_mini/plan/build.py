@@ -687,6 +687,7 @@ def _forward(
                 name=read_name,
                 positions=encoding.positions(batch, spec.pos),
                 featurizer=spec.featurizer,
+                view=getattr(spec, "view", "raw"),
             )
         )
 

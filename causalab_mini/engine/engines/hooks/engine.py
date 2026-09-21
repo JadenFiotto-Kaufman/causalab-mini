@@ -148,14 +148,14 @@ def _install(names: Any, tap: Tap, values: dict[str, Any], featurizers: dict[str
     """Hook one address, on the side it is addressed on."""
     module = tap.address.resolve(names)
     if tap.address.side == "output":
-        return module.register_forward_hook(intervene_at(tap, values, featurizers))
+        return module.register_forward_hook(intervene_at(tap, values, featurizers, names))
     return module.register_forward_pre_hook(
-        intervene_before(tap, values, featurizers), with_kwargs=True
+        intervene_before(tap, values, featurizers, names), with_kwargs=True
     )
 
 
 def intervene_before(
-    tap: Tap, values: dict[str, Any], featurizers: dict[str, Any]
+    tap: Tap, values: dict[str, Any], featurizers: dict[str, Any], names: Any
 ) -> Callable[[Any, Any, Any], Any]:
     """The same body, on the way *in*.
 
@@ -179,7 +179,7 @@ def intervene_before(
                 )
             where = tensors[0]
             activation = kwargs[where]
-        activation = _apply(tap, activation, values, featurizers)
+        activation = _apply(tap, activation, values, featurizers, names)
         if where is None:
             return (activation, *args[1:]), kwargs
         return args, {**kwargs, where: activation}
@@ -188,7 +188,7 @@ def intervene_before(
 
 
 def _apply(
-    tap: Tap, activation: Any, values: dict[str, Any], featurizers: dict[str, Any]
+    tap: Tap, activation: Any, values: dict[str, Any], featurizers: dict[str, Any], names: Any
 ) -> Any:
     """This address's writes, then its reads. A read in a model sees that
     model's writes, so at one address the writes go first."""
@@ -204,12 +204,14 @@ def _apply(
         )
     for read in tap.reads:
         gathered = intervene.gather(activation, read.positions, tap.address.seq_axis)
+        if read.view == "logits":
+            gathered = names.lm_head(names.ln_final(gathered))
         values[read.name] = featurizers[read.featurizer].featurize(gathered)[0].clone()
     return activation
 
 
 def intervene_at(
-    tap: Tap, values: dict[str, Any], featurizers: dict[str, Any]
+    tap: Tap, values: dict[str, Any], featurizers: dict[str, Any], names: Any
 ) -> Callable[[Any, Any, Any], Any]:
     """The hook for one address: its writes, then its reads, on the way out.
 
@@ -227,7 +229,7 @@ def intervene_at(
 
     def hook(module: Any, args: Any, output: Any) -> Any:
         activation = output[0] if isinstance(output, tuple) else output
-        activation = _apply(tap, activation, values, featurizers)
+        activation = _apply(tap, activation, values, featurizers, names)
         return (activation, *output[1:]) if isinstance(output, tuple) else activation
 
     return hook

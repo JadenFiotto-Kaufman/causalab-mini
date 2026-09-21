@@ -57,6 +57,10 @@ class ReadOp:
     name: str
     positions: Positions
     featurizer: str = "identity"
+    #: "raw" is the tensor at the address. "logits" is that tensor pushed
+    #: through the model's final norm and head — the logit lens: what the
+    #: model would say if this layer were its last.
+    view: str = "raw"
 
 
 @dataclass(frozen=True)

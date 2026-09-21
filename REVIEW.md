@@ -324,8 +324,11 @@ Recorded so they are not rediscovered.
 5. **Vocabulary throughout**, in whatever order the documents being written
    demand. Landed 2026-09-21: literal operands (`documents/v2/
    zero_ablation.json`), `add_scaled` / `lerp` / `gaussian` with their
-   numbers under `params`, `early_stop.mode: min`, `token_prob`. Next in
-   this step: the `view: "logits"` read for logit lens.
+   numbers under `params`, `early_stop.mode: min`, `token_prob`, and the
+   `view: "logits"` read — `documents/v2/logit_lens.json` is the logit lens
+   as one document, one point per layer. The lens rounds differently from
+   the head by one ulp, FINDINGS §10. Remaining vocabulary: `pca` (needs
+   the artifact round trip), the rest of the 56 components, gates.
 6. **E.**
 
 The test of each item is the same one this project has used from the start:

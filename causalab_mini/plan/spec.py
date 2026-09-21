@@ -84,6 +84,10 @@ class Featurizer(Node):
     seed: int | None = None
 
 
+#: The components whose tensor is the residual stream — the only ones a
+#: logits view makes sense of, because the final norm and head expect it.
+RESIDUAL_STREAM = frozenset({"embeddings", "block_input", "block_output", "ln_final"})
+
 #: A position form: one index, or a window of the same width on every row.
 Position = int | dict[str, Any]
 
@@ -94,6 +98,10 @@ class Read(Node):
     model: str = "original"
     input: str
     featurizer: str = "identity"
+    #: `"logits"` projects a residual-stream read through the model's final
+    #: norm and head. With a layer sweep and a `token_prob` metric that is
+    #: the logit lens, as one document.
+    view: Literal["raw", "logits"] = "raw"
 
     @field_validator("pos")
     @classmethod
@@ -488,6 +496,18 @@ class Spec(Node):
         where = f"interventions.{label}"
         for name, read in one.reads.items():
             _refuse(read.site in self.sites, f"{where}: read {name!r}: undeclared site {read.site!r}")
+            if read.view == "logits":
+                component = self.sites[read.site].component if read.site in self.sites else ""
+                _refuse(
+                    component in RESIDUAL_STREAM,
+                    f"{where}: read {name!r}: view 'logits' projects the residual stream "
+                    f"through the head, and {component!r} is not the residual stream "
+                    f"(one of {sorted(RESIDUAL_STREAM)})",
+                )
+                _refuse(
+                    read.featurizer == "identity",
+                    f"{where}: read {name!r}: a featurized read cannot also be viewed as logits",
+                )
             _refuse(read.input in self.roles, f"{where}: read {name!r}: undeclared role {read.input!r}")
             _refuse(
                 read.model == "original" or read.model in one.models,
@@ -501,6 +521,11 @@ class Spec(Node):
                     write.operand in one.reads,
                     f"{where}: write {name!r}: operand {write.operand!r} is not a read of "
                     'this intervention; a value from an earlier step is {"ref": …}',
+                )
+                _refuse(
+                    write.operand not in one.reads or one.reads[write.operand].view == "raw",
+                    f"{where}: write {name!r}: operand {write.operand!r} is a logits view, "
+                    "which is vocabulary-wide and cannot be written back at a site",
                 )
             _refuse(write.featurizer in known, f"{where}: write {name!r}: undeclared featurizer")
         for name, model in one.models.items():

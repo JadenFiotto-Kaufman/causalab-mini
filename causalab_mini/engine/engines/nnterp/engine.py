@@ -139,6 +139,13 @@ def apply_taps(
             gathered = intervene.gather(
                 read(model, tap.address), read_op.positions, tap.address.seq_axis
             )
+            if read_op.view == "logits":
+                # The logit lens: the residual pushed through the final norm and
+                # head, here, inside the trace — an envoy called on a value runs
+                # its module on it. Note the GEMM has M = rows·w rather than
+                # rows·seq, which rounds differently from the model's own
+                # logits by an ulp or so (FINDINGS §10).
+                gathered = model.lm_head(model.ln_final(gathered))
             values[read_op.name] = featurizers[read_op.featurizer].featurize(gathered)[0].clone()
 
 

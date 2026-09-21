@@ -896,3 +896,30 @@ Harmless here (nothing calls `.save()` on a document) and the field is
 warning names pydantic and the cause is nnsight, and because any library
 that defines a `save` attribute on a class will silently replace nnsight's
 for instances of it.
+
+
+## 10. The logit lens rounds differently from the head, by one ulp, and why
+
+`view: "logits"` gathers a residual window `(rows, w, width)` and pushes it
+through `ln_final` and `lm_head` inside the block. Compared with the model's
+own logits at the same positions, measured on the tiny Llama:
+
+| projected | max |diff| vs the model's logits |
+|---|---|
+| one position per row, then the head | 5.96e-08 |
+| the whole sequence through the head, *then* sliced | 0 — bit-exact |
+
+Same weights, same norm, same head; the only difference is the GEMM's `M`
+(rows·1 against rows·seq), and a GEMM at a different `M` may accumulate in
+a different order. The argmax agrees. Both engines project identically,
+because they gather the same window and call the same two modules — so the
+lens agrees across engines to the bit while disagreeing with the head by an
+ulp.
+
+causalab's `head.py` serves `lm_head` reads at named positions this way for
+feasibility (an eval pass over 900 rows otherwise "materializes 5.8 GB of
+logits to read 900 rows") and carries the measured warning that a *training*
+read must keep the head un-elided — the backward GEMM at reduced `M` flipped
+an early stop. Mini's `view` is for reading, and the compiler refuses a
+featurized or written-back logits view, so the training case cannot arise
+by accident.
