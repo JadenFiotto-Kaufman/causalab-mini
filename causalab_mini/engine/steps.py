@@ -108,6 +108,8 @@ def observe(engine: Any, step: Observe, state: State) -> dict[str, Any]:
     for output in step.outputs:
         tensor = values[output.read]
         if output.reduce == "mean":
+            # over rows for a rectangle, keeping the window; over every
+            # position for a ragged read, which has no window axis to keep
             tensor = tensor.mean(dim=0)
         state.outputs[output.name] = tensor.detach()
         step.results[output.name] = tensor.detach().cpu()

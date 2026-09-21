@@ -17,7 +17,7 @@ from ..shapes import ExampleIds
 
 Row = dict[str, Any]
 
-_INDEXED_FIELD = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(?:\[(\d+)\])?$")
+_STEP = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)((?:\[\d+\])*)$")
 
 
 class DataError(ValueError):
@@ -48,16 +48,19 @@ def digest(rows: list[Row]) -> str:
 
 def field_text(row: Row, field: str) -> str:
     """`input` -> the column; `counterfactual_inputs[0]` -> one entry of a
-    list-valued column. No deeper indexing exists."""
-    match = _INDEXED_FIELD.match(field)
-    if match is None:
-        raise DataError(f"field {field!r}: only `column` and `column[i]` are implemented")
-    column, index = match.group(1), match.group(2)
-    if column not in row:
-        raise DataError(f"field {field!r}: no such column")
-    value = row[column]
-    if index is not None:
-        value = value[int(index)]
+    list-valued column; `counterfactual_inputs_variables[0].entity` -> a key
+    of a dict inside one. Dots walk into dicts, brackets into lists."""
+    value: Any = row
+    for step in field.split("."):
+        match = _STEP.match(step)
+        if match is None:
+            raise DataError(f"field {field!r}: `column`, `column[i]` and `a.b` are the forms")
+        key, indices = match.group(1), re.findall(r"\[(\d+)\]", match.group(2))
+        if not isinstance(value, dict) or key not in value:
+            raise DataError(f"field {field!r}: no such column {key!r}")
+        value = value[key]
+        for index in indices:
+            value = value[int(index)]
     if not isinstance(value, str):
         raise DataError(f"field {field!r}: expected a string, got {type(value).__name__}")
     return value

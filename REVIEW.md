@@ -319,8 +319,16 @@ Recorded so they are not rediscovered.
    form; a metric reads the unit window and the compiler refuses wider; a
    write and its operand must cover the same width. `documents/v2/
    window_patch.json` swaps three tokens in one write and equals the
-   protocol's three-write document to the bit. **Ragged is next**, with
-   eligibility: `{"all": true}` and per-row variables, refused by name today.
+   protocol's three-write document to the bit. **Ragged landed 2026-09-21**:
+   `{"all": true}` and `{"column": "c"}` (a row's own text, located in its
+   prompt) give windows whose width varies by row; a ragged read gathers
+   flat, `(total, width)`; a row whose text is absent has an empty window —
+   an excluded measurement, still a row — and a write may not have one. The
+   ragged write policy is `refuse`, row by row, before any forward; the
+   protocol's other two are not implemented. `documents/v2/
+   entity_mean_ablation.json` averages a ragged read into one vector.
+   Eligibility does not yet reach a metric table, because a metric reads
+   the unit window; it shows in `explain` and in what a harvest excludes.
 5. **Vocabulary throughout**, in whatever order the documents being written
    demand. Landed 2026-09-21: literal operands (`documents/v2/
    zero_ablation.json`), `add_scaled` / `lerp` / `gaussian` with their

@@ -12,10 +12,11 @@ from .plan import Featurizers, Fit, Observe, Plan, Step, Weights
 
 
 def _pos(positions: tuple[tuple[int, ...], ...]) -> str:
-    """`(10, 10)` for unit windows, `[8:11], [8:11]` for wider ones."""
-    if all(len(window) == 1 for window in positions):
+    """`(10, 10)` for unit windows, `[8:11], [8:11]` for wider ones, and `-`
+    for a row with no window — an excluded measurement."""
+    if positions and all(len(window) == 1 for window in positions):
         return str(tuple(window[0] for window in positions))
-    return ", ".join(f"[{w[0]}:{w[-1] + 1}]" for w in positions)
+    return ", ".join(f"[{w[0]}:{w[-1] + 1}]" if w else "-" for w in positions)
 
 
 def explain(step: Step, name: str = "<root>") -> str:

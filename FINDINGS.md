@@ -874,9 +874,20 @@ document is exact. Measured side by side:
 | `v2/window_patch.json` | 1 | 3 | 1.49e-08 |
 | `multi_position_patch_cpu.json` | 3 | 3 | 1.49e-08 |
 
-So it is about **how many positions are replaced at an address**, not how
-many writes do it, and it enters after the replacement is installed. The two
-multi-position documents agree with *each other* to the bit on one engine.
+So it looked as though it was about **how many positions are replaced at
+an address**. The two multi-position documents agree with *each other* to
+the bit on one engine.
+
+**Corrected the same day, once ragged reads existed.** `documents/v2/
+entity_mean_ablation.json` installs ONE write at ONE position — a `(16,)`
+mean the two engines compute bit-identically — and the ablated logits differ
+by 7.45e-09 on one row. Zero ablation at that position is exact; the
+unit-window mean at that position is exact. The only thing that changed is
+the values written. So the count inference was wrong too: the divergence is
+**input-dependent**, enters after a replacement is installed, and is on the
+order of one ulp when it appears. What survives every revision of this
+section is the method: a parity claim is a property of the documents that
+were run, and each new document is a new measurement, not a confirmation.
 
 
 ## 9. nnsight mounts `.save()` on `object`, and pydantic notices
@@ -923,3 +934,44 @@ read must keep the head un-elided — the backward GEMM at reduced `M` flipped
 an early stop. Mini's `view` is for reading, and the compiler refuses a
 featurized or written-back logits view, so the training case cannot arise
 by accident.
+
+
+## 11. Ragged positions: what a row's own text costs, and what the tokenizer decides
+
+`{"column": "entity"}` locates a row's column text inside its prompt and
+returns the tokens covering it. Three facts came out of making that work.
+
+### 11.1 Character offsets by decoding prefixes, not `offset_mapping`
+
+The mapping from a character span to a token window is built by decoding
+growing prefixes of the content ids — `offsets[k] = len(decode(ids[:k]))` —
+which works on any tokenizer, fast or slow, and needs no `offset_mapping`.
+The substring is searched in the *decoded* text, not the original prompt,
+because decoding may normalize a leading space; the search tries the text,
+then `" " + text`, then the stripped text. Quadratic in the row's tokens,
+which at prompt lengths is nothing.
+
+### 11.2 The same word is one token or three, and that decides what can land
+
+On the tiny Llama's tokenizer the weekdays split: ` Monday`, ` Friday`,
+` Saturday`, ` Sunday` are one token; ` Tuesday`, ` Wednesday`, ` Thursday`
+are three. So "swap the counterfactual's entity into the base's entity" —
+the most natural ragged interchange there is — has rows where the source
+window is three tokens and the target is one. There is no way to land that
+without a policy, and the protocol has two (`exact_length_buckets`,
+`padded_masked`); mini implements `refuse`, naming the rows, before any
+forward. This is not an edge case: it is the *default* outcome of an entity
+patch on real text.
+
+### 11.3 A read may skip a row; a write may not
+
+A row whose column text is not in its prompt gets an empty window. For a
+read that is an excluded measurement — the row contributes no positions to
+a harvest, `explain` prints `-` for it, and it stays a row. For a write it
+is refused: writing nothing somewhere is not an intervention, and the row
+would score as if one had happened. That asymmetry is causalab's, and it is
+correct.
+
+What did **not** need to change: `apply_write`. A ragged read gathers flat,
+`(total, width)`; featurizers are pointwise; a mean over it is one vector
+that broadcasts into any window. The seam held.

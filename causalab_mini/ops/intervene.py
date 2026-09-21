@@ -120,25 +120,57 @@ MECHANISMS: dict[str, Callable[..., Any]] = {
 }
 
 
+def is_ragged(positions: Positions) -> bool:
+    """Whether the rows' windows differ in width. A plan says so; a tensor
+    cannot, which is why the shape below is keyed on the positions."""
+    return len({len(window) for window in positions}) > 1
+
+
+def _flat(positions: Positions, device: Any) -> tuple[Any, Any]:
+    """Every (row, position) pair in row order, for a ragged window. An
+    empty window — an excluded row — contributes nothing."""
+    rows = [row for row, window in enumerate(positions) for _ in window]
+    index = [position for window in positions for position in window]
+    return torch.as_tensor(rows, device=device), torch.as_tensor(index, device=device)
+
+
 def gather(tensor: Any, positions: Positions, seq_axis: int = 1) -> Any:
-    """A window per row: (batch, seq, width) -> (batch, w, width). The unit
-    window is w=1, and a metric squeezes it. `seq_axis` is which axis the
-    sequence runs along — 1 at a module boundary, 2 inside attention, where a
-    tensor is (batch, head, seq, head_dim). Which one it is is a fact about
-    the address, not about the tensor, so it is passed in."""
+    """A window per row.
+
+    Uniform windows keep the rectangle: (batch, seq, width) -> (batch, w,
+    width), with the unit window w=1 that a metric squeezes. Ragged windows
+    cannot, and come back **flat**: (total, width), every row's positions
+    in row order, the plan's own `positions` saying where each row begins
+    and ends. Which shape it is is decided by the positions, never by the
+    tensor.
+
+    `seq_axis` is which axis the sequence runs along — 1 at a module
+    boundary, 2 inside attention, where a tensor is (batch, head, seq,
+    head_dim). Which one it is is a fact about the address, not about the
+    tensor, so it is passed in.
+    """
+    moved = tensor.movedim(seq_axis, 1)
+    if is_ragged(positions):
+        rows, index = _flat(positions, tensor.device)
+        return moved[rows, index]
     rows = torch.arange(tensor.shape[0], device=tensor.device)[:, None]
     index = torch.as_tensor(positions, device=tensor.device)  # (batch, w)
-    return tensor.movedim(seq_axis, 1)[rows, index]
+    return moved[rows, index]
 
 
 def scatter(tensor: Any, positions: Positions, values: Any, seq_axis: int = 1) -> Any:
-    """A copy of `tensor` with each row's window replaced by `values`,
-    which is (batch, w, width) or anything that broadcasts to it — a
-    published (w, width) mean, say."""
+    """A copy of `tensor` with each row's window replaced by `values`: the
+    shape `gather` would return for these positions, or anything that
+    broadcasts to it — a published (w, width) or (width,) mean, say."""
+    out = tensor.clone()
+    moved = out.movedim(seq_axis, 1)  # a view of `out`
+    if is_ragged(positions):
+        rows, index = _flat(positions, tensor.device)
+        moved[rows, index] = values.to(out.dtype)
+        return out
     rows = torch.arange(tensor.shape[0], device=tensor.device)[:, None]
     index = torch.as_tensor(positions, device=tensor.device)
-    out = tensor.clone()
-    out.movedim(seq_axis, 1)[rows, index] = values.to(out.dtype)  # a view of `out`
+    moved[rows, index] = values.to(out.dtype)
     return out
 
 

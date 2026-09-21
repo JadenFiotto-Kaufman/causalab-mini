@@ -66,11 +66,10 @@ def test_every_form_is_content_relative_and_uniform(batch, pos, expected):
         ({"last": 12}, "outside the row's content"),
         ({"span": [-1, -3]}, "outside the row's content"),
         ({"span": [0, 0]}, "outside the row's content"),
-        ({"all": True}, "ragged reads are not implemented"),
-        ({"variable": "entity"}, "not a form this slice runs"),
+        ({"variable": "entity"}, "column.*locates a column's text"),
         ("last", "not a form this slice runs"),
     ],
-    ids=["too wide", "backwards", "empty", "all", "variable", "not a form"],
+    ids=["too wide", "backwards", "empty", "variable", "not a form"],
 )
 def test_what_a_window_may_not_be(batch, pos, message):
     with pytest.raises(encoding.EncodingError, match=message):
@@ -170,5 +169,5 @@ def test_a_write_and_its_operand_cover_the_same_window():
 def test_a_referenced_output_must_match_the_window_too(data_root, model_engine):
     raw = json.loads((REPO / "documents" / "v2" / "mean_ablation.json").read_text())
     raw["interventions"]["ablated"]["writes"]["ablate"]["pos"] = {"last": 2}
-    with pytest.raises(plan.PlanError, match="covers 2 position\\(s\\) but 'mean' was read over 1"):
+    with pytest.raises(plan.PlanError, match="covers 2 position\\(s\\) but 'mean' was read over \\[1\\]"):
         plan.build_request(raw, data_root, model_engine)

@@ -23,6 +23,7 @@ from ..address import Address
 from ..data import encoding, rows as rows_module
 from ..ops import metrics as metrics_module
 from . import sweep
+from ..shapes import Positions
 from .document import Document, SaveSpec
 from .plan import (
     FeaturizerOp,
@@ -85,7 +86,7 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
     #: needs the same rows and the same window. The compiler knows all of it;
     #: the block would only find out from a shape error.
     output_rows: dict[str, int | None] = {}
-    output_width: dict[str, int] = {}
+    output_widths: dict[str, tuple[tuple[int, ...], bool]] = {}  # per-row widths, reduced?
     for name, step in spec.steps.items():
         kind = type(step).__name__
         experiment = (
@@ -104,12 +105,29 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
                             f"{write.operand.ref!r}, which has {have} rows, over {count} "
                             "rows; reduce the output or run over the same rows"
                         )
-                    want = encoding.width_of(write.pos)
-                    if output_width[write.operand.ref] != want:
+                    per_row, reduced = output_widths[write.operand.ref]
+                    ragged_source = len(set(per_row)) > 1
+                    want = encoding.width_of(write.pos)  # None: the write is ragged
+                    # What an output may land in. A mean over a ragged read is
+                    # one vector and broadcasts anywhere; a mean over a
+                    # rectangle keeps its window and must match; an unreduced
+                    # rectangle must match; an unreduced ragged read must be
+                    # reduced first, or read in the same pass.
+                    if reduced and ragged_source:
+                        fits = True
+                    elif reduced:
+                        fits = (want == per_row[0]) or (want is None and per_row[0] == 1)
+                    elif not ragged_source:
+                        fits = want == per_row[0]
+                    else:
+                        fits = False
+                    if not fits:
                         raise PlanError(
-                            f"step {name!r}: write {write_name!r} covers {want} "
+                            f"step {name!r}: write {write_name!r} covers "
+                            f"{want if want is not None else 'a varying number of'} "
                             f"position(s) but {write.operand.ref!r} was read over "
-                            f"{output_width[write.operand.ref]}; the windows must match"
+                            f"{sorted(set(per_row))}{'' if reduced else ', unreduced'}; "
+                            "the windows must match, or reduce the output"
                         )
         if kind == "Observe":
             assert experiment is not None
@@ -118,11 +136,19 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
                 OutputOp(name=out_name, read=out.read, reduce=out.reduce)
                 for out_name, out in step.outputs.items()
             )
+            observe = _pass(experiment, rows, addresses, engine.tokenizer)
+            read_positions = {
+                read.name: read.positions
+                for forward in observe.forwards for tap in forward.taps for read in tap.reads
+            }
             for out in outputs:
                 output_rows[out.name] = None if out.reduce == "mean" else len(rows["base"])
-                output_width[out.name] = encoding.width_of(experiment.reads[out.read].pos)
+                output_widths[out.name] = (
+                    tuple(len(window) for window in read_positions[out.read]),
+                    out.reduce == "mean",
+                )
             steps[name] = replace(
-                _pass(experiment, rows, addresses, engine.tokenizer),
+                observe,
                 outputs=outputs,
                 saves=_spec_saves(step.saves, spec, rows["base"], widths, outputs={o.name for o in outputs}),
             )
@@ -461,9 +487,10 @@ def _pass(
         for role, table in rows.items()
     }
     forwards = tuple(
-        _forward(name, role, experiment, batches[role], addresses)
+        _forward(name, role, experiment, batches[role], addresses, rows[role])
         for name, role in _schedule(experiment)
     )
+    _check_ragged(forwards, experiment)
     base_rows = rows["base"]  # base is the schema of the pair: metrics read its columns
     metrics = tuple(
         MetricOp(
@@ -610,6 +637,44 @@ def _fit(
     )
 
 
+def _check_ragged(forwards: tuple[Forward, ...], experiment: _Experiment) -> None:
+    """The ragged write policy, and it is `refuse`.
+
+    A read may have an empty window on a row — the column's text was not in
+    that prompt — and that row is simply an excluded measurement. A *write*
+    may not: writing nothing somewhere is not an intervention, and the row
+    would score as if it were. And a ragged write's operand must have, row
+    by row, exactly the width the write covers; the protocol's other
+    landing policies are not implemented. All of it is knowable here, before
+    any forward, because the positions are.
+    """
+    reads = {
+        read.name: read.positions for forward in forwards for tap in forward.taps for read in tap.reads
+    }
+    for forward in forwards:
+        for tap in forward.taps:
+            for write in tap.writes:
+                empty = [row for row, window in enumerate(write.positions) if not window]
+                if empty:
+                    raise PlanError(
+                        f"write {write.name!r} has nothing to write on row(s) {empty}: its "
+                        "position's text is not in those prompts. A read may skip a row; a "
+                        "write may not"
+                    )
+                if isinstance(write.operand, str) and write.operand in reads:
+                    have = [len(window) for window in reads[write.operand]]
+                    want = [len(window) for window in write.positions]
+                    mismatched = [row for row, (a, b) in enumerate(zip(have, want)) if a != b]
+                    if mismatched:
+                        raise PlanError(
+                            f"write {write.name!r} covers {want} positions per row but its "
+                            f"operand {write.operand!r} was read over {have}; rows "
+                            f"{mismatched} differ. Landing a window of one width in another "
+                            "is a policy this slice does not implement — the protocol's "
+                            "`exact_length_buckets` and `padded_masked` — so it refuses"
+                        )
+
+
 def _take(rows: dict[str, list[rows_module.Row]], picked: list[int]) -> dict[str, list[rows_module.Row]]:
     """One minibatch. Every role is indexed the same way, because rows are
     paired by index and a shuffle that broke the pairing would silently fit a
@@ -662,8 +727,16 @@ def _forward(
     experiment: _Experiment,
     batch: encoding.Batch,
     addresses: dict[str, Address],
+    rows: list[rows_module.Row],
 ) -> Forward:
     """One model pass: its taps, grouped by address and put in forward order."""
+
+    def resolve(pos: Any) -> Positions:
+        texts = None
+        if isinstance(pos, dict) and set(pos) == {"column"}:
+            texts = [rows_module.field_text(row, pos["column"]) for row in rows]
+        return encoding.positions(batch, pos, texts)
+
     writes: dict[Address, list[WriteOp]] = {}
     if name in experiment.models:
         for write_name in experiment.models[name].writes:
@@ -671,7 +744,7 @@ def _forward(
             writes.setdefault(addresses[spec.site], []).append(
                 WriteOp(
                     name=write_name,
-                    positions=encoding.positions(batch, spec.pos),
+                    positions=resolve(spec.pos),
                     operand=spec.operand,
                     mechanism=spec.mechanism,
                     featurizer=spec.featurizer,
@@ -685,7 +758,7 @@ def _forward(
         reads.setdefault(addresses[spec.site], []).append(
             ReadOp(
                 name=read_name,
-                positions=encoding.positions(batch, spec.pos),
+                positions=resolve(spec.pos),
                 featurizer=spec.featurizer,
                 view=getattr(spec, "view", "raw"),
             )

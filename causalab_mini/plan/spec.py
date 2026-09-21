@@ -540,14 +540,16 @@ class Spec(Node):
             _refuse(
                 encoding.width_of(one.reads[metric.of].pos) == 1,
                 f"{where}: metric {name!r} reads {metric.of!r}, a window of "
-                f"{encoding.width_of(one.reads[metric.of].pos)} positions; a metric "
-                "scores one position per row",
+                f"{encoding.width_of(one.reads[metric.of].pos) or 'varying'} positions; "
+                "a metric scores one position per row",
             )
         for name, write in one.writes.items():
             if isinstance(write.operand, str):
                 have, want = encoding.width_of(one.reads[write.operand].pos), encoding.width_of(write.pos)
+                # a ragged side has no width until the rows are known; the
+                # compiler checks those row by row
                 _refuse(
-                    have == want,
+                    have is None or want is None or have == want,
                     f"{where}: write {name!r} covers {want} position(s) but its operand "
                     f"{write.operand!r} was read over {have}; the windows must match",
                 )
