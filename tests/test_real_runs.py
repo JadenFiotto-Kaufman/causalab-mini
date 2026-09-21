@@ -109,7 +109,7 @@ def test_the_real_documents_are_valid_and_compile_without_weights(data_root):
     from causalab_mini.plan.spec import Spec
 
     found = sorted((REPO / "documents" / "real").glob("*.json"))
-    assert len(found) == 5
+    assert len(found) == 4
     for path in found:
         for _, point in sweep.points(json.loads(path.read_text())):
             Spec.model_validate(point)

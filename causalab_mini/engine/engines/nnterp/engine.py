@@ -158,6 +158,8 @@ def apply_taps(
     for tap in forward.taps:
         if not intervene.applies(tap.step, step):
             continue
+        # what a renormalize measures against: this address before any write
+        original = read(model, tap.address) if tap.writes else None
         for write_op in tap.writes:
             patched = intervene.apply_write(
                 read(model, tap.address),
@@ -167,6 +169,7 @@ def apply_taps(
                 featurizers[write_op.featurizer],
                 tap.address.seq_axis,
                 write_op.params,
+                original,
             )
             write(model, tap.address, patched)
         for read_op in tap.reads:

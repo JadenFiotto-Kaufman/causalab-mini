@@ -1,0 +1,171 @@
+{
+  "header": {
+    "description": "Steer, then put the norm back. A harvested mean difference is added to the residual stream at the last position (add_scaled), which also makes the activation longer; `renormalize`, listed after it at the same site, rescales the result to the norm the activation had before either write. 'Change the direction, keep the magnitude' \u2014 and the second model, without the renormalize, is the comparison that shows how much of steering's effect was just the longer vector."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "roles": {
+    "base": {
+      "field": "input"
+    },
+    "counterfactual": {
+      "field": "counterfactual_inputs[0]"
+    }
+  },
+  "sites": {
+    "target": {
+      "component": "block_output",
+      "layers": [
+        0
+      ]
+    },
+    "head": {
+      "component": "lm_head"
+    }
+  },
+  "interventions": {
+    "harvest": {
+      "reads": {
+        "resid": {
+          "site": "target",
+          "pos": -1,
+          "input": "counterfactual"
+        }
+      }
+    },
+    "steer": {
+      "reads": {
+        "logits": {
+          "site": "head",
+          "pos": -1,
+          "model": "steered_renormed",
+          "input": "base"
+        },
+        "raw_logits": {
+          "site": "head",
+          "pos": -1,
+          "model": "steered",
+          "input": "base"
+        },
+        "before": {
+          "site": "target",
+          "pos": -1,
+          "model": "original",
+          "input": "base"
+        },
+        "after": {
+          "site": "target",
+          "pos": -1,
+          "model": "steered_renormed",
+          "input": "base"
+        },
+        "after_raw": {
+          "site": "target",
+          "pos": -1,
+          "model": "steered",
+          "input": "base"
+        }
+      },
+      "writes": {
+        "steer": {
+          "site": "target",
+          "pos": -1,
+          "mechanism": "add_scaled",
+          "operand": {
+            "ref": "direction"
+          },
+          "params": {
+            "scale": 4.0
+          }
+        },
+        "restore": {
+          "site": "target",
+          "pos": -1,
+          "mechanism": "renormalize"
+        }
+      },
+      "models": {
+        "steered": {
+          "input": "base",
+          "writes": [
+            "steer"
+          ]
+        },
+        "steered_renormed": {
+          "input": "base",
+          "writes": [
+            "steer",
+            "restore"
+          ]
+        }
+      },
+      "metrics": {
+        "logit_diff": {
+          "kind": "logit_diff",
+          "of": "logits",
+          "a": "cf_answer",
+          "b": "base_answer"
+        },
+        "p_answer": {
+          "kind": "token_prob",
+          "of": "logits",
+          "token": "cf_answer"
+        },
+        "logit_diff_raw": {
+          "kind": "logit_diff",
+          "of": "raw_logits",
+          "a": "cf_answer",
+          "b": "base_answer"
+        }
+      }
+    }
+  },
+  "steps": {
+    "harvest": {
+      "kind": "observe",
+      "intervention": "harvest",
+      "rows": {
+        "base": "weekdays/train",
+        "counterfactual": "weekdays/train"
+      },
+      "outputs": {
+        "direction": {
+          "read": "resid",
+          "reduce": "mean"
+        }
+      }
+    },
+    "steer": {
+      "kind": "observe",
+      "intervention": "steer",
+      "rows": {
+        "base": "weekdays/train",
+        "counterfactual": "weekdays/train"
+      },
+      "outputs": {
+        "norm_before": {
+          "read": "before"
+        },
+        "norm_after": {
+          "read": "after"
+        },
+        "norm_steered": {
+          "read": "after_raw"
+        }
+      },
+      "saves": [
+        {
+          "value": "logit_diff",
+          "file_path": "logit_diff_renormed.json"
+        },
+        {
+          "value": "logit_diff_raw",
+          "file_path": "logit_diff_steered.json"
+        }
+      ]
+    }
+  }
+}

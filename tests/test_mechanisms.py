@@ -129,3 +129,83 @@ def test_a_fit_may_early_stop_on_a_minimized_metric(data_root, model_engine):
     executed = model_engine.execute(plan.build_request(raw, data_root, model_engine))
     curve = executed.step("fit", plan.Fit).results["train/eval"].squeeze(-1)
     assert curve.shape[0] >= 1
+
+
+# --------------------------------------------------------------------- #
+# clamp and renormalize
+# --------------------------------------------------------------------- #
+
+STEER = REPO / "documents" / "v2" / "steer_renormalize.json"
+
+
+def test_clamp_bounds_either_side_and_takes_no_operand():
+    tensor = torch.arange(-6.0, 6.0).reshape(1, 4, 3)
+    at = ((1, 2),)
+    both = ops.apply_write(tensor, at, None, "clamp", params={"lo": -1.0, "hi": 1.0})
+    assert both[0, 1:3].min() == -1 and both[0, 1:3].max() == 1
+    assert torch.equal(both[0, [0, 3]], tensor[0, [0, 3]]), "only the window"
+    top = ops.apply_write(tensor, at, None, "clamp", params={"hi": 0.0})
+    assert top[0, 1:3].max() == 0 and top[0, 1].min() == tensor[0, 1].min()
+
+
+def test_renormalize_restores_the_pre_write_norm_and_keeps_the_new_direction():
+    original = torch.randn(2, 4, 8, generator=torch.Generator().manual_seed(0))
+    steered = ops.apply_write(original, AT, torch.ones(2, 1, 8), "add_scaled", params={"scale": 5.0})
+    restored = ops.apply_write(steered, AT, None, "renormalize", original=original)
+
+    before, moved, after = (ops.gather(t, AT) for t in (original, steered, restored))
+    assert torch.allclose(after.norm(dim=-1), before.norm(dim=-1), atol=1e-5)
+    assert not torch.allclose(moved.norm(dim=-1), before.norm(dim=-1))
+    cosine = torch.nn.functional.cosine_similarity
+    assert torch.allclose(cosine(after, moved, dim=-1), torch.ones(2, 1), atol=1e-6), "direction is the steered one"
+    # alone it is the identity, which is why a document may not say so
+    assert torch.allclose(ops.apply_write(original, AT, None, "renormalize", original=original), original, atol=1e-6)
+
+
+def test_clamping_to_zero_is_zero_ablation(zero_raw, data_root, model_engine):
+    """The new mechanism checked against an old one: `lo = hi = 0` is the
+    literal-zero swap, bit for bit."""
+    zeroed = model_engine.execute(plan.build_request(zero_raw, data_root, model_engine))
+    write = zero_raw["interventions"]["zeroed"]["writes"]["zero"]
+    write.update(mechanism="clamp", params={"lo": 0.0, "hi": 0.0})
+    del write["operand"]
+    clamped = model_engine.execute(plan.build_request(zero_raw, data_root, model_engine))
+    for name in ("logit_diff", "p_answer"):
+        assert torch.equal(
+            zeroed.step("zeroed", plan.Observe).results[name],
+            clamped.step("zeroed", plan.Observe).results[name],
+        ), name
+
+
+@pytest.mark.parametrize("engine_name", ["nnterp", "hooks"])
+def test_steering_then_renormalizing_on_the_model(engine_name, data_root, model_engine):
+    """The read at the site sees the model's writes, so the document can
+    measure its own claim: the steered activation is longer than the
+    original, the renormalized one is exactly as long, and the two models
+    answer differently."""
+    raw = json.loads(STEER.read_text())
+    engine = model_engine if engine_name == "nnterp" else HooksEngine.load(Spec.model_validate(raw).model, device_map="cpu")
+    results = engine.execute(plan.build_request(raw, data_root, engine)).step("steer", plan.Observe).results
+
+    before, after, raw_after = (results[name].norm(dim=-1) for name in ("norm_before", "norm_after", "norm_steered"))
+    assert torch.allclose(after, before, rtol=1e-5)
+    assert (raw_after > before).all()
+    assert not torch.equal(results["logit_diff"], results["logit_diff_raw"])
+
+
+@pytest.mark.parametrize(
+    "edit, message",
+    [
+        (lambda one: one["models"]["steered_renormed"].update(writes=["restore", "steer"]), "last among them"),
+        (lambda one: one["models"]["steered_renormed"].update(writes=["restore"]), "it is the identity"),
+        (lambda one: one["writes"]["restore"].update(operand=0.0), "takes no operand"),
+        (lambda one: one["writes"]["steer"].update(mechanism="clamp", params={}), "takes no operand"),
+        (lambda one: one["writes"]["restore"].update(mechanism="clamp"), "needs a bound"),
+    ],
+    ids=["renormalize first", "renormalize alone", "renormalize with an operand", "clamp with an operand", "clamp with no bound"],
+)
+def test_what_clamp_and_renormalize_may_not_say(edit, message):
+    raw = json.loads(STEER.read_text())
+    edit(raw["interventions"]["steer"])
+    with pytest.raises(ValidationError, match=message):
+        Spec.model_validate(raw)

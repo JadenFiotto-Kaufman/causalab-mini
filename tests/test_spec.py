@@ -239,7 +239,10 @@ def test_a_write_is_two_fields_a_schema_can_enumerate():
     write = schema["$defs"]["Write"]
     # `operand` is optional now: `gaussian` draws its own and takes none
     assert write["required"] == ["site", "pos", "mechanism"]
-    assert write["properties"]["mechanism"]["enum"] == ["swap", "add_scaled", "lerp", "gaussian"]
+    from causalab_mini.ops import intervene
+
+    # the schema's list and the table of functions are the same list
+    assert write["properties"]["mechanism"]["enum"] == list(intervene.MECHANISMS)
 
 
 # --------------------------------------------------------------------- #

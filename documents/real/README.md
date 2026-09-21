@@ -14,8 +14,7 @@ causalab-mini run documents/real/weekdays_das.json      --engine ndif   --out ou
 | document | what it asks | measured |
 |---|---|---|
 | `weekdays_behavior` | does the model do the task? | 42/42 correct, p(answer) 0.45 mean |
-| `weekdays_layer_sweep_day` | interchange the residual at the **day token**, per layer | IIA 1.00 for layers 0–10, 0.98 at 11, then 0.10, 0.10, 0.00, 0.00 |
-| `weekdays_layer_sweep_last` | the same at the **last token** | IIA 0.00 for layers 0–11, then 0.88, 0.88, 1.00, 1.00 |
+| `weekdays_layer_sweep` | interchange the residual per layer, at the **day token** and at the **last token** (`pos` is a named sweep axis, so read and write move together: 32 points) | day token: IIA 1.00 for layers 0–10, 0.98 at 11, then 0.10, 0.10, 0.00, 0.00. Last token: 0.00 for layers 0–11, then 0.88, 0.88, 1.00, 1.00 |
 | `weekdays_head_patching` | one attention head's result at the last token, 32 heads x layers 10–12 | one head stands out of 96: **L12 H28** moves mean logit-diff from -2.40 (median head) to +0.05 and flips half the answers |
 | `weekdays_das` | a k-dim subspace of the day token's residual at layer 8, fit on 30 pairs | held-out IIA **0.00 / 0.83 / 1.00 / 1.00** at k = 1 / 4 / 16 / 64 |
 

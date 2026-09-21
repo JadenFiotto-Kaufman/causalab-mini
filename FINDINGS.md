@@ -1436,8 +1436,30 @@ where on bippu they do not, so that was a fact about a laptop.
 The layer sweep wants `pos` swept on a read **and** its write *together*.
 Two `{"sweep": …}` wrappers are a cross product — 64 points, half of them
 reading one position and writing another — so it is two documents instead.
-A linked sweep (one axis, several fields) is the missing spelling.
+A linked sweep (one axis, several fields) was the missing spelling — added
+the same day as `{"sweep": […], "as": "pos"}`: wrappers sharing a name are
+one coordinate. `{"sweep": {"range": [0, 16]}}` landed with it, and the two
+layer-sweep documents are one again.
 
 Not yet run for real: generation, the attention pattern (the deployment is
 sdpa), ragged reads, and a gate — all pass on the GPU with the tiny model,
 none has met a real one.
+
+
+## 20. `clamp` and `renormalize`, and the one mechanism that needs the past
+
+`clamp` is `f.clamp(lo, hi)`, no operand, either bound optional; `lo = hi =
+0` equals the literal-zero swap bit for bit, which is its test.
+
+`renormalize` is `f · ‖f₀‖/‖f‖` where `f₀` is the feature value **before any
+write of this forward touched this address**. It is the first mechanism
+whose input is not `(f, operand, params)`: its operand is not authored, the
+seam supplies it (`intervene.PRE_WRITE`), and each engine keeps the
+address's pre-write tensor for the length of one tap to make that possible
+— one line in each. The ordering rule causalab needed an executor phase for
+is a validator here: among a model's writes at one site, a renormalize comes
+after at least one other and last, because first or alone it is the
+identity, and a document that does nothing should not validate.
+`documents/v2/steer_renormalize.json` measures its own claim with reads at
+the site: the steered activation is longer, the renormalized one is exactly
+as long as the original, and the two models answer differently.

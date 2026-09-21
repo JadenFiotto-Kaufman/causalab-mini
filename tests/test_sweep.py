@@ -69,10 +69,10 @@ def test_a_document_still_holding_a_wrapper_is_refused(swept_raw):
             ),
             "may not change the model",
         ),
-        (lambda raw: raw["method"]["writes"]["patch"].update(pos={"sweep": {"range": [0, 3]}}), "literal list"),
+        (lambda raw: raw["method"]["writes"]["patch"].update(pos={"sweep": {"range": [0, 3.5]}}), "in integers"),
         (lambda raw: raw["method"]["writes"]["patch"].update(pos={"sweep": []}), "sweep of nothing"),
     ],
-    ids=["swept model", "range form", "empty"],
+    ids=["swept model", "a range of non-integers", "empty"],
 )
 def test_the_sweep_forms_this_slice_does_not_run_are_refused_by_name(swept_raw, edit, message):
     edit(swept_raw)
@@ -187,3 +187,54 @@ def test_two_swept_fields_are_their_cross_product(swept_raw):
     ]
     read, write = points[1][1]["method"]["reads"]["v_cf"]["pos"], points[1][1]["method"]["writes"]["patch"]["pos"]
     assert (read, write) == (-1, -2)
+
+
+# --------------------------------------------------------------------- #
+# ranges, and fields that move together
+# --------------------------------------------------------------------- #
+
+
+def test_a_range_is_pythons(swept_raw):
+    swept_raw["method"]["writes"]["patch"]["pos"] = {"sweep": {"range": [-3, 0]}}
+    assert [label for label, _ in sweep.points(swept_raw)] == ["pos=-3", "pos=-2", "pos=-1"]
+    swept_raw["method"]["writes"]["patch"]["pos"] = {"sweep": {"range": [0, 10, 4]}}
+    assert [one["method"]["writes"]["patch"]["pos"] for _, one in sweep.points(swept_raw)] == [0, 4, 8]
+
+
+def test_a_range_inside_a_list_sweeps_a_one_layer_band(swept_raw):
+    """`layers` is a band, a list — so the wrapper goes where the integer is."""
+    swept_raw["method"]["writes"]["patch"]["pos"] = -1
+    site = next(iter(swept_raw["method"]["sites"].values())) if "sites" in swept_raw["method"] else None
+    swept_raw["probe"] = {"layers": [{"sweep": {"range": [0, 3]}}]}
+    found = sweep.points(swept_raw)
+    assert [label for label, _ in found] == ["layers=0", "layers=1", "layers=2"]
+    assert [one["probe"]["layers"] for _, one in found] == [[0], [1], [2]]
+
+
+def test_fields_on_one_named_axis_move_together(swept_raw):
+    """The gap the real layer sweep exposed: a patch reads and writes at the
+    *same* position. Unnamed, two swept fields are their cross product — nine
+    points, six of them reading one place and writing another. Named, they
+    are one coordinate."""
+    both = {"sweep": [-1, -2, -3], "as": "pos"}
+    swept_raw["method"]["reads"]["v_cf"]["pos"] = dict(both)
+    swept_raw["method"]["writes"]["patch"]["pos"] = dict(both)
+    found = sweep.points(swept_raw)
+
+    assert [label for label, _ in found] == ["pos=-1", "pos=-2", "pos=-3"]
+    for _, one in found:
+        assert one["method"]["reads"]["v_cf"]["pos"] == one["method"]["writes"]["patch"]["pos"]
+
+    # a named axis still crosses with an unnamed one, and may hold different values per field
+    swept_raw["method"]["reads"]["v_cf"]["pos"] = {"sweep": [5, 6, 7], "as": "pos"}
+    swept_raw["probe"] = {"k": {"sweep": [1, 2]}}
+    found = sweep.points(swept_raw)
+    assert len(found) == 6 and found[0][0] == "pos=5,k=1"
+    assert (found[5][1]["method"]["reads"]["v_cf"]["pos"], found[5][1]["method"]["writes"]["patch"]["pos"]) == (7, -3)
+
+
+def test_a_named_axis_needs_a_value_per_field_per_point(swept_raw):
+    swept_raw["method"]["reads"]["v_cf"]["pos"] = {"sweep": [-1, -2], "as": "pos"}
+    swept_raw["method"]["writes"]["patch"]["pos"] = {"sweep": [-1, -2, -3], "as": "pos"}
+    with pytest.raises(sweep.SweepError, match="axis 'pos' has 2 values"):
+        sweep.points(swept_raw)

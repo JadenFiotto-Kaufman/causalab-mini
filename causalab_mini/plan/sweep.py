@@ -14,9 +14,22 @@ of `build` knows a sweep ever happened. That is why the engine did not change
 to support this.
 
 Several swept fields are their **cross product**, one point per combination,
-labelled `k=8,seed=0` in the order the fields appear. Everything else the
-protocol allows here (`{"sweep": {"range": …}}`, `at_once`, cohorts, swept
-bundles) is refused by name.
+labelled `k=8,seed=0` in the order the fields appear.
+
+Two spellings beyond the literal list:
+
+    {"sweep": {"range": [0, 16]}}         0, 1, … 15  — `[start, stop]` or
+                                          `[start, stop, step]`, as Python's
+    {"sweep": [-4, -1], "as": "pos"}      a **named axis**: every wrapper
+                                          with the same `as` moves together
+
+The named axis exists because a cross product is sometimes the wrong thing.
+A patch reads at a position and writes at the same one; swept separately
+those are N² points, most of them reading one place and writing another.
+Naming the axis makes them one coordinate, labelled by its name.
+
+Everything else the protocol allows here (`at_once`, cohorts, swept bundles)
+is refused by name.
 """
 
 from __future__ import annotations
@@ -54,29 +67,69 @@ def points(raw: Json) -> tuple[tuple[str, Json], ...]:
                 f"{_spell(path)} is swept; a sweep may not change the model or the "
                 "header — those are the identity of the run, not a coordinate in it"
             )
-        values = _at(raw, path)["sweep"]
-        if not isinstance(values, list):
-            raise SweepError(
-                f"{_spell(path)}: only a literal list of values is implemented; "
-                '{"sweep": {"range": …}} is not'
-            )
+        wrapper = _at(raw, path)
+        values = _values(wrapper["sweep"], path)
         if not values:
             raise SweepError(f"{_spell(path)}: a sweep of nothing")
-        axes.append((path, values))
+        name = wrapper.get("as")
+        linked = next((axis for axis in axes if name is not None and axis.name == name), None)
+        if linked is None:
+            axes.append(_Axis(name, [path], [values]))
+            continue
+        if len(values) != len(linked.values[0]):
+            raise SweepError(
+                f"{_spell(path)}: axis {name!r} has {len(linked.values[0])} values at "
+                f"{_spell(linked.paths[0])} and {len(values)} here; fields that move "
+                "together need a value each per point"
+            )
+        linked.paths.append(path)
+        linked.values.append(values)
     points = []
-    for combination in itertools.product(*(values for _, values in axes)):
-        point = raw
-        for (path, _), value in zip(axes, combination):
-            point = _substitute(point, path, value)
-        label = ",".join(_label(path, value) for (path, _), value in zip(axes, combination))
-        points.append((label, point))
+    for combination in itertools.product(*(range(len(axis.values[0])) for axis in axes)):
+        point, labels = raw, []
+        for axis, index in zip(axes, combination):
+            for path, values in zip(axis.paths, axis.values):
+                point = _substitute(point, path, values[index])
+            labels.append(_label(axis.paths[0], axis.values[0][index], axis.name))
+        points.append((",".join(labels), point))
     return tuple(points)
+
+
+class _Axis:
+    """One coordinate of a sweep: usually one field, or — when named —
+    every field that shares the name, moving together."""
+
+    def __init__(self, name: str | None, paths: list[Path], values: list[list[Any]]) -> None:
+        self.name, self.paths, self.values = name, paths, values
+
+
+def _values(spelled: Any, path: Path) -> list[Any]:
+    """A sweep's values: the literal list, or the range it names."""
+    if isinstance(spelled, list):
+        return spelled
+    if isinstance(spelled, dict) and set(spelled) == {"range"}:
+        bounds = spelled["range"]
+        if (
+            isinstance(bounds, list)
+            and len(bounds) in (2, 3)
+            and all(isinstance(one, int) and not isinstance(one, bool) for one in bounds)
+            and (len(bounds) == 2 or bounds[2] != 0)
+        ):
+            return list(range(*bounds))
+        raise SweepError(
+            f"{_spell(path)}: a range is [start, stop] or [start, stop, step] in integers, "
+            f"got {bounds!r}"
+        )
+    raise SweepError(
+        f"{_spell(path)}: a sweep is a list of values or {{\"range\": [start, stop]}}, "
+        f"got {spelled!r}"
+    )
 
 
 def _wrappers(node: Any, path: Path = ()) -> list[Path]:
     """Every `{"sweep": …}` in the document, by path, in reading order."""
     if isinstance(node, dict):
-        if set(node) == {"sweep"}:
+        if "sweep" in node and set(node) <= {"sweep", "as"}:
             return [path]
         return [one for key, value in node.items() for one in _wrappers(value, (*path, key))]
     if isinstance(node, list):
@@ -98,10 +151,10 @@ def _substitute(raw: Json, path: Path, value: Any) -> Json:
     return point
 
 
-def _label(path: Path, value: Any) -> str:
+def _label(path: Path, value: Any, axis: str | None = None) -> str:
     """What this point is called — in the plan tree, and as a directory on
     disk. The swept field's own name and the value it took: `pos=-1`."""
-    name = next((step for step in reversed(path) if isinstance(step, str)), "point")
+    name = axis or next((step for step in reversed(path) if isinstance(step, str)), "point")
     if isinstance(value, list) and len(value) == 1:
         value = value[0]  # a one-layer band sweeps as its layer
     if isinstance(value, (str, int, float, bool)) or value is None:

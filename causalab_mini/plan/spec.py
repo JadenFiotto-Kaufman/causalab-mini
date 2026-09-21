@@ -180,7 +180,7 @@ class Write(Node):
 
     site: str
     pos: Position
-    mechanism: Literal["swap", "add_scaled", "lerp", "gaussian"]
+    mechanism: Literal["swap", "add_scaled", "lerp", "gaussian", "clamp", "renormalize"]
     #: A read of this intervention, a `{"ref": …}` to an earlier step's
     #: output, a literal number (zero ablation is `0.0`), or nothing for a
     #: mechanism that takes none.
@@ -205,10 +205,12 @@ class Write(Node):
             raise ValueError(f"mechanism {self.mechanism!r} needs params {sorted(missing)}")
         if extra:
             raise ValueError(f"mechanism {self.mechanism!r} takes no params {sorted(extra)}")
-        if self.mechanism == "gaussian" and self.operand is not None:
-            raise ValueError("mechanism 'gaussian' takes no operand; it draws its own noise")
-        if self.mechanism != "gaussian" and self.operand is None:
+        if self.mechanism in NO_OPERAND and self.operand is not None:
+            raise ValueError(f"mechanism {self.mechanism!r} takes no operand")
+        if self.mechanism not in NO_OPERAND and self.operand is None:
             raise ValueError(f"mechanism {self.mechanism!r} needs an operand")
+        if self.mechanism == "clamp" and not self.params:
+            raise ValueError("mechanism 'clamp' needs a bound: params lo, hi or both")
         return self
 
     @property
@@ -224,7 +226,13 @@ MECHANISM_PARAMS: dict[str, tuple[set[str], set[str]]] = {
     "add_scaled": (set(), {"scale"}),
     "lerp": ({"t"}, set()),
     "gaussian": ({"seed"}, {"scale"}),
+    "clamp": (set(), {"lo", "hi"}),
+    "renormalize": (set(), set()),
 }
+
+#: Mechanisms a document gives no operand: one draws its own noise, one only
+#: bounds, one measures against the pre-write value the seam supplies.
+NO_OPERAND = frozenset({"gaussian", "clamp", "renormalize"})
 
 
 class IntervenedModel(Node):
@@ -636,6 +644,18 @@ class Spec(Node):
                 )
             _refuse(write.featurizer in known, f"{where}: write {name!r}: undeclared featurizer")
         for name, model in one.models.items():
+            for index, write_name in enumerate(model.writes):
+                write = one.writes.get(write_name)
+                if write is None or write.mechanism != "renormalize":
+                    continue
+                here = [w for w in model.writes if w in one.writes and one.writes[w].site == write.site]
+                _refuse(
+                    len(here) > 1 and here[-1] == write_name,
+                    f"{where}: model {name!r}: renormalize {write_name!r} restores the norm the "
+                    f"other writes at site {write.site!r} changed, so it comes after at least one "
+                    "of them and last among them; first, or alone, it is the identity",
+                )
+        for name, model in one.models.items():
             _refuse(model.input in self.roles, f"{where}: model {name!r}: undeclared role")
             for write in model.writes:
                 _refuse(write in one.writes, f"{where}: model {name!r}: undeclared write {write!r}")
@@ -715,7 +735,7 @@ class Spec(Node):
 
 def _swept(node: Any) -> bool:
     if isinstance(node, dict):
-        return set(node) == {"sweep"} or any(_swept(value) for value in node.values())
+        return ("sweep" in node and set(node) <= {"sweep", "as"}) or any(_swept(value) for value in node.values())
     if isinstance(node, list):
         return any(_swept(value) for value in node)
     return False

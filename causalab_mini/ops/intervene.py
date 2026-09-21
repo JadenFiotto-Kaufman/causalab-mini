@@ -91,6 +91,31 @@ def gaussian(f: Any, operand: Any, seed: int, scale: float = 1.0) -> Any:
     return f + scale * noise.to(f)
 
 
+def clamp(f: Any, operand: Any, lo: float | None = None, hi: float | None = None) -> Any:
+    """Bound the feature value: `min(max(f, lo), hi)`, either side optional.
+    Takes no operand. With a gate or a site of `units` it is "cap these
+    neurons"; alone it is activation clipping."""
+    return f.clamp(min=lo, max=hi)
+
+
+def renormalize(f: Any, operand: Any) -> Any:
+    """`f · ‖f₀‖ / ‖f‖` — put the norm back after other writes moved it.
+
+    Its operand is not authored: it is `f₀`, the feature value here *before
+    any write of this forward touched it*, which the seam supplies. That is
+    also why it must be the last write at its site — run first, `f` is `f₀`
+    and this is the identity — and why a document that orders it otherwise
+    is refused rather than quietly doing nothing. Steering by `add_scaled`
+    and then renormalizing is "change the direction, keep the magnitude"."""
+    target = operand.norm(dim=-1, keepdim=True)
+    return f * (target / f.norm(dim=-1, keepdim=True).clamp_min(1e-12))
+
+
+#: Mechanisms whose operand is the pre-write feature value, supplied by the
+#: write seam rather than named by the document.
+PRE_WRITE = frozenset({"renormalize"})
+
+
 def applies(frame: int | str | None, step: int | None) -> bool:
     """Whether a tap in `frame` acts at decode `step` (None: a plain forward).
     The prompt frame is the prefill, step 0; `"all"` is every step."""
@@ -160,6 +185,8 @@ MECHANISMS: dict[str, Callable[..., Any]] = {
     "add_scaled": add_scaled,
     "lerp": lerp,
     "gaussian": gaussian,
+    "clamp": clamp,
+    "renormalize": renormalize,
 }
 
 
@@ -266,11 +293,16 @@ def apply_write(
     featurizer: str | Featurizer = "identity",
     seq_axis: int = 1,
     params: dict[str, Any] | None = None,
+    original: Any = None,
 ) -> Any:
+    """`original` is the tensor at this address before any write of this
+    forward: what a `PRE_WRITE` mechanism measures against."""
     featurize = FEATURIZERS[featurizer] if isinstance(featurizer, str) else featurizer
     x = gather(tensor, at, seq_axis)
     with exact(x):
         f, err = featurize.featurize(x)
+        if mechanism in PRE_WRITE:
+            operand = featurize.featurize(gather(tensor if original is None else original, at, seq_axis))[0]
         f = MECHANISMS[mechanism](f, operand, **(params or {}))
         written = featurize.inverse(f, err, x)
     return scatter(tensor, at, written, seq_axis)

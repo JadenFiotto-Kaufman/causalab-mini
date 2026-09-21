@@ -212,6 +212,7 @@ def _apply(
 ) -> Any:
     """This address's writes, then its reads. A read in a model sees that
     model's writes, so at one address the writes go first."""
+    original = activation  # what a renormalize measures against
     for write in tap.writes:
         activation = intervene.apply_write(
             activation,
@@ -221,6 +222,7 @@ def _apply(
             featurizers[write.featurizer],
             tap.address.seq_axis,
             write.params,
+            original,
         )
     for read in tap.reads:
         gathered = intervene.gather(

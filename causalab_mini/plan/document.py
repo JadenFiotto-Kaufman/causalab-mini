@@ -639,7 +639,7 @@ def _swept(node: Any) -> bool:
     """Whether a sweep wrapper is anywhere in the raw document. A `Document`
     is one point, so one reaching here has not been lowered."""
     if isinstance(node, dict):
-        return set(node) == {"sweep"} or any(_swept(value) for value in node.values())
+        return ("sweep" in node and set(node) <= {"sweep", "as"}) or any(_swept(value) for value in node.values())
     if isinstance(node, list):
         return any(_swept(value) for value in node)
     return False
