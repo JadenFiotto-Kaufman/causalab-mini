@@ -347,6 +347,11 @@ Recorded so they are not rediscovered.
    by both engines. `documents/v2/generate_probe.json` sweeps the step.
    FINDINGS §12.
 
+> All six landed 2026-09-21. What the plan did not cover and remains: the
+> artifact round trip (`file_path` on a featurizer, which `pca` also
+> needs), the `gate` family, the remaining components, and eligibility
+> reaching a metric table — each in SURVEY §3–§5.
+
 The test of each item is the same one this project has used from the start:
 write the document first, see whether it needs anything beyond a new kind of
 node, and if it does not, the shape is still right.
