@@ -115,6 +115,50 @@ class Basis:
         return f @ basis.T + (x - (x @ basis) @ basis.T)
 
 
+class Gate:
+    """A learned binary mask over a site's units — the DBM featurizer.
+
+        featurize(x) = (x, 0)
+        inverse(f, 0, x) = m ⊙ f + (1 − m) ⊙ x
+
+    so a swap through a gate takes the masked units from the counterfactual
+    and leaves the rest alone: the same sentence as a subspace, with "units"
+    for "directions". The features *are* the activation, which is why a gate
+    needs no `k`.
+
+    The mask has two readings of one parameter `θ`, and which one is in force
+    is the one piece of mode in this library:
+
+        training   m = σ(θ / T)     soft, so a gradient reaches θ
+        otherwise  m = [θ > 0]      hard, so the score is of a real mask
+
+    `training` is a plain attribute the fit loop sets around an update and
+    clears around its eval pass; `temperature` is `T`, which the fit anneals
+    toward zero so the soft mask the optimizer sees approaches the hard one
+    the score uses. A gate nobody is fitting is always hard — including one
+    loaded from a file, which is a mask and nothing else.
+    """
+
+    training = False
+
+    def __init__(self, weight: torch.Tensor) -> None:
+        self.weight = weight
+        self.temperature = 1.0
+
+    @property
+    def mask(self) -> torch.Tensor:
+        if self.training:
+            return torch.sigmoid(self.weight / self.temperature)
+        return (self.weight > 0).to(self.weight.dtype)
+
+    def featurize(self, x: Any) -> tuple[Any, None]:
+        return x.to(self.weight.dtype), None
+
+    def inverse(self, f: Any, err: Any, x: Any) -> Any:
+        mask = self.mask
+        return mask * f + (1 - mask) * x.to(mask.dtype)
+
+
 def pca(rows: torch.Tensor, k: int) -> torch.Tensor:
     """The top-`k` principal directions of `rows`, `(n, d) -> (d, k)`,
     orthonormal by construction: the right singular vectors of the centered
@@ -131,4 +175,13 @@ def pca(rows: torch.Tensor, k: int) -> torch.Tensor:
 #: a table of *constructors*, not of instances: a subspace carries a trained
 #: parameter, so one exists per run and not one per process. Each takes the
 #: one tensor it is made of — a Cayley parameter, a basis.
-KINDS = {"subspace": Subspace, "pca": Basis}
+KINDS = {"subspace": Subspace, "pca": Basis, "gate": Gate}
+
+
+def start(kind: str, d: int, k: int, seed: int) -> torch.Tensor:
+    """The parameter a featurizer nobody loaded starts from. A gate starts at
+    θ = 0: every unit at σ(0) = ½ while training, and — because the hard mask
+    is θ > 0 — every unit *off* until a fit says otherwise."""
+    if kind == "gate":
+        return torch.zeros(d, dtype=torch.float32)
+    return start_weight(d, k, seed)

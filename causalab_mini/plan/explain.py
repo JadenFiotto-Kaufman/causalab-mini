@@ -35,6 +35,10 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
     elif isinstance(step, Featurizers):
         out.append(f"{pad}{name}: Featurizers{tail}")
         for one in step.specs:
+            if one.kind == "gate":
+                origin = f"loaded from {one.source}" if one.source else "θ=0"
+                out.append(f"{pad}    {one.name}: gate d={one.d} {origin} trained={one.trained}")
+                continue
             origin = f"loaded from {one.source}" if one.source else f"seed={one.seed}"
             out.append(
                 f"{pad}    {one.name}: {one.kind} k={one.k} d={one.d} "
@@ -44,7 +48,8 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
         out.append(
             f"{pad}{name}: Fit  {len(step.epochs)} epochs x {len(step.epochs[0])} update  "
             f"lr={step.lr} objective={step.objective} params={step.params}  "
-            f"early_stop={step.early_stop!r} patience={step.patience}{tail}"
+            f"early_stop={step.early_stop!r} patience={step.patience}"
+            f"{f' anneal={step.anneal}' if step.anneal else ''}{tail}"
         )
         out += _lines(step.epochs[0][0], "epochs[0][0]", depth + 2)
         out += _lines(step.evaluation, "evaluation", depth + 2)

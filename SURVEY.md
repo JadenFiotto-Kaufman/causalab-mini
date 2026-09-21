@@ -357,9 +357,11 @@ at all. Scale only; nothing about it changes a value.
 
 ## 10. What the survey did not settle
 
-- `train.anneal`'s dotted target (`gate.theta.temperature`) — whether it is a
+- ~~`train.anneal`'s dotted target (`gate.theta.temperature`) — whether it is a
   closed vocabulary or an open attribute path decides whether `dbm.json` is
-  cost 3 or 4.
+  cost 3 or 4.~~ Settled by not having one: mini's `fit.anneal` is keyed by
+  the gate's *name*, because a gate has exactly one thing to anneal. The
+  gate landed at cost 2 — FINDINGS §14.
 - The emit site of the `overlapping_write_unproven` reason code was not found.
 - `validate.py:1820-1831` gates rule 9 on *both* writes carrying `dims`,
   which the code's own comment flags as an open spec question.

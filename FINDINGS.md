@@ -1065,3 +1065,61 @@ rather than the code hiding it.
 document is read. And at layer 0 a third component joins `embeddings` and
 `block_input` in being a no-op under interchange on these prompts:
 `attention_input_norm`, the norm of a last token both prompts share.
+
+
+## 14. A gate is a featurizer, and its mode is one attribute
+
+`documents/v2/dbm.json` is `das.json` with three differences: the
+featurizer's `kind`, one objective term, and an `anneal`. Nothing in the
+write seam, the engines or the plan walk learned the word "mask".
+
+### 14.1 What it took
+
+| piece | where | size |
+|---|---|---|
+| `Gate`: `featurize(x) = x`, `inverse(f, _, x) = m⊙f + (1−m)⊙x` | `ops/featurizer.py` | one class |
+| soft `σ(θ/T)` under update, hard `θ > 0` when scored | `Gate.mask`, reading `self.training` | four lines |
+| who sets `training` | the fit loop, around its updates and its eval pass | one helper |
+| temperature schedule | `fit.anneal: {gate: {start, end}}`, geometric over the updates | three lines in the loop |
+| the L1 term | `<gate>.mask` joins the scored dict; `objective` already takes `.mean()` | two lines |
+
+The survey priced this at 3, for two reasons that both dissolved. *"It has a
+train/eval mode"* — but the fit loop already is the only place that knows
+which of the two is happening, so the mode is an attribute it sets, not a
+protocol every featurizer implements (a rotation is handed the flag and
+ignores it). *"The objective must reach inside a featurizer"* — but the
+objective is `Σ wᵢ · mean(termᵢ)` over a dict of tensors, and a mask is a
+tensor; putting it in the dict under `<name>.mask` is the whole reach. The
+same key in the eval pass is the *hard* mask, so `train/eval` grows a column
+— the fraction of units kept — for free.
+
+### 14.2 What is pinned
+
+- All units on is `patching.json`'s interchange **bit for bit**; all off is
+  the un-intervened model bit for bit. (`1·f + 0·x` is exact in IEEE.)
+- θ starts at 0, and hard is `θ > 0` — so an unfitted gate writes *nothing*,
+  where an unfitted rotation writes a random subspace. A seed on a gate is
+  refused.
+- A fitted gate written to a bundle and loaded by a second document scores
+  bit-equal to the fit run's own score step. The stamp gained `kind`, so a
+  rotation's bundle offered to a gate is refused by key, before its shape.
+- `remote="local"` learns the same θ bit for bit; the two engines agree on θ
+  to 1e-6 and on the hard mask exactly.
+
+### 14.3 What was measured, and what it is not
+
+L1 weight 1e-4, 2e-3, 1e-2, 5e-2 keeps **4, 2, 1, 0 of 16** units at layer 0
+of the tiny Llama (20 updates, lr 0.05, T 1 → 0.05). The model is random:
+cross-entropy moves in the fourth decimal (10.3940 vs 10.3946 held out), so
+*which* units survive means nothing. The monotone curve reaching empty is
+evidence the mechanism works, not a result about a model.
+
+### 14.4 Not brought over
+
+causalab's `Gate` is ~700 lines: `hard_concrete` and `clamp` and `budget`
+parametrizations, `group: head` and the per-expert table, the dead-unit
+rules (`freeze`, `leak`), a `fill` start value, `top_k` hard masks, and the
+forward-sharing cache keyed on the mode. None is here. The one most likely
+to be wanted first is a gate over **heads** at `attention_z` — which needs
+that component to publish its `(heads, head_dim)` shape, which it does not
+yet (`width` is refused for interiors).

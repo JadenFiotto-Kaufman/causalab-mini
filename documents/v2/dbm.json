@@ -1,0 +1,174 @@
+{
+  "header": {
+    "description": "DBM on the tiny CPU Llama: learn WHICH units of layer 0's output carry the answer, as a binary mask, rather than which directions (compare das.json \u2014 the only differences are the featurizer's kind, one objective term and the anneal). The mask is soft, \u03c3(\u03b8/T), while the fit updates it and hard, \u03b8 > 0, whenever it is scored; `mask.mask` in the objective is the mean of the soft mask, the L1 pressure toward keeping few units. The L1 weight is swept, so the document is the sparsity curve: measured 2026-09-21, 4, 2, 1 and 0 of 16 units kept."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "roles": {
+    "base": {
+      "field": "input"
+    },
+    "counterfactual": {
+      "field": "counterfactual_inputs[0]"
+    }
+  },
+  "sites": {
+    "target": {
+      "component": "block_output",
+      "layers": [
+        0
+      ]
+    },
+    "head": {
+      "component": "lm_head"
+    }
+  },
+  "featurizers": {
+    "mask": {
+      "kind": "gate"
+    }
+  },
+  "interventions": {
+    "dbm": {
+      "reads": {
+        "v_cf": {
+          "site": "target",
+          "pos": -1,
+          "model": "original",
+          "input": "counterfactual",
+          "featurizer": "mask"
+        },
+        "logits": {
+          "site": "head",
+          "pos": -1,
+          "model": "patched",
+          "input": "base"
+        }
+      },
+      "writes": {
+        "patch": {
+          "site": "target",
+          "pos": -1,
+          "featurizer": "mask",
+          "mechanism": "swap",
+          "operand": "v_cf"
+        }
+      },
+      "models": {
+        "patched": {
+          "input": "base",
+          "writes": [
+            "patch"
+          ]
+        }
+      },
+      "metrics": {
+        "iia": {
+          "kind": "logit_diff",
+          "of": "logits",
+          "a": "cf_answer",
+          "b": "base_answer",
+          "token_form": "space_prefixed"
+        },
+        "ce": {
+          "kind": "cross_entropy",
+          "of": "logits",
+          "target": "cf_answer",
+          "token_form": "space_prefixed"
+        }
+      }
+    }
+  },
+  "steps": {
+    "fit": {
+      "kind": "fit",
+      "rows": {
+        "base": "weekdays/data#train",
+        "counterfactual": "weekdays/data#train"
+      },
+      "params": [
+        "mask"
+      ],
+      "objective": [
+        [
+          1.0,
+          "ce"
+        ],
+        [
+          {
+            "sweep": [
+              0.0001,
+              0.002,
+              0.01,
+              0.05
+            ]
+          },
+          "mask.mask"
+        ]
+      ],
+      "epochs": 20,
+      "pairs": 16,
+      "seed": 0,
+      "optimizer": {
+        "name": "adamw",
+        "lr": 0.05,
+        "weight_decay": 0.0
+      },
+      "early_stop": {
+        "metric": "ce",
+        "mode": "min",
+        "patience": 20
+      },
+      "eval": {
+        "rows": {
+          "base": "weekdays/data#test",
+          "counterfactual": "weekdays/data#test"
+        },
+        "saves": [
+          {
+            "value": "iia",
+            "file_path": "held_out_iia.json"
+          }
+        ]
+      },
+      "anneal": {
+        "mask": {
+          "start": 1.0,
+          "end": 0.05
+        }
+      }
+    },
+    "score": {
+      "kind": "observe",
+      "rows": {
+        "base": "weekdays/data#train",
+        "counterfactual": "weekdays/data#train"
+      },
+      "saves": [
+        {
+          "value": "iia",
+          "file_path": "iia.json"
+        },
+        {
+          "value": "ce",
+          "file_path": "ce.json"
+        }
+      ]
+    },
+    "weights": {
+      "kind": "weights",
+      "names": [
+        "mask"
+      ],
+      "saves": [
+        {
+          "value": "mask",
+          "file_path": "mask.safetensors"
+        }
+      ]
+    }
+  }
+}

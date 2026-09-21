@@ -223,10 +223,15 @@ def _spec_fit(
         params=tuple(step.params),
         lr=step.optimizer.lr,
         weight_decay=step.optimizer.weight_decay,
-        eval_metrics=(step.early_stop.metric,),
+        # the watched metric, then the fraction each trained gate keeps
+        eval_metrics=(
+            step.early_stop.metric,
+            *(f"{p}.mask" for p in step.params if spec.featurizers[p].kind == "gate"),
+        ),
         early_stop=step.early_stop.metric,
         patience=step.early_stop.patience,
         mode=step.early_stop.mode,
+        anneal=tuple((gate, one.start, one.end) for gate, one in step.anneal.items()),
         saves=_spec_saves(step.saves, spec, [], widths),
     )
 
@@ -236,7 +241,9 @@ def _spec_featurizer(
 ) -> FeaturizerOp:
     site = _sites_of(spec)[name]
     d = engine.width(addresses[site])
-    if not 0 < one.k <= d:
+    # a gate's features are the site's units, so its k is d
+    k = d if one.k is None else one.k
+    if not 0 < k <= d:
         raise PlanError(
             f"featurizer {name!r}: k={one.k} is not a subspace of the {d}-wide site {site!r}"
         )
@@ -250,7 +257,7 @@ def _spec_featurizer(
     return FeaturizerOp(
         name=name,
         kind=one.kind,
-        k=one.k,
+        k=k,
         d=d,
         parametrization=one.parametrization,
         seed=seed,
@@ -272,6 +279,7 @@ def _identity(spec: Any, name: str, site: str, d: int) -> dict[str, str]:
         "site": site,
         "component": spec.sites[site].component,
         "layer": str(spec.sites[site].layers[0] if spec.sites[site].layers else None),
+        "kind": one.kind,
         "k": str(one.k),
         "d": str(d),
         "parametrization": one.parametrization,
@@ -287,7 +295,7 @@ def _identity(spec: Any, name: str, site: str, d: int) -> dict[str, str]:
 _FREE = {"site", "engine"}
 
 
-def _load_featurizer(name: str, one: Any, spec: Any, site: str, d: int) -> tuple[tuple[float, ...], ...]:
+def _load_featurizer(name: str, one: Any, spec: Any, site: str, d: int) -> tuple[Any, ...]:
     """A saved parameter, checked against this document key by key.
 
     A rotation is a grid of numbers; nothing in the numbers says which model
@@ -308,18 +316,24 @@ def _load_featurizer(name: str, one: Any, spec: Any, site: str, d: int) -> tuple
         tensor = bundle.get_tensor("weight")
     expected = _identity(spec, name, site, d)
     checked = {key for key in expected if key in stamp} - _FREE
-    if one.kind == "pca":
+    if one.kind != "subspace":
         checked.discard("parametrization")
     mismatched = {key: (stamp[key], expected[key]) for key in sorted(checked) if stamp[key] != expected[key]}
     if mismatched:
         detail = "; ".join(f"{key}: bundle says {got!r}, document says {want!r}" for key, (got, want) in mismatched.items())
         raise PlanError(f"featurizer {name!r}: {one.file_path!r} is not this featurizer — {detail}")
-    if tuple(tensor.shape) != (d, one.k):
+    shape = (d,) if one.kind == "gate" else (d, one.k)
+    if tuple(tensor.shape) != shape:
         raise PlanError(
             f"featurizer {name!r}: {one.file_path!r} is {tuple(tensor.shape)}, not the "
-            f"({d}, {one.k}) this document declares"
+            f"{shape} this document declares"
         )
-    return tuple(tuple(float(x) for x in row) for row in tensor.to(torch.float32).tolist())
+    return _frozen(tensor.to(torch.float32).tolist())
+
+
+def _frozen(nested: Any) -> Any:
+    """A tensor's `tolist()`, as the tuples a frozen plan can hold."""
+    return tuple(_frozen(one) for one in nested) if isinstance(nested, list) else float(nested)
 
 
 def _sites_of(spec: Any) -> dict[str, str]:

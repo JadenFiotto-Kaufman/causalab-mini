@@ -143,7 +143,7 @@ class FeaturizerOp:
     #: tensor-shaped thing a fresh plan carries, and it is an *input* of the
     #: experiment like the token ids are. None: drawn from `seed` in the
     #: block.
-    weight: tuple[tuple[float, ...], ...] | None = None
+    weight: tuple[Any, ...] | None = None
     #: Where it was loaded from, for the record.
     source: str = ""
 
@@ -219,6 +219,9 @@ class Fit(Step):
     early_stop: str
     patience: int
     mode: str
+    #: `(gate, first, last)`: the temperature of a gate's soft mask, annealed
+    #: geometrically across the fit's updates.
+    anneal: tuple[tuple[str, float, float], ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)

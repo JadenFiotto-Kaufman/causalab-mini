@@ -81,7 +81,7 @@ def build(step: Featurizers, state: State) -> None:
         if spec.weight is not None:
             weight = torch.tensor(spec.weight, dtype=torch.float32)
         else:
-            weight = featurizer_module.start_weight(spec.d, spec.k, spec.seed)
+            weight = featurizer_module.start(spec.kind, spec.d, spec.k, spec.seed)
         state.featurizers[spec.name] = featurizer_module.KINDS[spec.kind](
             weight.requires_grad_(spec.trained)
         )
@@ -142,19 +142,32 @@ def fit(engine: Any, step: Fit, state: State) -> None:
         lr=step.lr,
         weight_decay=step.weight_decay,
     )
+    # A gate's mask is a term the objective may name (`<name>.mask`, its mean
+    # is the L1 penalty) and a column of the eval record (the fraction kept).
+    gates = {name: featurizers[name] for name in step.params if hasattr(featurizers[name], "mask")}
+    total, done = sum(len(epoch) for epoch in step.epochs), 0
     losses, scores = [], []
     best, waited = None, 0
     for epoch in step.epochs:
+        _training(featurizers, step.params, True)
         for update in epoch:
-            loss = objective(step.objective, observe(engine, update, state))
+            for name, first, last in step.anneal:
+                # geometric, from `first` on the first update to `last` on the last
+                featurizers[name].temperature = first * (last / first) ** (done / max(total - 1, 1))
+            done += 1
+            scored = dict(observe(engine, update, state))
+            scored.update({f"{name}.mask": gate.mask for name, gate in gates.items()})
+            loss = objective(step.objective, scored)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             losses.append(loss.detach())
         # The eval pass runs in eval mode: no gradients, and on rows the fit
         # never saw.
+        _training(featurizers, step.params, False)
         with torch.no_grad():
-            evaluated = observe(engine, step.evaluation, state)
+            evaluated = dict(observe(engine, step.evaluation, state))
+            evaluated.update({f"{name}.mask": gate.mask for name, gate in gates.items()})
         scores.append(torch.stack([evaluated[name].mean() for name in step.eval_metrics]))
         watched = float(evaluated[step.early_stop].mean())
         improved = best is None or (watched > best if step.mode == "max" else watched < best)
@@ -166,6 +179,13 @@ def fit(engine: Any, step: Fit, state: State) -> None:
                 break
     step.results["train/loss"] = torch.stack(losses).cpu()
     step.results["train/eval"] = torch.stack(scores).cpu()
+
+
+def _training(featurizers: dict[str, Any], names: tuple[str, ...], on: bool) -> None:
+    """The one piece of mode: a gate is soft while it is being updated and
+    hard whenever it is scored. A rotation has no use for the flag."""
+    for name in names:
+        featurizers[name].training = on
 
 
 def weights(step: Weights, state: State) -> None:

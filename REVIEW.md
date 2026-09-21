@@ -353,8 +353,11 @@ Recorded so they are not rediscovered.
 > document; `pca` is both an output reduction (a harvest to its top-k
 > directions) and a loadable kind that is never trained. Then seven more
 > components (eighteen now), every one a module boundary of a named child,
-> so the hooks engine reaches them too — FINDINGS §13. Remaining, in the
-> owner's order: the `gate` family, and eligibility reaching a metric table.
+> so the hooks engine reaches them too — FINDINGS §13. Then the `gate`
+> featurizer (DBM): one class, a `training` flag the fit sets, `fit.anneal`,
+> and `<gate>.mask` as an objective term; `documents/v2/dbm.json` is the
+> sparsity curve as one document — FINDINGS §14. Remaining: eligibility
+> reaching a metric table.
 
 The test of each item is the same one this project has used from the start:
 write the document first, see whether it needs anything beyond a new kind of

@@ -80,10 +80,13 @@ class Site(Node):
 class Featurizer(Node):
     """A parameter set. `subspace` is a Cayley-parametrized rotation, drawn
     from a seed or loaded, and trainable; `pca` is a fixed basis, always
-    loaded, never trained — the control a fit is compared against."""
+    loaded, never trained — the control a fit is compared against; `gate` is
+    a learned binary mask over the site's units (DBM), soft while a fit
+    updates it and hard whenever it is scored."""
 
-    kind: Literal["subspace", "pca"]
-    k: int = Field(gt=0)
+    kind: Literal["subspace", "pca", "gate"]
+    #: The rank of a basis. A gate has none: its features are the units.
+    k: int | None = Field(default=None, gt=0)
     parametrization: Literal["cayley"] = "cayley"
     #: The draw the initial basis comes from. Absent, the fit's seed, or 0.
     seed: int | None = None
@@ -94,6 +97,14 @@ class Featurizer(Node):
 
     @model_validator(mode="after")
     def _drawn_or_loaded(self) -> "Featurizer":
+        if (self.kind == "gate") != (self.k is None):
+            raise ValueError(
+                "a gate masks every unit of its site and takes no k"
+                if self.kind == "gate"
+                else f"a {self.kind} needs k, the rank of its basis"
+            )
+        if self.kind == "gate" and self.seed is not None:
+            raise ValueError("a gate starts at θ = 0, not from a draw; it has no seed")
         if self.kind == "pca" and self.file_path is None:
             raise ValueError("a pca featurizer is loaded from a file; nothing draws or trains one")
         if self.file_path is not None and self.seed is not None:
@@ -350,13 +361,25 @@ class Observe(Node):
         return raw
 
 
+class Anneal(Node):
+    """A gate's temperature across a fit: `start` on the first update, `end`
+    on the last, geometric between. Toward zero the soft mask the optimizer
+    sees becomes the hard mask the score uses."""
+
+    start: float = Field(gt=0)
+    end: float = Field(gt=0)
+
+
 class Fit(Node):
     kind: Literal["fit"]
     rows: dict[str, str]
     intervention: str | None = None
     params: list[str]
-    #: Σ wᵢ·metricᵢ, minimized.
+    #: Σ wᵢ·termᵢ, minimized. A term is a metric, or `<gate>.mask` for a gate
+    #: this fit trains — the mean of its soft mask, which is its L1 penalty.
     objective: list[tuple[float, str]]
+    #: gate name -> its temperature schedule. A gate without one stays at 1.
+    anneal: dict[str, Anneal] = Field(default_factory=dict)
     epochs: int = Field(gt=0)
     pairs: int = Field(gt=0)
     seed: int = 0
@@ -504,12 +527,23 @@ class Spec(Node):
                         f"step {name!r}: trains {param!r}, a pca basis, which is fixed by "
                         "definition — declare a subspace loaded from it to fine-tune",
                     )
+                gates = {p for p in step.params if self.featurizers[p].kind == "gate"}
+                _refuse(
+                    set(step.anneal) <= gates,
+                    f"step {name!r}: anneals {sorted(set(step.anneal) - gates)}; only a gate "
+                    f"this fit trains has a temperature (those are {sorted(gates)})",
+                )
+                terms = produced | {f"{gate}.mask" for gate in gates}
                 _refuse(
                     step.early_stop.metric in produced,
                     f"step {name!r}: early_stop watches {step.early_stop.metric!r}, not a metric",
                 )
                 for _, term in step.objective:
-                    _refuse(term in produced, f"step {name!r}: objective names {term!r}, not a metric")
+                    _refuse(
+                        term in terms,
+                        f"step {name!r}: objective names {term!r}, which is neither a metric "
+                        f"nor the mask of a gate this fit trains (one of {sorted(terms)})",
+                    )
                 for save in step.eval.saves:
                     _refuse(
                         save.value in produced,
