@@ -62,7 +62,6 @@ def test_a_document_still_holding_a_wrapper_is_refused(swept_raw):
 @pytest.mark.parametrize(
     "edit, message",
     [
-        (lambda raw: raw["method"]["reads"]["v_cf"].update(pos={"sweep": [-1, -2]}), "cross product"),
         (
             lambda raw: (
                 raw["method"]["writes"]["patch"].update(pos=-1),
@@ -73,7 +72,7 @@ def test_a_document_still_holding_a_wrapper_is_refused(swept_raw):
         (lambda raw: raw["method"]["writes"]["patch"].update(pos={"sweep": {"range": [0, 3]}}), "literal list"),
         (lambda raw: raw["method"]["writes"]["patch"].update(pos={"sweep": []}), "sweep of nothing"),
     ],
-    ids=["two swept fields", "swept model", "range form", "empty"],
+    ids=["swept model", "range form", "empty"],
 )
 def test_the_sweep_forms_this_slice_does_not_run_are_refused_by_name(swept_raw, edit, message):
     edit(swept_raw)
@@ -175,3 +174,16 @@ def test_each_point_writes_its_own_files_in_its_own_directory(swept_plan, model_
     assert point["method"]["writes"]["patch"]["pos"] == -2
     rows = json.loads((tmp_path / "pos=-1" / "iia.json").read_text())
     assert [row["example_id"] for row in rows] == ["0", "1", "2", "3"]
+
+
+def test_two_swept_fields_are_their_cross_product(swept_raw):
+    """Points in the order the fields appear, labelled by both coordinates —
+    the shape of the one shipped causalab pipeline (k x seed)."""
+    swept_raw["method"]["reads"]["v_cf"]["pos"] = {"sweep": [-1, -2]}
+    points = sweep.points(swept_raw)
+    assert [label for label, _ in points] == [
+        "pos=-1,pos=-1", "pos=-1,pos=-2", "pos=-1,pos=-3",
+        "pos=-2,pos=-1", "pos=-2,pos=-2", "pos=-2,pos=-3",
+    ]
+    read, write = points[1][1]["method"]["reads"]["v_cf"]["pos"], points[1][1]["method"]["writes"]["patch"]["pos"]
+    assert (read, write) == (-1, -2)

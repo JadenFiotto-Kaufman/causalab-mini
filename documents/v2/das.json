@@ -53,10 +53,9 @@
       "patch": {
         "site": "target",
         "pos": -1,
-        "do": {
-          "swap": "v_cf"
-        },
-        "featurizer": "rot"
+        "featurizer": "rot",
+        "mechanism": "swap",
+        "operand": "v_cf"
       }
     },
     "models": {

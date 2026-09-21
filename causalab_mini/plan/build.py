@@ -268,25 +268,40 @@ class _Experiment:
 
 
 def build_request(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Plan:
-    """Compile a document, whatever number of experiments it is.
+    """Compile a document — either format, whatever number of experiments.
 
-    A plain document compiles to one plan. A document with a `{"sweep": […]}`
-    wrapper is several **points**, and compiles to a root plan holding one
-    child per point, named for the value it took — which is also the directory
-    its results are written to. Nothing else in the project knows the
-    difference: a point is an ordinary plan, and the engine that runs the root
-    is walking the same tree it always walks.
+    A plain document compiles to one plan. A document with `{"sweep": […]}`
+    wrappers is several **points**, and compiles to a root plan holding one
+    child per point, named for the values it took — which is also the
+    directory its results are written to. Nothing else in the project knows
+    the difference: a point is an ordinary plan, and the engine that runs the
+    root is walking the same tree it always walks.
+
+    This is the one entry point. It tells the two formats apart by shape (a
+    plan-shaped document has `steps`), lowers sweeps on the raw JSON — which
+    neither format has to know about — and hands each point to its compiler.
     """
+    compile_point = _compile_spec if "steps" in raw else _compile_document
     points = sweep.points(raw)
     if len(points) == 1 and not points[0][0]:
-        return replace(build(Document.from_json(raw), data_root, engine), source=raw)
+        return replace(compile_point(raw, data_root, engine), source=raw)
     return Plan(
         steps={
-            label: replace(build(Document.from_json(point), data_root, engine), source=point)
+            label: replace(compile_point(point, data_root, engine), source=point)
             for label, point in points
         },
         source=raw,
     )
+
+
+def _compile_document(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Plan:
+    return build(Document.from_json(raw), data_root, engine)
+
+
+def _compile_spec(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Plan:
+    from .spec import Spec  # here, not at the top: spec.py is the front end and this is below it
+
+    return build_spec(Spec.model_validate(raw), data_root, engine)
 
 
 def build(document: Document, data_root: str | Path, engine: Any) -> Plan:

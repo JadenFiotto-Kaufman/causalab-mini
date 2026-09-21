@@ -45,9 +45,8 @@
       "patch": {
         "site": "target",
         "pos": -1,
-        "do": {
-          "swap": "v_cf"
-        }
+        "mechanism": "swap",
+        "operand": "v_cf"
       }
     },
     "models": {

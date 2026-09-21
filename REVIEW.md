@@ -297,8 +297,12 @@ Recorded so they are not rediscovered.
 1. **A + provenance + the read-only CLI verbs** (`schema`, `vocab`, `model`,
    `tokens`, `data`, `validate`, `explain`). This is goal 2 delivered: an
    agent can author, check and understand a document with no GPU.
-2. **The ordering validator, sweeps in v2, the `do` rename.** Small, and the
-   validator closes the one silent wrong answer a valid document can give.
+2. ~~**The ordering validator, sweeps in v2, the `do` rename.**~~ Landed
+   2026-09-21. `Spec` refuses a step that uses a featurizer before the step
+   that trains it, with the fix in the message; `build_request` is the one
+   entry point for both formats and lowers sweeps — including cross
+   products, labelled `k=8,seed=0` — before either compiler sees a point; a
+   write is `mechanism` and `operand`, two fields a schema can enumerate.
 3. **B + C.** References and named interventions. With `save.reduce` this is
    mean ablation, logit lens and clean-vs-treatment as documents.
 4. **D, windows first.** Then ragged, with eligibility.

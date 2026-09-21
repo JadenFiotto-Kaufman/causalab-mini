@@ -91,28 +91,16 @@ class Read(Node):
 
 
 class Write(Node):
+    """`mechanism` and `operand` are two fields, not the protocol's
+    `{"swap": "v_cf"}`, because a key that is itself the mechanism's name
+    cannot be enumerated by a schema — and the schema is what an agent
+    reads."""
+
     site: str
     pos: int
-    #: `{"swap": "<read name>"}` — the mechanism and its operand.
-    do: dict[str, str]
+    mechanism: Literal["swap"]
+    operand: str  # the name of a read
     featurizer: str = "identity"
-
-    @model_validator(mode="after")
-    def _one_mechanism(self) -> "Write":
-        if len(self.do) != 1:
-            raise ValueError(f"a write does exactly one thing, got {sorted(self.do)}")
-        (mechanism,) = self.do
-        if mechanism != "swap":
-            raise ValueError(f"mechanism {mechanism!r} is not implemented (this slice has swap)")
-        return self
-
-    @property
-    def mechanism(self) -> str:
-        return next(iter(self.do))
-
-    @property
-    def operand(self) -> str:
-        return next(iter(self.do.values()))
 
 
 class IntervenedModel(Node):
@@ -262,6 +250,10 @@ Step = Annotated[Union[Observe, Fit, Weights], Field(discriminator="kind")]
 
 
 class Spec(Node):
+    """A document. `steps` run in the order written, and that order is
+    checked: a step may not use a featurizer before the step that trains it
+    has run, or it would score an untrained rotation without complaint."""
+
     header: Header = Field(default_factory=Header)
     model: Model
     roles: dict[str, Role]
@@ -269,6 +261,17 @@ class Spec(Node):
     intervention: Intervention
     steps: dict[str, Step]
     featurizers: dict[str, Featurizer] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _not_swept(cls, raw: Any) -> Any:
+        if _swept(raw):
+            raise ValueError(
+                "this document has a {'sweep': …} wrapper in it. A sweep is lowered "
+                "before a document is validated — build_request does this, and "
+                "compiles one plan per point"
+            )
+        return raw
 
     @model_validator(mode="after")
     def _cross_check(self) -> "Spec":
@@ -353,7 +356,51 @@ class Spec(Node):
                     f"step {name!r}: saves {save.value!r}, which it does not produce "
                     f"(it produces {sorted(available)})",
                 )
+        self._check_order()
         return self
+
+    def _check_order(self) -> None:
+        """A trained featurizer may not be used before it is trained.
+
+        Every step runs the one intervention, so every step that runs a
+        forward uses every featurizer the intervention names. If a later step
+        trains one of them, an earlier step scored it untrained — a valid
+        document with a silently wrong number. Refused, with the fix: a
+        deliberate untrained baseline is a *second* featurizer that no fit
+        names (see documents/random_subspace_cpu.json).
+        """
+        used = {read.featurizer for read in self.intervention.reads.values()}
+        used |= {write.featurizer for write in self.intervention.writes.values()}
+        trained_at: dict[str, int] = {}
+        for index, (name, step) in enumerate(self.steps.items()):
+            if isinstance(step, Fit):
+                for param in step.params:
+                    trained_at.setdefault(param, index)
+        for index, (name, step) in enumerate(self.steps.items()):
+            if isinstance(step, (Observe, Fit)):
+                touches = used
+            elif isinstance(step, Weights):
+                touches = set(step.names)
+            else:
+                continue
+            for featurizer in sorted(touches):
+                first = trained_at.get(featurizer)
+                _refuse(
+                    first is None or first <= index,
+                    f"step {name!r} uses featurizer {featurizer!r} before step "
+                    f"{list(self.steps)[first or 0]!r} trains it, so it would run on "
+                    "the untrained parameter. Move it after the fit — or, for a "
+                    "deliberate untrained baseline, declare a second featurizer that "
+                    "no fit names",
+                )
+
+
+def _swept(node: Any) -> bool:
+    if isinstance(node, dict):
+        return set(node) == {"sweep"} or any(_swept(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_swept(value) for value in node)
+    return False
 
 
 def _refuse(condition: object, message: str) -> None:

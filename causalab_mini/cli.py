@@ -177,25 +177,20 @@ def data(args: argparse.Namespace) -> dict[str, Any]:
 
 def validate(args: argparse.Namespace) -> dict[str, Any]:
     raw = _read(args.document)
-    if "steps" in raw:
-        Spec.model_validate(raw)
-        shape = "plan-shaped"
-    else:
-        for _, point in sweep.points(raw):
-            document.Document.from_json(point)
-        shape = "protocol"
+    shape = "plan-shaped" if "steps" in raw else "protocol"
+    for _, point in sweep.points(raw):
+        Spec.model_validate(point) if shape == "plan-shaped" else document.Document.from_json(point)
     return {"text": f"ok: {args.document} is a valid {shape} document", "ok": True, "format": shape}
 
 
 def _compile(args: argparse.Namespace, **options: Any) -> tuple[Any, Any]:
     raw = _read(args.document)
     engine_class = ENGINES[args.engine][0]
-    if "steps" in raw:
-        spec = Spec.model_validate(raw)
-        engine = engine_class.load(spec.model, **options)
-        return engine, plan_module.build_spec(spec, args.data_root, engine)
+    # The model is the same at every point of a sweep — a sweep may not touch
+    # it — so the first point says what to load, in either format.
     first = sweep.points(raw)[0][1]
-    engine = engine_class.load(document.Document.from_json(first).model, **options)
+    model_block = Spec.model_validate(first).model if "steps" in raw else document.Document.from_json(first).model
+    engine = engine_class.load(model_block, **options)
     return engine, plan_module.build_request(raw, args.data_root, engine)
 
 

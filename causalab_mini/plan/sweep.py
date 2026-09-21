@@ -13,15 +13,16 @@ own addresses, its own tokenization, its own digest — and nothing downstream
 of `build` knows a sweep ever happened. That is why the engine did not change
 to support this.
 
-Narrow on purpose, in the style of `document.py`: exactly one wrapper, at one
-field, holding a literal list. Everything else the protocol allows here
-(`{"sweep": {"range": …}}`, several swept fields and their cross product,
-`at_once`, cohorts, swept bundles) is refused by name.
+Several swept fields are their **cross product**, one point per combination,
+labelled `k=8,seed=0` in the order the fields appear. Everything else the
+protocol allows here (`{"sweep": {"range": …}}`, `at_once`, cohorts, swept
+bundles) is refused by name.
 """
 
 from __future__ import annotations
 
 import copy
+import itertools
 import json
 from typing import Any
 
@@ -44,29 +45,32 @@ def points(raw: Json) -> tuple[tuple[str, Json], ...]:
     found = _wrappers(raw)
     if not found:
         return (("", raw),)
-    if len(found) > 1:
-        raise SweepError(
-            f"{len(found)} swept fields ({', '.join(_spell(path) for path in found)}); "
-            "a cross product of sweeps is real protocol surface that is not "
-            "implemented — sweep one field"
-        )
-    path = found[0]
-    if path and path[0] in ("model", "header"):
-        # The engine loads the model once and every point runs against it, so
-        # a point may not ask for a different one.
-        raise SweepError(
-            f"{_spell(path)} is swept; a sweep may not change the model or the "
-            "header — those are the identity of the run, not a coordinate in it"
-        )
-    values = _at(raw, path)["sweep"]
-    if not isinstance(values, list):
-        raise SweepError(
-            f"{_spell(path)}: only a literal list of values is implemented; "
-            '{"sweep": {"range": …}} is not'
-        )
-    if not values:
-        raise SweepError(f"{_spell(path)}: a sweep of nothing")
-    return tuple((_label(path, value), _substitute(raw, path, value)) for value in values)
+    axes = []
+    for path in found:
+        if path and path[0] in ("model", "header"):
+            # The engine loads the model once and every point runs against
+            # it, so a point may not ask for a different one.
+            raise SweepError(
+                f"{_spell(path)} is swept; a sweep may not change the model or the "
+                "header — those are the identity of the run, not a coordinate in it"
+            )
+        values = _at(raw, path)["sweep"]
+        if not isinstance(values, list):
+            raise SweepError(
+                f"{_spell(path)}: only a literal list of values is implemented; "
+                '{"sweep": {"range": …}} is not'
+            )
+        if not values:
+            raise SweepError(f"{_spell(path)}: a sweep of nothing")
+        axes.append((path, values))
+    points = []
+    for combination in itertools.product(*(values for _, values in axes)):
+        point = raw
+        for (path, _), value in zip(axes, combination):
+            point = _substitute(point, path, value)
+        label = ",".join(_label(path, value) for (path, _), value in zip(axes, combination))
+        points.append((label, point))
+    return tuple(points)
 
 
 def _wrappers(node: Any, path: Path = ()) -> list[Path]:

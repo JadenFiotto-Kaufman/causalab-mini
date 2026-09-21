@@ -140,7 +140,7 @@ def test_an_unknown_key_anywhere_is_refused_with_its_path(patching_spec_raw):
     "edit, message",
     [
         (lambda raw: raw["intervention"]["reads"]["v_cf"].update(site="nope"), "undeclared site"),
-        (lambda raw: raw["intervention"]["writes"]["patch"]["do"].update(swap="nope"), "must be a read name"),
+        (lambda raw: raw["intervention"]["writes"]["patch"].update(operand="nope"), "must be a read name"),
         (lambda raw: raw["intervention"]["metrics"]["iia"].update(of="nope"), "must be a read name"),
         (lambda raw: raw["steps"]["score"]["saves"].append({"value": "nope", "file_path": "x.json"}), "does not produce"),
         (lambda raw: raw["steps"]["score"]["rows"].pop("counterfactual"), "no rows for role"),
@@ -160,3 +160,74 @@ def test_the_format_has_a_machine_readable_schema():
     schema = Spec.model_json_schema()
     assert schema["required"] == ["model", "roles", "sites", "intervention", "steps"]
     assert "Fit" in schema["$defs"] and "Observe" in schema["$defs"]
+
+
+# --------------------------------------------------------------------- #
+# order, sweeps, and the write's two fields
+# --------------------------------------------------------------------- #
+
+
+def test_a_step_may_not_use_a_featurizer_before_it_is_trained(das_spec_raw):
+    """The silent failure this closes: `score` before `fit` scored the
+    untrained rotation and nothing complained. Now it is refused with the
+    fix in the message."""
+    das_spec_raw["steps"] = {k: das_spec_raw["steps"][k] for k in ("score", "fit", "weights")}
+    with pytest.raises(ValidationError, match="uses featurizer 'rot' before step 'fit' trains it"):
+        Spec.model_validate(das_spec_raw)
+
+
+def test_weights_may_not_be_published_before_they_are_trained(das_spec_raw):
+    das_spec_raw["steps"] = {k: das_spec_raw["steps"][k] for k in ("weights", "fit", "score")}
+    with pytest.raises(ValidationError, match="step 'weights' uses featurizer 'rot' before"):
+        Spec.model_validate(das_spec_raw)
+
+
+def test_an_untrained_rotation_may_be_scored_in_any_order(das_spec_raw):
+    """The rule is about training, not about featurizers: with no fit, the
+    rotation is the seeded random basis throughout and any order is fine.
+    (Scoring an untrained *and* a trained rotation in one document needs
+    two interventions — REVIEW §2.C — which is why the refusal above points
+    at a second featurizer rather than at reordering.)"""
+    del das_spec_raw["steps"]["fit"], das_spec_raw["steps"]["weights"]
+    Spec.model_validate(das_spec_raw)
+
+
+def test_a_declared_featurizer_nothing_uses_is_refused(das_spec_raw):
+    das_spec_raw["featurizers"]["spare"] = {"kind": "subspace", "k": 4, "parametrization": "cayley"}
+    with pytest.raises(ValidationError, match="featurizer 'spare' is used at \\[\\]"):
+        Spec.model_validate(das_spec_raw)
+
+
+def test_a_wrapper_left_in_a_document_is_refused_with_the_fix(das_spec_raw):
+    das_spec_raw["featurizers"]["rot"]["seed"] = {"sweep": [0, 1]}
+    with pytest.raises(ValidationError, match="lowered before a document is validated"):
+        Spec.model_validate(das_spec_raw)
+
+
+def test_a_swept_v2_document_is_one_plan_per_point(das_spec_raw, data_root, model_engine, tmp_path):
+    """The lowering works on raw JSON, so the plan-shaped format got sweeps
+    for free — and a swept featurizer seed is the random-subspace control in
+    this format too."""
+    das_spec_raw["featurizers"]["rot"]["seed"] = {"sweep": [0, 1, 2]}
+    del das_spec_raw["steps"]["fit"], das_spec_raw["steps"]["weights"]
+    root = plan.build_request(das_spec_raw, data_root, model_engine)
+
+    assert list(root.steps) == ["seed=0", "seed=1", "seed=2"]
+    for label in root.steps:
+        (spec,) = root.step(label, plan.Plan).step("featurizers", plan.Featurizers).specs
+        assert spec.seed == int(label.removeprefix("seed=")) and spec.trained is False
+
+    executed = model_engine.execute(root)
+    scored = [point.result("iia") for point in executed.steps.values()]
+    assert not torch.equal(scored[0], scored[1])
+    written = {str(p.relative_to(tmp_path)) for p in executed.write(tmp_path)}
+    assert "seed=1/iia.json" in written and "seed=1/document.json" in written
+
+
+def test_a_write_is_two_fields_a_schema_can_enumerate():
+    """`{"swap": "v_cf"}` used the mechanism as a key, which JSON Schema
+    cannot enumerate. `mechanism` is a literal now, and the schema says so."""
+    schema = Spec.model_json_schema()
+    write = schema["$defs"]["Write"]
+    assert write["required"] == ["site", "pos", "mechanism", "operand"]
+    assert write["properties"]["mechanism"]["const"] == "swap"  # one value: const, not enum
