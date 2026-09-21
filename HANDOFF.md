@@ -3,6 +3,10 @@
 Written 2026-09-19 at the end of a long session, for whoever picks this up next.
 Three files carry state here and they are different things:
 
+- **`REVIEW.md`** — the design, audited against the three goals (express
+  many workflows, agent-configurable, human-usable). What holds, the five
+  load-bearing changes in order, the agent-facing CLI, and the order of work.
+  Read this before starting anything new.
 - **`SURVEY.md`** — the gap. Every feature the real causalab has that mini
   does not, rated by what it would cost mini and by how many experiments
   want it, with the corpus of 24 shipped documents triaged one by one. Read
