@@ -169,6 +169,7 @@ def test_an_all_on_gate_is_plain_patching_and_an_all_off_gate_is_nothing(
     for label, theta in (("on", torch.ones(16)), ("off", -torch.ones(16))):
         save_file({"weight": theta}, str(tmp_path / f"{label}.safetensors"))
         raw = _apply(dbm_raw, tmp_path / f"{label}.safetensors")
+        raw["featurizers"]["mask"]["trust_unstamped"] = True  # written by hand, here
         scored[label] = model_engine.execute(plan.build_request(raw, data_root, model_engine)).result("iia")
     assert torch.equal(scored["on"], whole)
     assert torch.equal(scored["off"], nothing)
@@ -178,7 +179,7 @@ def test_an_all_on_gate_is_plain_patching_and_an_all_off_gate_is_nothing(
 def test_a_bundle_of_another_kind_is_refused(dbm_raw, data_root, model_engine, tmp_path):
     """A rotation's bundle is `(d, k)`; a gate's is `(d,)`. The stamp says
     which, and the shape would too."""
-    save_file({"weight": torch.ones(16, 4)}, str(tmp_path / "rot.safetensors"), metadata={"kind": "subspace"})
+    save_file({"weight": torch.ones(16, 4)}, str(tmp_path / "rot.safetensors"), metadata={"kind": "subspace", "model_key": "hf-internal-testing/tiny-random-LlamaForCausalLM"})
     with pytest.raises(plan.PlanError, match="kind: bundle says 'subspace', document says 'gate'"):
         plan.build_request(_apply(dbm_raw, tmp_path / "rot.safetensors"), data_root, model_engine)
 

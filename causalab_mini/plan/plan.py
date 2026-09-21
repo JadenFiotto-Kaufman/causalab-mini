@@ -106,6 +106,10 @@ class Forward:
     #: bound holds, and the generated ids come back as a value named
     #: `<forward>.generated`.
     decode: int = 0
+    #: The name those ids are published under. `<model>.generated` — unless
+    #: the model runs on more than one input, when a forward's name alone
+    #: would make them collide and it is `<model>.<input>.generated`.
+    generated: str = ""
 
 
 def window(forward: Forward, start: int, stop: int) -> Forward:

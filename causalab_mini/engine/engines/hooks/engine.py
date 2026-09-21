@@ -139,7 +139,7 @@ class HooksEngine(Engine):
                     do_sample=False,
                     pad_token_id=self._tokenizer.pad_token_id,
                 )
-                values[f"{forward.name}.generated"] = ids[:, prompt:].clone()
+                values[forward.generated or f"{forward.name}.generated"] = ids[:, prompt:].clone()
         finally:
             for handle in handles:
                 handle.remove()

@@ -124,7 +124,7 @@ class NNterpEngine(Engine):
         ) as tracer:
             for step in tracer.iter[:decode]:
                 apply_taps(model, forward, values, featurizers, step)
-            values[f"{forward.name}.generated"] = tracer.result[:, prompt:].clone()
+            values[forward.generated or f"{forward.name}.generated"] = tracer.result[:, prompt:].clone()
 
 
 def batch(forward: Forward) -> dict[str, Any]:

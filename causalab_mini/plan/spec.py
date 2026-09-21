@@ -30,6 +30,7 @@ model dump is a JSON Schema — which the protocol itself does not have.
 
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -127,6 +128,10 @@ class Featurizer(Node):
     #: instead of drawing it. Its header is checked against this document —
     #: model, site, layer, k, d — and a mismatch is refused by key.
     file_path: str | None = None
+    #: Load a bundle that carries no identity stamp — one written by other
+    #: tools, or by hand. Nothing can then check it is of this model, site
+    #: and layer; saying so is the author taking that on.
+    trust_unstamped: bool = False
 
     @model_validator(mode="after")
     def _drawn_or_loaded(self) -> "Featurizer":
@@ -238,6 +243,10 @@ MECHANISM_PARAMS: dict[str, tuple[set[str], set[str]]] = {
     "renormalize": (set(), set()),
 }
 
+#: Mechanisms that *replace* the feature value, so that two at one place
+#: cannot both take effect. (The others add to it, bound it or rescale it.)
+ABSOLUTE = frozenset({"swap", "lerp"})
+
 #: Mechanisms a document gives no operand: one draws its own noise, one only
 #: bounds, one measures against the pre-write value the seam supplies.
 NO_OPERAND = frozenset({"gaussian", "clamp", "renormalize"})
@@ -326,6 +335,26 @@ class Intervention(Node):
     #: forward of this intervention. 0 is one forward pass. With it, a
     #: position may be `{"step": k}` — the continuation frame.
     decode: int = Field(default=0, ge=0)
+
+    def generated(self) -> dict[tuple[str, str], str]:
+        """`(model, input) -> the name its generated ids are published under`.
+
+        A forward is a model *on an input*, and one model may run on two (the
+        original on the base and on the counterfactual). Named by model alone
+        the two would collide and the later would win silently, so a model
+        with several forwards names the input too. Only forwards that exist
+        are here: `original` runs only if some read asks it to."""
+        if not self.decode:
+            return {}
+        units = {(read.model, read.input) for read in self.reads.values()}
+        units |= {(name, model.input) for name, model in self.models.items()}
+        per_model: dict[str, int] = {}
+        for model, _ in units:
+            per_model[model] = per_model.get(model, 0) + 1
+        return {
+            (model, role): f"{model}.generated" if per_model[model] == 1 else f"{model}.{role}.generated"
+            for model, role in sorted(units)
+        }
 
 
 # --------------------------------------------------------------------- #
@@ -531,10 +560,8 @@ class Spec(Node):
                             f"(published so far: {sorted(published)})",
                         )
             produced = set(self.intervention_of(step).metrics) if isinstance(step, (Observe, Fit)) else set()
-            if isinstance(step, (Observe, Fit)) and self.intervention_of(step).decode:
-                one = self.intervention_of(step)
-                models = {"original"} | set(one.models)
-                produced |= {f"{model}.generated" for model in models}
+            if isinstance(step, (Observe, Fit)):
+                produced |= set(self.intervention_of(step).generated().values())
             if isinstance(step, Observe):
                 for output_name, output in step.outputs.items():
                     _refuse(
@@ -617,6 +644,42 @@ class Spec(Node):
 
     def _check_intervention(self, label: str, one: Intervention, known: set[str]) -> None:
         where = f"interventions.{label}"
+        # names the run itself produces, which a document may not take
+        for kind, names in (("read", one.reads), ("metric", one.metrics), ("write", one.writes)):
+            for name in names:
+                _refuse(
+                    not name.endswith(".generated") and not name.endswith(".mask") and not name.startswith("train/"),
+                    f"{where}: {kind} {name!r}: names ending '.generated' (a decoding forward's ids) "
+                    "or '.mask' (a gate's mask), or starting 'train/' (a fit's record), are results the "
+                    "run produces itself; pick another name",
+                )
+        _refuse(
+            "original" not in one.models,
+            f"{where}: 'original' is the un-intervened model, which every document has; an "
+            "intervened model needs another name",
+        )
+        # (A model with no writes is allowed: it is the clean control, run
+        # through exactly the path the intervened one takes.)
+        # at most one absolute write per (model, site, position): two would
+        # run in list order and the last would silently win
+        for name, model in one.models.items():
+            seen: dict[tuple[str, str], str] = {}
+            for write_name in model.writes:
+                write = one.writes.get(write_name)
+                if write is None or write.mechanism not in ABSOLUTE or write.features is not None:
+                    continue
+                site = self.sites.get(write.site)
+                if site is None or site.heads is not None or site.units is not None:
+                    continue  # slices of a site may be disjoint; the compiler sees the indices
+                key = (write.site, json.dumps(write.pos, sort_keys=True))
+                _refuse(
+                    key not in seen,
+                    f"{where}: model {name!r}: writes {seen.get(key)!r} and {write_name!r} both replace "
+                    f"the value at site {write.site!r}, position {write.pos!r}; the second would "
+                    "silently discard the first. One absolute write per place — combine them, "
+                    "or make one additive (add_scaled)",
+                )
+                seen[key] = write_name
         for name, read in one.reads.items():
             _refuse(read.site in self.sites, f"{where}: read {name!r}: undeclared site {read.site!r}")
             if read.view == "logits":
