@@ -117,9 +117,15 @@ class Write(Node):
 
     site: str
     pos: Position
-    mechanism: Literal["swap"]
-    operand: str | Reference
+    mechanism: Literal["swap", "add_scaled", "lerp", "gaussian"]
+    #: A read of this intervention, a `{"ref": …}` to an earlier step's
+    #: output, a literal number (zero ablation is `0.0`), or nothing for a
+    #: mechanism that takes none.
+    operand: str | float | Reference | None = None
     featurizer: str = "identity"
+    #: The mechanism's numbers: `scale` for add_scaled and gaussian, `t` for
+    #: lerp, `seed` for gaussian.
+    params: dict[str, float] = Field(default_factory=dict)
 
     @field_validator("pos")
     @classmethod
@@ -127,9 +133,35 @@ class Write(Node):
         encoding.width_of(pos)
         return pos
 
+    @model_validator(mode="after")
+    def _mechanism_and_its_numbers(self) -> "Write":
+        needs, takes = MECHANISM_PARAMS[self.mechanism]
+        missing = needs - set(self.params)
+        extra = set(self.params) - needs - takes
+        if missing:
+            raise ValueError(f"mechanism {self.mechanism!r} needs params {sorted(missing)}")
+        if extra:
+            raise ValueError(f"mechanism {self.mechanism!r} takes no params {sorted(extra)}")
+        if self.mechanism == "gaussian" and self.operand is not None:
+            raise ValueError("mechanism 'gaussian' takes no operand; it draws its own noise")
+        if self.mechanism != "gaussian" and self.operand is None:
+            raise ValueError(f"mechanism {self.mechanism!r} needs an operand")
+        return self
+
     @property
-    def operand_name(self) -> str:
+    def operand_name(self) -> str | float | None:
+        """The operand as the compiler carries it: a name for a read or a
+        reference, the number itself for a literal."""
         return self.operand.ref if isinstance(self.operand, Reference) else self.operand
+
+
+#: (required, optional) params per mechanism.
+MECHANISM_PARAMS: dict[str, tuple[set[str], set[str]]] = {
+    "swap": (set(), set()),
+    "add_scaled": (set(), {"scale"}),
+    "lerp": ({"t"}, set()),
+    "gaussian": ({"seed"}, {"scale"}),
+}
 
 
 class IntervenedModel(Node):
@@ -166,11 +198,19 @@ class TokenLogit(Node):
     token_form: Literal["space_prefixed"] = "space_prefixed"
 
 
+class TokenProb(Node):
+    kind: Literal["token_prob"]
+    of: str
+    token: str
+    token_form: Literal["space_prefixed"] = "space_prefixed"
+
+
 for _cls, _columns in (
     (Match, ("expected",)),
     (LogitDiff, ("a", "b")),
     (CrossEntropy, ("target",)),
     (TokenLogit, ("token",)),
+    (TokenProb, ("token",)),
 ):
     # The data columns this kind names, in the order `ops.metrics.compute`
     # takes them — the one thing the compiler needs and the shape of the
@@ -181,7 +221,7 @@ for _cls, _columns in (
 
 
 Metric = Annotated[
-    Union[Match, LogitDiff, CrossEntropy, TokenLogit], Field(discriminator="kind")
+    Union[Match, LogitDiff, CrossEntropy, TokenLogit, TokenProb], Field(discriminator="kind")
 ]
 
 #: Which of a metric's own fields name data columns, in the order
@@ -191,6 +231,7 @@ METRIC_COLUMNS = {
     "logit_diff": ("a", "b"),
     "cross_entropy": ("target",),
     "token_logit": ("token",),
+    "token_prob": ("token",),
 }
 
 
@@ -239,7 +280,7 @@ class Optimizer(Node):
 
 class EarlyStop(Node):
     metric: str
-    mode: Literal["max"] = "max"
+    mode: Literal["max", "min"] = "max"
     patience: int = Field(gt=0)
 
 
@@ -455,11 +496,11 @@ class Spec(Node):
             _refuse(read.featurizer in known, f"{where}: read {name!r}: undeclared featurizer")
         for name, write in one.writes.items():
             _refuse(write.site in self.sites, f"{where}: write {name!r}: undeclared site {write.site!r}")
-            if not isinstance(write.operand, Reference):
+            if isinstance(write.operand, str):
                 _refuse(
                     write.operand in one.reads,
-                    f"{where}: write {name!r}: the operand must be a read name or a "
-                    '{"ref": …} to an earlier step\'s output; a literal is not implemented',
+                    f"{where}: write {name!r}: operand {write.operand!r} is not a read of "
+                    'this intervention; a value from an earlier step is {"ref": …}',
                 )
             _refuse(write.featurizer in known, f"{where}: write {name!r}: undeclared featurizer")
         for name, model in one.models.items():
@@ -478,7 +519,7 @@ class Spec(Node):
                 "scores one position per row",
             )
         for name, write in one.writes.items():
-            if not isinstance(write.operand, Reference):
+            if isinstance(write.operand, str):
                 have, want = encoding.width_of(one.reads[write.operand].pos), encoding.width_of(write.pos)
                 _refuse(
                     have == want,

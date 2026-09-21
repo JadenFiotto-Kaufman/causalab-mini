@@ -56,9 +56,11 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
                 address = tap.address
                 where = address.component + (f"[{address.layer}]" if address.layer is not None else "")
                 for write in tap.writes:
+                    args = [] if write.operand is None else [str(write.operand)]
+                    args += [f"{k}={v}" for k, v in write.params.items()]
                     out.append(
                         f"{pad}      write {write.name!r} at {where} pos={_pos(write.positions)} "
-                        f"{write.mechanism}({write.operand}) via {write.featurizer!r}"
+                        f"{write.mechanism}({', '.join(args)}) via {write.featurizer!r}"
                     )
                 for read in tap.reads:
                     out.append(

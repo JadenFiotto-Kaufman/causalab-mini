@@ -322,7 +322,10 @@ Recorded so they are not rediscovered.
    protocol's three-write document to the bit. **Ragged is next**, with
    eligibility: `{"all": true}` and per-row variables, refused by name today.
 5. **Vocabulary throughout**, in whatever order the documents being written
-   demand.
+   demand. Landed 2026-09-21: literal operands (`documents/v2/
+   zero_ablation.json`), `add_scaled` / `lerp` / `gaussian` with their
+   numbers under `params`, `early_stop.mode: min`, `token_prob`. Next in
+   this step: the `view: "logits"` read for logit lens.
 6. **E.**
 
 The test of each item is the same one this project has used from the start:

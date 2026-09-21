@@ -64,6 +64,7 @@ METRIC_COLUMNS = {
     "logit_diff": ("a", "b"),
     "cross_entropy": ("target",),
     "token_logit": ("token",),
+    "token_prob": ("token",),
 }
 
 # Sections that exist in the protocol and that this slice does not implement.

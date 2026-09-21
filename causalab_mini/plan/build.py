@@ -328,7 +328,7 @@ class _Experiment:
                 # read of this pass, or an output published before it
                 name: _WriteSpec(
                     site=w.site, pos=w.pos, mechanism=w.mechanism,
-                    operand=w.operand_name, featurizer=w.featurizer,
+                    operand=w.operand_name, featurizer=w.featurizer, params=dict(w.params),
                 )
                 for name, w in intervention.writes.items()
             },
@@ -340,10 +340,11 @@ class _Experiment:
 @dataclass(frozen=True)
 class _WriteSpec:
     site: str
-    pos: int
+    pos: Any
     mechanism: str
-    operand: str
+    operand: str | float | None
     featurizer: str
+    params: dict[str, float]
 
 
 def build_request(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Plan:
@@ -632,7 +633,9 @@ def _schedule(experiment: _Experiment) -> list[tuple[str, str]]:
     for name, spec in experiment.models.items():
         units.setdefault((name, spec.input), set())
         for write in spec.writes:
-            units[(name, spec.input)].add(experiment.writes[write].operand)
+            operand = experiment.writes[write].operand
+            if isinstance(operand, str):  # a literal or nothing orders no forward
+                units[(name, spec.input)].add(operand)
 
     ordered: list[tuple[str, str]] = []
     remaining = dict(units)
@@ -672,6 +675,7 @@ def _forward(
                     operand=spec.operand,
                     mechanism=spec.mechanism,
                     featurizer=spec.featurizer,
+                    params=dict(getattr(spec, "params", {})),
                 )
             )
     reads: dict[Address, list[ReadOp]] = {}

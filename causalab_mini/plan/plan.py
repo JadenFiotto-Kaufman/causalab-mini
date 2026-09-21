@@ -63,9 +63,14 @@ class ReadOp:
 class WriteOp:
     name: str
     positions: Positions
-    operand: str  # the name of a read, produced by an earlier forward
+    #: A name — a read of this pass, or an output published before it — a
+    #: literal number (zero ablation is `0.0`), or nothing for a mechanism
+    #: that takes none.
+    operand: str | float | None
     mechanism: str
     featurizer: str
+    #: The mechanism's numbers: a scale, a seed.
+    params: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

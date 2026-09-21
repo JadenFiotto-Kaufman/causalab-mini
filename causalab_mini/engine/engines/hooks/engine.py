@@ -196,10 +196,11 @@ def _apply(
         activation = intervene.apply_write(
             activation,
             write.positions,
-            values[write.operand],
+            intervene.resolve_operand(values, write.operand),
             write.mechanism,
             featurizers[write.featurizer],
             tap.address.seq_axis,
+            write.params,
         )
     for read in tap.reads:
         gathered = intervene.gather(activation, read.positions, tap.address.seq_axis)

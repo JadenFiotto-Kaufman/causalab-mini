@@ -128,10 +128,11 @@ def apply_taps(
             patched = intervene.apply_write(
                 read(model, tap.address),
                 write_op.positions,
-                values[write_op.operand],
+                intervene.resolve_operand(values, write_op.operand),
                 write_op.mechanism,
                 featurizers[write_op.featurizer],
                 tap.address.seq_axis,
+                write_op.params,
             )
             write(model, tap.address, patched)
         for read_op in tap.reads:

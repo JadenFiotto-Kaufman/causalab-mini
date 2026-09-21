@@ -144,8 +144,8 @@ def fit(engine: Any, step: Fit, state: State) -> None:
             evaluated = observe(engine, step.evaluation, state)
         scores.append(torch.stack([evaluated[name].mean() for name in step.eval_metrics]))
         watched = float(evaluated[step.early_stop].mean())
-        # `mode` is "max"; the document refuses the other one.
-        if best is None or watched > best:
+        improved = best is None or (watched > best if step.mode == "max" else watched < best)
+        if improved:
             best, waited = watched, 0
         else:
             waited += 1

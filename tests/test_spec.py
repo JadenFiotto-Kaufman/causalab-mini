@@ -147,7 +147,7 @@ def test_an_unknown_key_anywhere_is_refused_with_its_path(patching_spec_raw):
     "edit, message",
     [
         (lambda raw: raw["interventions"]["patching"]["reads"]["v_cf"].update(site="nope"), "undeclared site"),
-        (lambda raw: raw["interventions"]["patching"]["writes"]["patch"].update(operand="nope"), "must be a read name"),
+        (lambda raw: raw["interventions"]["patching"]["writes"]["patch"].update(operand="nope"), "is not a read of this intervention"),
         (lambda raw: raw["interventions"]["patching"]["metrics"]["iia"].update(of="nope"), "must be a read name"),
         (lambda raw: raw["steps"]["score"]["saves"].append({"value": "nope", "file_path": "x.json"}), "does not produce"),
         (lambda raw: raw["steps"]["score"]["rows"].pop("counterfactual"), "no rows for role"),
@@ -236,8 +236,9 @@ def test_a_write_is_two_fields_a_schema_can_enumerate():
     cannot enumerate. `mechanism` is a literal now, and the schema says so."""
     schema = Spec.model_json_schema()
     write = schema["$defs"]["Write"]
-    assert write["required"] == ["site", "pos", "mechanism", "operand"]
-    assert write["properties"]["mechanism"]["const"] == "swap"  # one value: const, not enum
+    # `operand` is optional now: `gaussian` draws its own and takes none
+    assert write["required"] == ["site", "pos", "mechanism"]
+    assert write["properties"]["mechanism"]["enum"] == ["swap", "add_scaled", "lerp", "gaussian"]
 
 
 # --------------------------------------------------------------------- #

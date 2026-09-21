@@ -37,6 +37,13 @@ def cross_entropy(logits: Any, target: TokenIds) -> Any:
     return -logits.log_softmax(dim=-1)[rows, ids]
 
 
+def token_prob(logits: Any, token: TokenIds) -> Any:
+    """The probability the model puts on one token, per row — a logit lens
+    reads this at every layer to see where an answer emerges."""
+    rows, ids = _rows(logits, token)
+    return logits.softmax(dim=-1)[rows, ids]
+
+
 def token_logit(logits: Any, token: TokenIds) -> Any:
     """The raw logit of one token, per row. Not a difference and not a
     probability: the Hydra-effect experiments measure a *direct effect* as a
@@ -51,6 +58,7 @@ KINDS: dict[str, Callable[..., Any]] = {
     "logit_diff": logit_diff,
     "cross_entropy": cross_entropy,
     "token_logit": token_logit,
+    "token_prob": token_prob,
 }
 
 UNITS: dict[str, tuple[str, str]] = {
@@ -58,6 +66,7 @@ UNITS: dict[str, tuple[str, str]] = {
     "logit_diff": ("logit", "logit_diff/v1"),
     "cross_entropy": ("nat", "cross_entropy/v1"),
     "token_logit": ("logit", "token_logit/v1"),
+    "token_prob": ("probability", "token_prob/v1"),
 }
 
 

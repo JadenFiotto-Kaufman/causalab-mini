@@ -24,7 +24,7 @@ once.
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Callable, Protocol, runtime_checkable
 
 import torch
 
@@ -58,14 +58,46 @@ class Identity:
 
 
 class Mechanism(Protocol):
-    """A `do`: the feature value in, the feature value out. Stateless."""
+    """A `do`: the feature value in, the feature value out. Stateless. A
+    mechanism that needs a number — a scale, a seed — takes it by keyword,
+    from the write's `params`."""
 
-    def __call__(self, f: Any, operand: Any) -> Any: ...
+    def __call__(self, f: Any, operand: Any, **params: Any) -> Any: ...
 
 
 def swap(f: Any, operand: Any) -> Any:
     """The absolute class: it replaces, it does not add."""
     return operand
+
+
+def add_scaled(f: Any, operand: Any, scale: float = 1.0) -> Any:
+    """The additive class: `f + scale·operand`. Steering is this with a
+    direction as the operand; a scaled mean is this with the mean."""
+    return f + scale * operand
+
+
+def lerp(f: Any, operand: Any, t: float) -> Any:
+    """`(1−t)·f + t·operand`: swap at t=1, nothing at t=0, and every partial
+    interchange between."""
+    return (1.0 - t) * f + t * operand
+
+
+def gaussian(f: Any, operand: Any, seed: int, scale: float = 1.0) -> Any:
+    """`f + scale·ε`, ε ~ N(0, 1) drawn from `seed` — noise ablation. The
+    draw is on the CPU generator and moved, so the same seed is the same
+    noise on any device. Takes no operand."""
+    noise = torch.randn(f.shape, generator=torch.Generator().manual_seed(seed))
+    return f + scale * noise.to(f)
+
+
+def resolve_operand(values: dict[str, Any], operand: Any) -> Any:
+    """What a write acts with: a named value read earlier, a literal number
+    (zero ablation is `0.0`), or nothing for a mechanism that takes none."""
+    if isinstance(operand, str):
+        return values[operand]
+    if operand is None:
+        return None
+    return torch.tensor(float(operand))
 
 
 # The two closed vocabularies, by the name a document spells.
@@ -78,7 +110,14 @@ def swap(f: Any, operand: Any) -> Any:
 # See `featurizer.KINDS` for the constructors a document's `featurizers` section
 # names.
 FEATURIZERS: dict[str, Featurizer] = {"identity": Identity()}
-MECHANISMS: dict[str, Mechanism] = {"swap": swap}
+#: Typed loosely on purpose: each mechanism names the numbers it takes as
+#: keywords, and `Mechanism` above documents the shape rather than checking it.
+MECHANISMS: dict[str, Callable[..., Any]] = {
+    "swap": swap,
+    "add_scaled": add_scaled,
+    "lerp": lerp,
+    "gaussian": gaussian,
+}
 
 
 def gather(tensor: Any, positions: Positions, seq_axis: int = 1) -> Any:
@@ -110,9 +149,10 @@ def apply_write(
     mechanism: str = "swap",
     featurizer: str | Featurizer = "identity",
     seq_axis: int = 1,
+    params: dict[str, Any] | None = None,
 ) -> Any:
     featurize = FEATURIZERS[featurizer] if isinstance(featurizer, str) else featurizer
     x = gather(tensor, positions, seq_axis)
     f, err = featurize.featurize(x)
-    f = MECHANISMS[mechanism](f, operand)
+    f = MECHANISMS[mechanism](f, operand, **(params or {}))
     return scatter(tensor, positions, featurize.inverse(f, err, x), seq_axis)
