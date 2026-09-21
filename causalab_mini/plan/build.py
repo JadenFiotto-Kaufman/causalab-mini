@@ -1035,7 +1035,7 @@ def _forward(
     # a tap is one place: an address, and — when the forward decodes — a step
     writes: dict[tuple[Address, Any], list[WriteOp]] = {}
     if name in experiment.models:
-        for order, write_name in enumerate(experiment.models[name].writes):
+        for nth, write_name in enumerate(experiment.models[name].writes):
             spec = experiment.writes[write_name]
             writes.setdefault((addresses[spec.site], encoding.step_of(spec.pos)), []).append(
                 WriteOp(
@@ -1046,7 +1046,7 @@ def _forward(
                     featurizer=spec.featurizer,
                     params=dict(getattr(spec, "params", {})),
                     features=getattr(spec, "features", None),
-                    order=order,
+                    order=nth,
                 )
             )
     reads: dict[tuple[Address, Any], list[ReadOp]] = {}
