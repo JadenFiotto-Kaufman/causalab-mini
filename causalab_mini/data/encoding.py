@@ -7,8 +7,6 @@ never resolves a position.
 
 from __future__ import annotations
 
-import re
-
 from dataclasses import dataclass
 from typing import Any
 
@@ -109,97 +107,23 @@ def positions(batch: Batch, pos: Any, column_texts: list[str] | None = None) -> 
     return tuple(resolved)
 
 
-def _locate(batch: Batch, row: int, text: str | None) -> tuple[int, ...]:
+def _locate(batch: Batch, row: int, text: str) -> tuple[int, ...]:
     """The token window covering `text` inside the row's decoded content, or
-    `()` when the text is not there — or the row has none: the row is then
-    an excluded measurement, still a row, contributing no positions.
-
-    A position names one place. Text that occurs twice is refused rather
-    than resolved to its first occurrence, and a match has to stand on its
-    own — `day` is not found inside `Thursday` — because on a write either
-    mistake patches a wrong token with every shape correct."""
-    if text is None or not text.strip():
-        return ()
+    `()` when the text is not there: the row is then an excluded measurement
+    — still a row, contributing no positions."""
     decoded, offsets = batch.texts[row], batch.offsets[row]
-    wanted = text.strip()
-    hits = [
-        found.start()
-        for found in re.finditer(re.escape(wanted), decoded)
-        if not (found.start() > 0 and decoded[found.start() - 1].isalnum() and wanted[0].isalnum())
-        and not (found.end() < len(decoded) and decoded[found.end()].isalnum() and wanted[-1].isalnum())
-    ]
-    if not hits:
+    for candidate in (text, " " + text, text.strip()):
+        at = decoded.find(candidate) if candidate else -1
+        if at != -1:
+            break
+    else:
         return ()
-    if len(hits) > 1:
-        raise EncodingError(
-            f"a {{'column': …}} position: row {row}'s text {wanted!r} occurs {len(hits)} times in its "
-            f"prompt {decoded!r}; a position names one place. Make the column's value unique in the prompt"
-        )
-    lo_char, hi_char = hits[0], hits[0] + len(wanted)
+    lo_char, hi_char = at, at + len(candidate)
     # the first token that ends after the substring starts, up to the last
     # token that starts before it ends
     first = next(k for k in range(len(offsets) - 1) if offsets[k + 1] > lo_char)
     last = max(k for k in range(len(offsets) - 1) if offsets[k] < hi_char)
     return tuple(range(batch.starts[row] + first, batch.starts[row] + last + 1))
-
-
-#: Every position form, in the words an error and `causalab-mini vocab` use.
-FORMS = (
-    "an integer (negative counts from the end of the row's content)",
-    '{"index": i} — the same, spelled out',
-    '{"last": n} — the last n content tokens, n >= 1',
-    '{"span": [a, b]} — content-relative and half-open, negatives allowed',
-    '{"all": true} — every content token; the width varies by row',
-    '{"column": "c"} — the tokens of the row\'s column-c text inside its prompt; varies by row',
-    '{"step": k} or {"step": "all"} — a decode step, which needs decode > 0',
-)
-
-
-def _integer(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
-
-
-def check_form(pos: Any) -> None:
-    """Refuse a position no row could make sense of, before any row exists.
-
-    A misspelt form, a span given as a string, `{"all": false}` (which used
-    to mean all), a window that is empty whatever the row — these are
-    mistakes in the document, and they used to surface as a TypeError from
-    inside the resolver or as "falls outside the row's content"."""
-    def refuse(why: str) -> None:
-        raise EncodingError(f"position {pos!r}: {why}. The forms are: " + "; ".join(FORMS))
-
-    if _integer(pos):
-        return
-    if not isinstance(pos, dict) or len(pos) != 1:
-        refuse("not a position form")
-    (form, value), = pos.items()
-    if form == "index":
-        if not (_integer(value)):
-            refuse("an index is an integer")
-    elif form == "last":
-        if not ((_integer(value) and value >= 1)):
-            refuse("`last` is how many tokens, at least 1")
-    elif form == "span":
-        ok = isinstance(value, list) and len(value) == 2 and all(_integer(one) for one in value)
-        if not (ok):
-            refuse("a span is [start, stop] in integers")
-        a, b = value
-        if (a < 0) == (b < 0) and a >= b:
-            refuse("this span is empty on every row")
-    elif form == "all":
-        if not (value is True):
-            refuse('it is spelled {"all": true}')
-    elif form == "column":
-        if not ((isinstance(value, str) and bool(value))):
-            refuse("a column is named by a non-empty string")
-    elif form == "step":
-        if not ((value == "all" or (_integer(value) and value >= 0))):
-            refuse("a step is a non-negative integer, or 'all'")
-    elif form == "variable":
-        refuse("{'variable': v} is not implemented; {'column': c} locates a column's text in the prompt")
-    else:
-        refuse("not a position form")
 
 
 def is_ragged(pos: Any) -> bool:
@@ -216,10 +140,12 @@ def width_of(pos: Any) -> int | None:
     """How many positions a form names, knowable without a row — which is
     what lets the compiler check a write against its operand — or `None`
     for a ragged form, whose widths are only known once the rows are."""
-    check_form(pos)
     if is_ragged(pos):
         return None
     if step_of(pos) is not None:
+        step = pos["step"]
+        if not (step == "all" or (isinstance(step, int) and not isinstance(step, bool) and step >= 0)):
+            raise EncodingError(f"position {pos!r}: a step is a non-negative integer, or 'all'")
         return 1
     lo, hi = _window(pos, 1 << 30)
     return hi - lo

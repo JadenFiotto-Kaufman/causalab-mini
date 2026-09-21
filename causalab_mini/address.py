@@ -95,17 +95,6 @@ class _Component:
     #: model holds it flat (`o_proj`'s input) or as two axes (the query) —
     #: so a site may name `heads`, and a featurizer sees one width.
     heads: str | None = None
-    #: Which of a head's two widths this tensor has, where they differ
-    #: (DeepSeek's MLA): "q" for the query/key side, "v" for the value side.
-    head_side: str = "v"
-    #: A config attribute holding a soft cap the *model* applies to this
-    #: tensor after the module returns it: Gemma-2 computes
-    #: `tanh(logits / cap) · cap` outside `lm_head`, so the module's output is
-    #: not the model's logits until the engine applies the same cap.
-    cap: str | None = None
-    #: Why this place does not exist on a family, where it does not: said
-    #: here so the refusal can explain, instead of listing paths that failed.
-    refuse: str | None = None
     #: Its last axis is the *keys* of the padded batch, not a feature width:
     #: true of the attention pattern and the scores under it. A value read
     #: here only means something beside a prompt laid out the same way.
@@ -128,68 +117,6 @@ class _Component:
 #:
 #:     ("some_moe", "block_output"): {"select": (1,)},
 _OVERRIDES: dict[tuple[str, str], dict[str, Any]] = {}
-
-#: The component vocabulary is defined by the two residual identities
-#:
-#:     block_mid    = block_input + attention_output
-#:     block_output = block_mid   + mlp_output
-#:
-#: and `mlp_input_norm == mlp_input`. On a pre-norm block (Llama, GPT-2,
-#: Mistral, Qwen) the default rows satisfy them. The families below keep a
-#: norm *inside* a branch, or add the residual inside the sublayer, so the
-#: same names live at other modules. Each row was checked against the
-#: identities on a tiny checkpoint and, for Gemma-2, on the 2B
-#: (tests/test_families.py; FINDINGS §23).
-_SANDWICH = {  # Gemma-2/3: post-norms on both branches, a separate pre-MLP norm
-    "attention_output": {"path": "layers.{layer}.post_attention_layernorm", "side": "output"},
-    "block_mid": {"path": "layers.{layer}.pre_feedforward_layernorm", "side": "input"},
-    "mlp_input_norm": {"path": "layers.{layer}.pre_feedforward_layernorm", "side": "output"},
-    "mlp_output": {"path": "layers.{layer}.post_feedforward_layernorm", "side": "output"},
-}
-for _family in ("gemma2", "gemma3", "gemma3_text"):
-    _OVERRIDES.update({(_family, name): differs for name, differs in _SANDWICH.items()})
-_OVERRIDES.update({
-    # OLMo-2 is post-norm: x + norm(attn(x)), then h + norm(mlp(h)). The MLP
-    # consumes the stream itself, so there is no pre-MLP norm to name.
-    ("olmo2", "attention_output"): {"path": "layers.{layer}.post_attention_layernorm", "side": "output"},
-    ("olmo2", "block_mid"): {"path": "mlps.{layer}", "side": "input"},
-    ("olmo2", "mlp_output"): {"path": "layers.{layer}.post_feedforward_layernorm", "side": "output"},
-    ("olmo2", "mlp_input_norm"): {"refuse": (
-        "OLMo-2 is post-norm: its MLP reads the residual stream directly, so there is no "
-        "pre-MLP norm. `block_mid` and `mlp_input` are that stream")},
-    # BLOOM's attention and MLP modules add the residual themselves, so the
-    # module's output is the stream; the contribution is the last projection.
-    ("bloom", "attention_output"): {"path": "attentions.{layer}.dense", "side": "output"},
-    ("bloom", "mlp_output"): {"path": "mlps.{layer}.dense_4h_to_h", "side": "output"},
-    # GPT-J predates the attention interface: the call is `self._attn(query,
-    # key, value, mask)`, with no leading module argument.
-    ("gptj", "attention_query"): {"op": "self._attn(", "arg": 0},
-    ("gptj", "attention_key"): {"op": "self._attn(", "arg": 1},
-    ("gptj", "attention_z"): {"op": "self._attn(", "seq_axis": 2},
-    ("gptj", "attention_scores"): {"op": "self._attn("},
-    ("gptj", "attention_probs"): {"op": "self._attn("},
-    # GPT-OSS appends an attention *sink* column before its softmax and drops
-    # it after: the softmax's output is one key too wide. The pattern the
-    # values are mixed with is the next assignment, `scores`.
-    ("gpt_oss", "attention_probs"): {"inner": "scores_0"},
-    ("gpt_oss", "attention_scores"): {"refuse": (
-        "GPT-OSS's pre-softmax scores carry an extra attention-sink column, so they are not "
-        "over the keys; `attention_probs` is the pattern with the sink removed")},
-})
-
-#: Families whose attention and MLP read the same block input in parallel.
-#: There is no residual stream "after the mixer" on these, by construction.
-_PARALLEL_ABSENT = ("block_mid", "mlp_input_norm")
-
-
-def _parallel(config: Any) -> bool:
-    if getattr(config, "model_type", None) in ("gptj", "phi"):
-        return True
-    return bool(
-        getattr(config, "use_parallel_residual", False)
-        or getattr(config, "parallel_attn", False)
-        or getattr(config, "new_decoder_architecture", False)
-    )
 
 
 _COMPONENTS = {
@@ -289,14 +216,14 @@ _COMPONENTS = {
     ),
     "attention_input_norm": _Component(
         # The first norm's output — what the mixer actually consumes.
-        path="layers.{layer}.input_layernorm|layers.{layer}.ln_1|layers.{layer}.self_attn_layer_norm|layers.{layer}.ln_attn",
+        path="layers.{layer}.input_layernorm|layers.{layer}.ln_1",
         side="output", stage=1, width="hidden_size",
     ),
     "attention_premix": _Component(
         # The output projection's *input*: the heads' results, merged
         # head-major and not yet mixed — where a per-head edit belongs.
-        path="attentions.{layer}.o_proj|attentions.{layer}.c_proj|attentions.{layer}.dense|attentions.{layer}.out_proj",
-        side="input", stage=6, width="head_dim", heads="num_attention_heads",
+        path="attentions.{layer}.o_proj|attentions.{layer}.c_proj",
+        side="input", stage=6, width="hidden_size", heads="num_attention_heads",
     ),
     "attention_output": _Component(
         # The mixer's contribution to the residual stream, before it is added:
@@ -318,15 +245,13 @@ _COMPONENTS = {
     "mlp_activation": _Component(
         # The activation function's output. No width: nnterp publishes no
         # intermediate size, which refuses a featurizer here.
-        path="mlps.{layer}.act_fn|mlps.{layer}.act|mlps.{layer}.activation_fn|mlps.{layer}.gelu_impl",
-        side="output", stage=11, width="intermediate_size",
+        path="mlps.{layer}.act_fn|mlps.{layer}.act", side="output", stage=11, width="intermediate_size",
     ),
     "mlp_neuron_output": _Component(
         # The down-projection's input: act(gate)·up on a gated MLP, and the
         # activation itself on GPT-2, which has no gate — the same *place*,
         # a different tensor, and the table says so rather than hiding it.
-        path="mlps.{layer}.down_proj|mlps.{layer}.c_proj|mlps.{layer}.dense_4h_to_h|mlps.{layer}.fc_out|mlps.{layer}.fc2",
-        side="input", stage=12, width="intermediate_size",
+        path="mlps.{layer}.down_proj|mlps.{layer}.c_proj", side="input", stage=12, width="intermediate_size",
     ),
     "mlp_output": _Component(
         # block_output = block_mid + mlp_output.
@@ -339,8 +264,7 @@ _COMPONENTS = {
         path="ln_final", side="output", stage=0, band=2, width="hidden_size"
     ),
     "lm_head": _Component(
-        path="lm_head", side="output", stage=1, band=2, width="vocab_size",
-        cap="final_logit_softcapping",
+        path="lm_head", side="output", stage=1, band=2, width="vocab_size"
     ),
 }
 

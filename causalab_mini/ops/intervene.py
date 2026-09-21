@@ -87,8 +87,7 @@ def gaussian(f: Any, operand: Any, seed: int, scale: float = 1.0) -> Any:
     """`f + scale·ε`, ε ~ N(0, 1) drawn from `seed` — noise ablation. The
     draw is on the CPU generator and moved, so the same seed is the same
     noise on any device. Takes no operand."""
-    # `int`: a document's params are numbers, and JSON's 7 arrives as 7.0
-    noise = torch.randn(f.shape, generator=torch.Generator().manual_seed(int(seed)))
+    noise = torch.randn(f.shape, generator=torch.Generator().manual_seed(seed))
     return f + scale * noise.to(f)
 
 
@@ -202,9 +201,7 @@ def _flat(positions: Positions, device: Any) -> tuple[Any, Any]:
     empty window — an excluded row — contributes nothing."""
     rows = [row for row, window in enumerate(positions) for _ in window]
     index = [position for window in positions for position in window]
-    # `long` said out loud: an all-empty window makes `[]`, which torch types as float
-    return (torch.as_tensor(rows, dtype=torch.long, device=device),
-            torch.as_tensor(index, dtype=torch.long, device=device))
+    return torch.as_tensor(rows, device=device), torch.as_tensor(index, device=device)
 
 
 def _selection(at: Selection | Positions) -> Selection:
@@ -245,7 +242,7 @@ def _window(tensor: Any, at: Selection, seq_axis: int) -> Any:
         rows, index = _flat(positions, tensor.device)
         return moved[rows, index]
     rows = torch.arange(tensor.shape[0], device=tensor.device)[:, None]
-    index = torch.as_tensor(positions, dtype=torch.long, device=tensor.device)  # (batch, w)
+    index = torch.as_tensor(positions, device=tensor.device)  # (batch, w)
     return moved[rows, index]
 
 
@@ -283,7 +280,7 @@ def scatter(tensor: Any, at: Selection | Positions, values: Any, seq_axis: int =
         moved[rows, index] = values.to(out)
         return out
     rows = torch.arange(tensor.shape[0], device=tensor.device)[:, None]
-    index = torch.as_tensor(positions, dtype=torch.long, device=tensor.device)
+    index = torch.as_tensor(positions, device=tensor.device)
     moved[rows, index] = values.to(out)
     return out
 
@@ -305,11 +302,6 @@ def apply_write(
     SAE latent, three directions of a rotation — the rest passing through."""
     featurize = FEATURIZERS[featurizer] if isinstance(featurizer, str) else featurizer
     x = gather(tensor, at, seq_axis)
-    if hasattr(operand, "to"):
-        # An operand was read wherever its own forward ran — another GPU,
-        # under `device_map="auto"`. `swap` survived by accident (scatter
-        # moves what it writes); anything that *combines* with `f` did not.
-        operand = operand.to(x.device)
     with exact(x):
         f, err = featurize.featurize(x)
         if mechanism in PRE_WRITE:

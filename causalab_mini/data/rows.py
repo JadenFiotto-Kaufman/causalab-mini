@@ -28,21 +28,7 @@ def load(data_root: str | Path, ref: str) -> list[Row]:
     """`weekdays/data#train` -> the rows of <root>/weekdays/data.json whose
     `split` column is "train"."""
     path, _, split = ref.partition("#")
-    root, file = Path(data_root).resolve(), (Path(data_root) / (path + ".json")).resolve()
-    if not file.is_relative_to(root):
-        raise DataError(f"dataset ref {ref!r} resolves to {file}, outside the data root {root}")
-    if not file.is_file():
-        near = sorted(str(one.relative_to(root).with_suffix("")) for one in root.glob("*/*.json"))
-        raise DataError(
-            f"dataset ref {ref!r}: no table at {file}. A ref is `<dir>/<file>` under the data root, "
-            f"without `.json`, optionally `#<split>`. Here: {near}"
-        )
-    table = json.loads(file.read_text())
-    if not isinstance(table, list) or not table:
-        raise DataError(f"dataset ref {ref!r} has no rows")
-    ids = [str(row["example_id"]) for row in table if isinstance(row, dict) and "example_id" in row]
-    if len(set(ids)) != len(ids):
-        raise DataError(f"dataset ref {ref!r}: `example_id` values repeat, so a row could not be told from another")
+    table = json.loads((Path(data_root) / (path + ".json")).read_text())
     if not split:
         return table
     rows = [row for row in table if row.get("split") == split]
@@ -74,11 +60,6 @@ def field_text(row: Row, field: str) -> str:
             raise DataError(f"field {field!r}: no such column {key!r}")
         value = value[key]
         for index in indices:
-            if not isinstance(value, list) or int(index) >= len(value):
-                raise DataError(
-                    f"field {field!r}: index {index} of column {key!r}, which has "
-                    f"{len(value) if isinstance(value, list) else 'no'} entries on this row"
-                )
             value = value[int(index)]
     if not isinstance(value, str):
         raise DataError(f"field {field!r}: expected a string, got {type(value).__name__}")

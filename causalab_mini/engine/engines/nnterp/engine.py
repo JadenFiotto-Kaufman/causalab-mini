@@ -124,7 +124,7 @@ class NNterpEngine(Engine):
         ) as tracer:
             for step in tracer.iter[:decode]:
                 apply_taps(model, forward, values, featurizers, step)
-            values[forward.generated or f"{forward.name}.generated"] = tracer.result[:, prompt:].clone()
+            values[f"{forward.name}.generated"] = tracer.result[:, prompt:].clone()
 
 
 def batch(forward: Forward) -> dict[str, Any]:
@@ -155,29 +155,30 @@ def apply_taps(
     frame at step 0 (or a plain forward), a step's own taps at that step,
     an `"all"` write at every step.
     """
-    active = [tap for tap in forward.taps if intervene.applies(tap.step, step)]
-    for address, writes, reads in plan_module.at_one_moment(active):
+    for tap in forward.taps:
+        if not intervene.applies(tap.step, step):
+            continue
         # what a renormalize measures against: this address before any write
-        original = read(model, address) if writes else None
-        for write_op, tap in writes:
+        original = read(model, tap.address) if tap.writes else None
+        for write_op in tap.writes:
             patched = intervene.apply_write(
-                read(model, address),
-                intervene.at_step(write_op.at, read(model, address), address.seq_axis, tap.step, step),
+                read(model, tap.address),
+                intervene.at_step(write_op.at, read(model, tap.address), tap.address.seq_axis, tap.step, step),
                 intervene.resolve_operand(values, write_op.operand),
                 write_op.mechanism,
                 featurizers[write_op.featurizer],
-                address.seq_axis,
+                tap.address.seq_axis,
                 write_op.params,
                 original,
                 write_op.features,
             )
-            write(model, address, patched)
-        for read_op, tap in reads:
-            tensor = read(model, address)
+            write(model, tap.address, patched)
+        for read_op in tap.reads:
+            tensor = read(model, tap.address)
             gathered = intervene.gather(
                 tensor,
-                intervene.at_step(read_op.at, tensor, address.seq_axis, tap.step, step),
-                address.seq_axis,
+                intervene.at_step(read_op.at, tensor, tap.address.seq_axis, tap.step, step),
+                tap.address.seq_axis,
             )
             if read_op.view == "logits":
                 # The logit lens: the residual pushed through the final norm and

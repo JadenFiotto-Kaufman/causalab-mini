@@ -30,20 +30,12 @@ model dump is a JSON Schema — which the protocol itself does not have.
 
 from __future__ import annotations
 
-import json
-import math
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .. import address
 from ..data import encoding
-
-#: Integers and booleans are strict throughout this file. pydantic's default
-#: turns `true` into 1 and `"3"` into 3, so `"pos": true` validated and ran a
-#: *different experiment* (position 1) — the one kind of mistake a format
-#: exists to catch. A number given where a float is wanted is still fine.
-
 
 class Node(BaseModel):
     """Every node refuses a key it does not know, and says where it was."""
@@ -78,15 +70,15 @@ class Role(Node):
 
 class Site(Node):
     component: str
-    layers: list[StrictInt] | None = None
+    layers: list[int] | None = None
     #: At a per-head tensor, the heads this site is. The site's width is then
     #: theirs — `len(heads) · head_dim` — so a featurizer, a swap or a harvest
     #: here is of those heads and leaves the others alone.
-    heads: list[StrictInt] | None = None
+    heads: list[int] | None = None
     #: Anywhere with a known width, the single features this site is — the
     #: neurons of `mlp_activation`, say. Heads and units are one mechanism
     #: (a group of the feature axis) at two grains, so a site names one.
-    units: list[StrictInt] | None = None
+    units: list[int] | None = None
 
     @model_validator(mode="after")
     def _one_layer(self) -> "Site":
@@ -127,18 +119,14 @@ class Featurizer(Node):
 
     kind: Literal["subspace", "pca", "gate", "sae", "linear"]
     #: The rank of a basis. A gate has none: its features are the units.
-    k: StrictInt | None = Field(default=None, gt=0)
+    k: int | None = Field(default=None, gt=0)
     parametrization: Literal["cayley"] = "cayley"
     #: The draw the initial basis comes from. Absent, the fit's seed, or 0.
-    seed: StrictInt | None = None
+    seed: int | None = None
     #: Load the parameter from a safetensors bundle a previous run wrote,
     #: instead of drawing it. Its header is checked against this document —
     #: model, site, layer, k, d — and a mismatch is refused by key.
     file_path: str | None = None
-    #: Load a bundle that carries no identity stamp — one written by other
-    #: tools, or by hand. Nothing can then check it is of this model, site
-    #: and layer; saying so is the author taking that on.
-    trust_unstamped: StrictBool = False
 
     @model_validator(mode="after")
     def _drawn_or_loaded(self) -> "Featurizer":
@@ -160,7 +148,7 @@ class Featurizer(Node):
 RESIDUAL_STREAM = frozenset({"embeddings", "block_input", "block_output", "ln_final"})
 
 #: A position form: one index, or a window of the same width on every row.
-Position = StrictInt | dict[str, Any]
+Position = int | dict[str, Any]
 
 
 class Read(Node):
@@ -205,7 +193,7 @@ class Write(Node):
     #: Which coordinates of the featurizer's space the mechanism acts on —
     #: SAE latents, directions of a rotation. The others pass through, and
     #: so does whatever the featurizer does not explain (its error term).
-    features: list[StrictInt] | None = None
+    features: list[int] | None = None
     #: The mechanism's numbers: `scale` for add_scaled and gaussian, `t` for
     #: lerp, `seed` for gaussian.
     params: dict[str, float] = Field(default_factory=dict)
@@ -229,9 +217,6 @@ class Write(Node):
             raise ValueError(f"mechanism {self.mechanism!r} takes no operand")
         if self.mechanism not in NO_OPERAND and self.operand is None:
             raise ValueError(f"mechanism {self.mechanism!r} needs an operand")
-        for key, value in self.params.items():
-            if not math.isfinite(value):
-                raise ValueError(f"param {key!r} is {value}; a mechanism's numbers are finite")
         if self.mechanism == "clamp" and not self.params:
             raise ValueError("mechanism 'clamp' needs a bound: params lo, hi or both")
         return self
@@ -252,10 +237,6 @@ MECHANISM_PARAMS: dict[str, tuple[set[str], set[str]]] = {
     "clamp": (set(), {"lo", "hi"}),
     "renormalize": (set(), set()),
 }
-
-#: Mechanisms that *replace* the feature value, so that two at one place
-#: cannot both take effect. (The others add to it, bound it or rescale it.)
-ABSOLUTE = frozenset({"swap", "lerp"})
 
 #: Mechanisms a document gives no operand: one draws its own noise, one only
 #: bounds, one measures against the pre-write value the seam supplies.
@@ -344,27 +325,7 @@ class Intervention(Node):
     #: Generate this many tokens after the prompt, greedily, on every
     #: forward of this intervention. 0 is one forward pass. With it, a
     #: position may be `{"step": k}` — the continuation frame.
-    decode: StrictInt = Field(default=0, ge=0)
-
-    def generated(self) -> dict[tuple[str, str], str]:
-        """`(model, input) -> the name its generated ids are published under`.
-
-        A forward is a model *on an input*, and one model may run on two (the
-        original on the base and on the counterfactual). Named by model alone
-        the two would collide and the later would win silently, so a model
-        with several forwards names the input too. Only forwards that exist
-        are here: `original` runs only if some read asks it to."""
-        if not self.decode:
-            return {}
-        units = {(read.model, read.input) for read in self.reads.values()}
-        units |= {(name, model.input) for name, model in self.models.items()}
-        per_model: dict[str, int] = {}
-        for model, _ in units:
-            per_model[model] = per_model.get(model, 0) + 1
-        return {
-            (model, role): f"{model}.generated" if per_model[model] == 1 else f"{model}.{role}.generated"
-            for model, role in sorted(units)
-        }
+    decode: int = Field(default=0, ge=0)
 
 
 # --------------------------------------------------------------------- #
@@ -381,7 +342,7 @@ class Output(Node):
 
     read: str
     reduce: Literal["none", "mean", "pca"] = "none"
-    k: StrictInt | None = Field(default=None, gt=0)
+    k: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def _k_iff_pca(self) -> "Output":
@@ -412,7 +373,7 @@ class Optimizer(Node):
 class EarlyStop(Node):
     metric: str
     mode: Literal["max", "min"] = "max"
-    patience: StrictInt = Field(gt=0)
+    patience: int = Field(gt=0)
 
 
 class Evaluation(Node):
@@ -462,9 +423,9 @@ class Fit(Node):
     objective: list[tuple[float, str]]
     #: gate name -> its temperature schedule. A gate without one stays at 1.
     anneal: dict[str, Anneal] = Field(default_factory=dict)
-    epochs: StrictInt = Field(gt=0)
-    pairs: StrictInt = Field(gt=0)
-    seed: StrictInt = 0
+    epochs: int = Field(gt=0)
+    pairs: int = Field(gt=0)
+    seed: int = 0
     optimizer: Optimizer
     early_stop: EarlyStop
     eval: Evaluation
@@ -530,8 +491,6 @@ class Spec(Node):
         """Everything that is about two pieces at once. No single node owns
         any of it, so none of it is a field validator."""
         _refuse(bool(self.interventions), "a document declares at least one intervention")
-        _refuse(bool(self.steps), "a document has at least one step; with none it runs nothing")
-        _refuse("base" in self.roles, "a document declares the role `base`: metrics read its rows' columns")
         known = set(self.featurizers) | {"identity"}
         for label, one in self.interventions.items():
             self._check_intervention(label, one, known)
@@ -555,15 +514,10 @@ class Spec(Node):
         published: dict[str, str] = {}  # output name -> the step that publishes it
         all_reads = {name for one in self.interventions.values() for name in one.reads}
         for name, step in self.steps.items():
-            needed: set[str] = set()
             if isinstance(step, (Observe, Fit)):
                 intervention = self.intervention_of(step)
-                # rows for the roles this step's experiment actually runs on —
-                # and `base`, whose columns every metric reads
-                needed = {"base"} | {read.input for read in intervention.reads.values()}
-                needed |= {model.input for model in intervention.models.values()}
-                for role in sorted(needed):
-                    _refuse(role in step.rows, f"step {name!r}: no rows for role {role!r}, which its intervention runs on")
+                for role in self.roles:
+                    _refuse(role in step.rows, f"step {name!r}: no rows for role {role!r}")
                 for role, dataset in step.rows.items():
                     _refuse(role in self.roles, f"step {name!r}: undeclared role {role!r}")
                     _refuse(bool(dataset), f"step {name!r}: role {role!r} has no dataset")
@@ -577,8 +531,10 @@ class Spec(Node):
                             f"(published so far: {sorted(published)})",
                         )
             produced = set(self.intervention_of(step).metrics) if isinstance(step, (Observe, Fit)) else set()
-            if isinstance(step, (Observe, Fit)):
-                produced |= set(self.intervention_of(step).generated().values())
+            if isinstance(step, (Observe, Fit)) and self.intervention_of(step).decode:
+                one = self.intervention_of(step)
+                models = {"original"} | set(one.models)
+                produced |= {f"{model}.generated" for model in models}
             if isinstance(step, Observe):
                 for output_name, output in step.outputs.items():
                     _refuse(
@@ -599,7 +555,7 @@ class Spec(Node):
                     published[output_name] = name
                 produced |= set(step.outputs)
             if isinstance(step, Fit):
-                for role in sorted(needed):
+                for role in self.roles:
                     _refuse(
                         role in step.eval.rows, f"step {name!r}.eval: no rows for role {role!r}"
                     )
@@ -661,42 +617,6 @@ class Spec(Node):
 
     def _check_intervention(self, label: str, one: Intervention, known: set[str]) -> None:
         where = f"interventions.{label}"
-        # names the run itself produces, which a document may not take
-        for kind, names in (("read", one.reads), ("metric", one.metrics), ("write", one.writes)):
-            for name in names:
-                _refuse(
-                    not name.endswith(".generated") and not name.endswith(".mask") and not name.startswith("train/"),
-                    f"{where}: {kind} {name!r}: names ending '.generated' (a decoding forward's ids) "
-                    "or '.mask' (a gate's mask), or starting 'train/' (a fit's record), are results the "
-                    "run produces itself; pick another name",
-                )
-        _refuse(
-            "original" not in one.models,
-            f"{where}: 'original' is the un-intervened model, which every document has; an "
-            "intervened model needs another name",
-        )
-        # (A model with no writes is allowed: it is the clean control, run
-        # through exactly the path the intervened one takes.)
-        # at most one absolute write per (model, site, position): two would
-        # run in list order and the last would silently win
-        for name, model in one.models.items():
-            seen: dict[tuple[str, str], str] = {}
-            for write_name in model.writes:
-                write = one.writes.get(write_name)
-                if write is None or write.mechanism not in ABSOLUTE or write.features is not None:
-                    continue
-                site = self.sites.get(write.site)
-                if site is None or site.heads is not None or site.units is not None:
-                    continue  # slices of a site may be disjoint; the compiler sees the indices
-                key = (write.site, json.dumps(write.pos, sort_keys=True))
-                _refuse(
-                    key not in seen,
-                    f"{where}: model {name!r}: writes {seen.get(key)!r} and {write_name!r} both replace "
-                    f"the value at site {write.site!r}, position {write.pos!r}; the second would "
-                    "silently discard the first. One absolute write per place — combine them, "
-                    "or make one additive (add_scaled)",
-                )
-                seen[key] = write_name
         for name, read in one.reads.items():
             _refuse(read.site in self.sites, f"{where}: read {name!r}: undeclared site {read.site!r}")
             if read.view == "logits":
@@ -754,17 +674,6 @@ class Spec(Node):
             for write in model.writes:
                 _refuse(write in one.writes, f"{where}: model {name!r}: undeclared write {write!r}")
         for name, read in one.reads.items():
-            place = self.sites.get(read.site)
-            if one.decode and place is not None and place.component == "lm_head":
-                # under generation the head computes logits for one position
-                # per pass; a wider window used to come back one wide, silently
-                _refuse(
-                    encoding.width_of(read.pos) == 1,
-                    f"{where}: read {name!r}: under `decode` the head has logits for one position "
-                    f"per pass, so a window of {encoding.width_of(read.pos) or 'varying'} positions "
-                    "there cannot be read. Read one position, or read the residual with view 'logits'",
-                )
-        for name, read in one.reads.items():
             step = encoding.step_of(read.pos)
             if step is not None:
                 _refuse(step != "all", f"{where}: read {name!r}: a read is at one step; 'all' is for writes")
@@ -785,19 +694,6 @@ class Spec(Node):
             _refuse(
                 metric.of in one.reads,
                 f"{where}: metric {name!r}: `of` must be a read name, got {metric.of!r}",
-            )
-            read = one.reads[metric.of]
-            place = self.sites.get(read.site)
-            over_vocabulary = read.view == "logits" or (
-                place is not None and place.component == "lm_head"
-                and place.heads is None and place.units is None and read.featurizer == "identity"
-            )
-            _refuse(
-                over_vocabulary,
-                f"{where}: metric {name!r} reads {metric.of!r}, which is not over the vocabulary. A "
-                "metric indexes its read by token id, so the read is the plain `lm_head` site (no "
-                "units, heads or featurizer) or a residual read with `view: \"logits\"` — anywhere "
-                "else a token id would pick out a neuron and call it a logit",
             )
             _refuse(
                 encoding.width_of(one.reads[metric.of].pos) == 1,

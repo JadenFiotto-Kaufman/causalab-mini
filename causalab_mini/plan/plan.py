@@ -78,10 +78,6 @@ class WriteOp:
     #: Which coordinates of the featurizer's space the mechanism acts on.
     #: None: all of them.
     features: tuple[int, ...] | None = None
-    #: Its place in the model's list of writes. Writes at one address may sit
-    #: in different taps (a prompt-frame write and an every-step one), and
-    #: this is what keeps them in the order the document gave.
-    order: int = 0
 
 
 @dataclass(frozen=True)
@@ -110,34 +106,6 @@ class Forward:
     #: bound holds, and the generated ids come back as a value named
     #: `<forward>.generated`.
     decode: int = 0
-    #: The name those ids are published under. `<model>.generated` — unless
-    #: the model runs on more than one input, when a forward's name alone
-    #: would make them collide and it is `<model>.<input>.generated`.
-    generated: str = ""
-
-
-def at_one_moment(taps: Any) -> list[tuple[Address, list[tuple[Any, Tap]], list[tuple[Any, Tap]]]]:
-    """The taps that apply to one pass of a forward, as one entry per
-    **address**: its writes in document order, then its reads.
-
-    A tap is an address *and a frame*, so under generation one address can
-    have several — a prompt-frame write and an every-step one — and at the
-    prefill they are the same moment. Handled tap by tap they were not: a
-    `renormalize` in one frame measured against the value a write in another
-    had already changed (and was the identity), a prompt-frame read did not
-    see an every-step write at its own address, and an engine that must
-    visit modules in forward order was asked to go back to the start for
-    each frame. Grouping is the whole fix; each op keeps its tap, because
-    the tap's frame says where its positions land."""
-    grouped: dict[Address, list[Tap]] = {}
-    for tap in taps:
-        grouped.setdefault(tap.address, []).append(tap)
-    moment = []
-    for address in sorted(grouped, key=lambda one: one.key):
-        writes = sorted(((op, tap) for tap in grouped[address] for op in tap.writes), key=lambda pair: pair[0].order)
-        reads = [(op, tap) for tap in grouped[address] for op in tap.reads]
-        moment.append((address, writes, reads))
-    return moment
 
 
 def window(forward: Forward, start: int, stop: int) -> Forward:

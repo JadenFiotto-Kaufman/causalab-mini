@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import copy
 import itertools
-import math
 import json
 from typing import Any
 
@@ -48,11 +47,6 @@ Path = tuple[str | int, ...]
 
 class SweepError(ValueError):
     pass
-
-
-#: More points than this is refused before anything is copied. A range of a
-#: billion used to be materialized, and the document deep-copied per point.
-MAX_POINTS = 4096
 
 
 def points(raw: Json) -> tuple[tuple[str, Json], ...]:
@@ -90,13 +84,6 @@ def points(raw: Json) -> tuple[tuple[str, Json], ...]:
             )
         linked.paths.append(path)
         linked.values.append(values)
-    total = math.prod(len(axis.values[0]) for axis in axes)
-    if total > MAX_POINTS:
-        raise SweepError(
-            f"this document is {total} points ({' x '.join(str(len(axis.values[0])) for axis in axes)}); "
-            f"more than {MAX_POINTS} is almost certainly a mistake, and each point is a whole compiled "
-            "experiment. Narrow a range, or drop an axis"
-        )
     points = []
     for combination in itertools.product(*(range(len(axis.values[0])) for axis in axes)):
         point, labels = raw, []
@@ -105,16 +92,6 @@ def points(raw: Json) -> tuple[tuple[str, Json], ...]:
                 point = _substitute(point, path, values[index])
             labels.append(_label(axis.paths[0], axis.values[0][index], axis.name))
         points.append((",".join(labels), point))
-    labels = [label for label, _ in points]
-    repeated = sorted({label for label in labels if labels.count(label) > 1})
-    if repeated:
-        # A label is a point's place in the plan and its directory on disk;
-        # two points with one label used to mean one of them silently vanished.
-        raise SweepError(
-            f"this sweep has {len(labels)} points but only {len(set(labels))} distinct labels: "
-            f"{repeated} each name more than one. Remove a repeated value, or give the colliding "
-            'axes different `"as"` names'
-        )
     return tuple(points)
 
 
@@ -138,8 +115,6 @@ def _values(spelled: Any, path: Path) -> list[Any]:
             and all(isinstance(one, int) and not isinstance(one, bool) for one in bounds)
             and (len(bounds) == 2 or bounds[2] != 0)
         ):
-            if len(range(*bounds)) > MAX_POINTS:
-                raise SweepError(f"{_spell(path)}: a range of {len(range(*bounds))} values; at most {MAX_POINTS}")
             return list(range(*bounds))
         raise SweepError(
             f"{_spell(path)}: a range is [start, stop] or [start, stop, step] in integers, "
@@ -183,12 +158,8 @@ def _label(path: Path, value: Any, axis: str | None = None) -> str:
     if isinstance(value, list) and len(value) == 1:
         value = value[0]  # a one-layer band sweeps as its layer
     if isinstance(value, (str, int, float, bool)) or value is None:
-        text = f"{name}={value}"
-    else:
-        text = f"{name}={json.dumps(value, separators=(',', ':'))}"
-    # a label is a directory name: a swept dataset ref or file path has
-    # slashes in it, which would nest the points instead of listing them
-    return text.replace("/", "_").replace("\\", "_")
+        return f"{name}={value}"
+    return f"{name}={json.dumps(value, separators=(',', ':'))}"
 
 
 def _spell(path: Path) -> str:

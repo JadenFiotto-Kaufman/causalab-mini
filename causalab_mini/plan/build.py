@@ -13,8 +13,6 @@ finally the save manifest.
 
 from __future__ import annotations
 
-import collections
-import contextvars
 import json
 import random
 from dataclasses import dataclass, field, replace
@@ -23,7 +21,7 @@ from typing import Any
 
 import torch
 
-from ..address import Address, AddressError
+from ..address import Address
 from ..data import encoding, rows as rows_module
 from ..ops import featurizer as featurizer_module
 from ..ops import intervene as intervene_module
@@ -82,15 +80,6 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
             raise PlanError(f"site {name!r}: {what} {max(take)} of a {count}-{what} tensor")
         features[name] = (count, None if take is None else tuple(take))
     fits = [one for one in spec.steps.values() if type(one).__name__ == "Fit"]
-    def site_width(site: str) -> int | None:
-        """How wide a value read at `site` is: the component's width, cut
-        down to the heads or units the site names. None where the width is
-        not a fact about the model (the attention pattern's key axis)."""
-        try:
-            return _site_width(spec, site, addresses, engine)
-        except AddressError:
-            return None
-
     featurizers = tuple(
         _spec_featurizer(name, one, spec, addresses, engine, fits)
         for name, one in spec.featurizers.items()
@@ -101,9 +90,7 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
         for write_name, write in one.writes.items():
             if write.features is None:
                 continue
-            # with no featurizer the feature space is the site itself — as
-            # narrow as its heads or units make it, not the whole component
-            k = spaces.get(write.featurizer) or site_width(write.site) or 0
+            k = spaces.get(write.featurizer, engine.width(addresses[write.site]) if write.featurizer == "identity" else 0)
             if not write.features or len(set(write.features)) != len(write.features) or not 0 <= min(write.features) <= max(write.features) < k:
                 raise PlanError(
                     f"interventions.{label}: write {write_name!r}: features {write.features} of a "
@@ -208,21 +195,7 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
             steps[name] = replace(
                 observe,
                 outputs=outputs,
-                saves=_spec_saves(
-                    step.saves, rows["base"],
-                    metrics=dict(spec.intervention_of(step).metrics),
-                    tensors={
-                        **{name: {} for name in spec.intervention_of(step).generated().values()},
-                        **{
-                            out.name: _stamp(
-                                spec, site_of_read[out.read], site_width(site_of_read[out.read]),
-                                "pca" if out.reduce == "pca" else f"output/{out.reduce}", out.k,
-                            )
-                            for out in outputs
-                            for site_of_read in [{n: r.site for n, r in spec.intervention_of(step).reads.items()}]
-                        },
-                    },
-                ),
+                saves=_spec_saves(step.saves, spec, rows["base"], widths, outputs={o.name for o in outputs}),
             )
         elif kind == "Fit":
             assert experiment is not None
@@ -230,12 +203,7 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
         elif kind == "Weights":
             steps[name] = Weights(
                 names=tuple(step.names),
-                saves=_spec_saves(
-                    step.saves, [],
-                    tensors={
-                        one: _identity(spec, one, _sites_of(spec)[one], widths[one]) for one in step.names
-                    },
-                ),
+                saves=_spec_saves(step.saves, spec, [], widths, sites=_sites_of(spec)),
             )
         else:  # pragma: no cover — the discriminated union has no other arm
             raise PlanError(f"step {name!r}: {kind} is not a step this compiler knows")
@@ -274,7 +242,7 @@ def _spec_fit(
         epochs=epochs,
         evaluation=replace(
             _pass(experiment, evaluation_rows, addresses, engine.tokenizer),
-            saves=_spec_saves(step.eval.saves, evaluation_rows["base"], metrics=dict(spec.intervention_of(step).metrics)),
+            saves=_spec_saves(step.eval.saves, spec, evaluation_rows["base"], widths),
         ),
         objective=tuple((weight, term) for weight, term in step.objective),
         params=tuple(step.params),
@@ -289,9 +257,7 @@ def _spec_fit(
         patience=step.early_stop.patience,
         mode=step.early_stop.mode,
         anneal=tuple((gate, one.start, one.end) for gate, one in step.anneal.items()),
-        # a fit's own results are its record: the loss per update, the watched
-        # metrics per epoch. Tensors of no site.
-        saves=_spec_saves(step.saves, [], tensors={"train/loss": {}, "train/eval": {}}),
+        saves=_spec_saves(step.saves, spec, [], widths),
     )
 
 
@@ -299,7 +265,11 @@ def _spec_featurizer(
     name: str, one: Any, spec: Any, addresses: dict[str, Address], engine: Any, fits: list[Any]
 ) -> FeaturizerOp:
     site = _sites_of(spec)[name]
-    d = _site_width(spec, site, addresses, engine)
+    d = engine.width(addresses[site])
+    if spec.sites[site].heads is not None:
+        d = d // engine.heads(addresses[site]) * len(spec.sites[site].heads)
+    if spec.sites[site].units is not None:
+        d = len(spec.sites[site].units)
     # a gate's features are the site's units, so its k is d; an encoder's
     # comes from its bundle and may exceed d — a dictionary is overcomplete
     k = d if one.k is None else one.k
@@ -327,41 +297,22 @@ def _spec_featurizer(
     )
 
 
-def _site_width(spec: Any, site: str, addresses: dict[str, Address], engine: Any) -> int:
-    d = engine.width(addresses[site])
-    if spec.sites[site].heads is not None:
-        d = d // engine.heads(addresses[site]) * len(spec.sites[site].heads)
-    if spec.sites[site].units is not None:
-        d = len(spec.sites[site].units)
-    return d
-
-
 def _identity(spec: Any, name: str, site: str, d: int) -> dict[str, str]:
-    """A declared featurizer's stamp."""
-    one = spec.featurizers[name]
-    return _stamp(spec, site, d, one.kind, one.k, one.parametrization)
-
-
-def _stamp(spec: Any, site: str, d: int | None, kind: str, k: Any, parametrization: str = "") -> dict[str, str]:
-    """What a saved tensor is *of*: the stamp a bundle carries, and the
+    """What a saved featurizer is *of*: the stamp a bundle carries, and the
     expectation a load is checked against. One function, so the two cannot
-    disagree about which keys matter. The site's slice is part of it: a
-    rotation fitted inside head 1 is not a rotation of head 2, though both
-    are the same component, layer and width."""
-    place = spec.sites[site]
+    disagree about which keys matter."""
+    one = spec.featurizers[name]
     return {
         "model_key": spec.model.key,
         "model_revision": spec.model.revision,
         "model_dtype": spec.model.dtype,
         "site": site,
-        "component": place.component,
-        "layer": str(place.layers[0] if place.layers else None),
-        "heads": json.dumps(place.heads),
-        "units": json.dumps(place.units),
-        "kind": kind,
-        "k": str(k),
+        "component": spec.sites[site].component,
+        "layer": str(spec.sites[site].layers[0] if spec.sites[site].layers else None),
+        "kind": one.kind,
+        "k": str(one.k),
         "d": str(d),
-        "parametrization": parametrization,
+        "parametrization": one.parametrization,
         "featurizer_dtype": "fp32",
         "engine": "causalab-mini",
     }
@@ -400,18 +351,6 @@ def _load_featurizer(name: str, one: Any, spec: Any, site: str, d: int) -> tuple
                 f"bundle holds {list(required)}" + (f" and optionally {list(optional)}" if optional else "")
             )
         tensors = {key: bundle.get_tensor(key).to(torch.float32).contiguous() for key in sorted(keys)}
-    ours = "model_key" in stamp
-    if not ours and one.kind not in ("sae", "linear") and not one.trust_unstamped:
-        # Checking "the keys the stamp has" against an empty stamp checks
-        # nothing, and the shapes that remain collide across every layer of
-        # a model. A dictionary trained elsewhere has no stamp of ours by
-        # nature; a rotation, a basis or a gate was written by this library.
-        raise PlanError(
-            f"featurizer {name!r}: {one.file_path!r} carries no identity stamp, so nothing says "
-            "which model, component or layer it is of and it cannot be checked against this "
-            "document. Re-save it with this version — or, if you have verified its site by hand, "
-            'say "trust_unstamped": true on the featurizer'
-        )
     expected = _identity(spec, name, site, d)
     checked = {key for key in expected if key in stamp} - _FREE
     if one.kind != "subspace":
@@ -459,46 +398,40 @@ def _sites_of(spec: Any) -> dict[str, str]:
 
 def _spec_saves(
     saves: list[Any],
+    spec: Any,
     base_rows: list[rows_module.Row],
-    *,
-    metrics: dict[str, Any] | None = None,
-    tensors: dict[str, dict[str, str]] | None = None,
+    widths: dict[str, int],
+    sites: dict[str, str] | None = None,
+    outputs: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[SaveFile, ...]:
-    """One step's saves, resolved against what *that step* produces.
-
-    `metrics` are the metrics of the step's own intervention — never another
-    intervention's that happens to share a name, whose unit and eligibility
-    would be stamped on these rows. `tensors` is everything else the step
-    produces, by name, with the identity stamp it should carry (empty for a
-    value that is of no site: generated ids, a fit's loss curve).
-
-    The file's extension is a contract, both ways: a table is `.json`, a
-    tensor is `.safetensors`. Either one written as the other loses what
-    makes it readable — a rotation saved as `rot.pt` used to write `[]`.
-    """
-    metrics, tensors = metrics or {}, tensors or {}
+    """A step's saves. A metric table carries its rows' labels; a fitted
+    parameter carries the identity stamp a later run would check; a
+    published output is a tensor and goes to a safetensors file as it is."""
     built = []
     for save in saves:
-        if save.value in tensors:
+        if save.value in outputs or save.value.endswith(".generated"):
+            # an output, or a decoding forward's generated ids: a tensor
             if not save.file_path.endswith(".safetensors"):
                 raise PlanError(
                     f"save {save.value!r}: a tensor, not a table; give it a "
                     f".safetensors path, not {save.file_path!r}"
                 )
-            built.append(SaveFile(file_path=save.file_path, value=save.value, identity=tensors[save.value]))
+            built.append(SaveFile(file_path=save.file_path, value=save.value))
             continue
-        if save.value not in metrics:  # the validator names what a step produces; this is the backstop
-            raise PlanError(
-                f"save {save.value!r} is not something this step produces "
-                f"(it produces {sorted(metrics) + sorted(tensors)})"
+        if sites is not None and save.value in sites:
+            built.append(
+                SaveFile(
+                    file_path=save.file_path,
+                    value=save.value,
+                    identity=_identity(spec, save.value, sites[save.value], widths[save.value]),
+                )
             )
-        if not save.file_path.endswith(".json"):
-            raise PlanError(
-                f"save {save.value!r}: a per-row metric table; give it a .json path, not "
-                f"{save.file_path!r} (a .safetensors file would drop the example ids, "
-                "eligibility and units)"
-            )
-        metric = metrics[save.value]
+            continue
+        metric = next(
+            one.metrics[save.value]
+            for one in spec.interventions.values()
+            if save.value in one.metrics
+        )
         built.append(
             SaveFile(
                 file_path=save.file_path,
@@ -507,14 +440,9 @@ def _spec_saves(
                 eligible=_eligible(base_rows, metric),
                 unit=metrics_module.UNITS[metric.kind][0],
                 estimand_version=metrics_module.UNITS[metric.kind][1],
-                produced_by=_PRODUCED_BY.get(),
             )
         )
     return tuple(built)
-
-
-#: The digest of the document being compiled, for `produced_by` on its tables.
-_PRODUCED_BY: contextvars.ContextVar[str] = contextvars.ContextVar("produced_by", default="")
 
 
 @dataclass(frozen=True)
@@ -592,7 +520,7 @@ def build_request(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Pl
     plan-shaped document has `steps`), lowers sweeps on the raw JSON — which
     neither format has to know about — and hands each point to its compiler.
     """
-    compile_point = _compile_spec if shape_of(raw) == "plan-shaped" else _compile_document
+    compile_point = _compile_spec if "steps" in raw else _compile_document
     points = sweep.points(raw)
     if len(points) == 1 and not points[0][0]:
         return replace(compile_point(raw, data_root, engine), source=raw)
@@ -609,33 +537,10 @@ def _compile_document(raw: dict[str, Any], data_root: str | Path, engine: Any) -
     return build(Document.from_json(raw), data_root, engine)
 
 
-def shape_of(raw: dict[str, Any]) -> str:
-    """Which of the two formats a document is in — decided by a marker each
-    one carries, not by what it happens to lack. Routing on "has `steps`"
-    sent a plan-shaped document with a misspelt `steps` to the protocol
-    parser, which asked its author for a `data` group from a format they
-    had never seen."""
-    header = raw.get("header")
-    if isinstance(header, dict) and "protocol_version" in header:
-        return "protocol"
-    if "steps" in raw:
-        return "plan-shaped"
-    raise PlanError(
-        "this document has neither `steps` (the plan-shaped format — `causalab-mini schema`) nor "
-        f"`header.protocol_version` (the protocol format). Its top-level keys are {sorted(raw)}"
-    )
-
-
 def _compile_spec(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Plan:
     from .spec import Spec  # here, not at the top: spec.py is the front end and this is below it
 
-    from ..engine import provenance
-
-    token = _PRODUCED_BY.set(provenance.document_digest(raw))
-    try:
-        return build_spec(Spec.model_validate(raw), data_root, engine)
-    finally:
-        _PRODUCED_BY.reset(token)
+    return build_spec(Spec.model_validate(raw), data_root, engine)
 
 
 def build(document: Document, data_root: str | Path, engine: Any) -> Plan:
@@ -717,18 +622,6 @@ def _pass(
     forwards = tuple(
         _forward(name, role, experiment, batches[role], addresses, rows[role])
         for name, role in _schedule(experiment)
-    )
-    # A forward is a model on an input; one model may run on two. Named by the
-    # model alone their generated ids would collide, and the later one win.
-    per_model = collections.Counter(forward.name for forward in forwards)
-    forwards = tuple(
-        replace(
-            forward,
-            generated=f"{forward.name}.generated"
-            if per_model[forward.name] == 1
-            else f"{forward.name}.{forward.input}.generated",
-        )
-        for forward in forwards
     )
     _check_ragged(forwards, experiment)
     base_rows = rows["base"]  # base is the schema of the pair: metrics read its columns
@@ -923,14 +816,6 @@ def _check_ragged(forwards: tuple[Forward, ...], experiment: _Experiment) -> Non
         read.name: read.at.positions for forward in forwards for tap in forward.taps for read in tap.reads
     }
     read_in = {read.name: forward for forward in forwards for tap in forward.taps for read in tap.reads}
-    for name, windows in reads.items():
-        if windows and not any(windows):
-            # one excluded row is a measurement; every row excluded is a typo
-            raise PlanError(
-                f"read {name!r} finds its position in none of these {len(windows)} prompt(s) — for a "
-                "{'column': c} position, column c's text is in no row's prompt. Check the column's name "
-                "and that it holds text that appears in the prompt"
-            )
     for forward in forwards:
         for tap in forward.taps:
             for write in tap.writes:
@@ -1060,7 +945,7 @@ def _forward(
     # a tap is one place: an address, and — when the forward decodes — a step
     writes: dict[tuple[Address, Any], list[WriteOp]] = {}
     if name in experiment.models:
-        for nth, write_name in enumerate(experiment.models[name].writes):
+        for write_name in experiment.models[name].writes:
             spec = experiment.writes[write_name]
             writes.setdefault((addresses[spec.site], encoding.step_of(spec.pos)), []).append(
                 WriteOp(
@@ -1071,7 +956,6 @@ def _forward(
                     featurizer=spec.featurizer,
                     params=dict(getattr(spec, "params", {})),
                     features=getattr(spec, "features", None),
-                    order=nth,
                 )
             )
     reads: dict[tuple[Address, Any], list[ReadOp]] = {}
