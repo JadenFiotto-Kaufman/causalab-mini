@@ -151,7 +151,7 @@ def test_the_hydra_document_runs_and_the_ablation_moves_the_measured_logit(
     assert not torch.equal(executed.result("de1_c"), executed.result("de1_a"))
 
     written = executed.write(tmp_path)
-    assert len(written) == 5
+    assert len(written) == 5 + 2  # five tables, plus document.json and run.json
     rows = json.loads((tmp_path / "te_clean.json").read_text())
     assert {row["unit"] for row in rows} == {"logit"}
     assert {row["estimand_version"] for row in rows} == {"token_logit/v1"}

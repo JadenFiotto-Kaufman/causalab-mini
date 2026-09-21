@@ -22,22 +22,23 @@ import torch
 from ....address import Address, AddressError
 from ....ops import intervene
 from ....plan import Forward, Plan, Tap
-from ... import steps
-from ...base import Engine
+from ... import provenance, steps
+from ...base import Engine, EngineError
 from .loading import HooksEngineError, load, standardized
 
 
 class HooksEngine(Engine):
-    def __init__(self, model: Any, tokenizer: Any) -> None:
+    def __init__(self, model: Any, tokenizer: Any, weights: bool = True) -> None:
         self.model = model
+        self.weights = weights
         # Two things nnterp hands over with the model and nobody else does: the
         # tokenizer, and the standardized names an address is written in.
         self._tokenizer = tokenizer
         self._names = standardized(model)
 
     @classmethod
-    def load(cls, spec: Any, **options: Any) -> "HooksEngine":
-        return cls(*load(spec, **options))
+    def load(cls, spec: Any, weights: bool = True, **options: Any) -> "HooksEngine":
+        return cls(*load(spec, weights=weights, **options), weights=weights)
 
     # ----------------------------------------------------------------- #
     # what the compiler asks
@@ -97,6 +98,12 @@ class HooksEngine(Engine):
     # ----------------------------------------------------------------- #
 
     def execute(self, plan: Plan, remote: bool | str = False) -> Plan:
+        if not self.weights:
+            raise EngineError(
+                "this engine was loaded with weights=False — enough to compile, "
+                "validate and explain a document, not to run one. Load it again "
+                "with weights to execute."
+            )
         if remote:
             raise HooksEngineError(
                 f"remote={remote!r}: there is no remote for hooks. A hook is a Python "
@@ -104,6 +111,7 @@ class HooksEngine(Engine):
                 "the model in another one — there is nothing here to ship. Remote is "
                 "the nnterp engine's, where the whole request is one nnsight session."
             )
+        plan.provenance.update(provenance.record(self, remote))
         steps.run(self, plan)
         return plan
 

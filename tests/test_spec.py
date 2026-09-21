@@ -75,7 +75,10 @@ def test_the_held_out_score_reaches_disk(das_spec_raw, data_root, model_engine, 
         plan.build_spec(Spec.model_validate(das_spec_raw), data_root, model_engine)
     )
     written = {path.name for path in executed.write(tmp_path)}
-    assert written == {"iia.json", "ce.json", "held_out_iia.json", "rot.safetensors"}
+    assert written == {
+        "iia.json", "ce.json", "held_out_iia.json", "rot.safetensors",
+        "document.json", "run.json",
+    }
 
     on_disk = [row["value"] for row in json.loads((tmp_path / "held_out_iia.json").read_text())]
     in_memory = executed.step("fit", plan.Fit).evaluation.results["iia"].tolist()

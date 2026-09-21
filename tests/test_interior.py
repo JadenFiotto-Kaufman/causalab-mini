@@ -29,7 +29,7 @@ def interior_raw():
 
 
 def _build(raw, data_root, engine):
-    return plan.build(document.Document.from_json(raw), data_root, engine)
+    return plan.build_request(raw, data_root, engine)
 
 
 def _no_write(raw):
@@ -227,7 +227,7 @@ def test_the_interior_document_runs_end_to_end(model_engine, tmp_path, data_root
     results = model_engine.execute(built)
     written = results.write(tmp_path)
 
-    assert [path.name for path in written] == ["logit_diff.json"]
+    assert sorted(path.name for path in written) == ["document.json", "logit_diff.json", "run.json"]
     assert len(json.loads((tmp_path / "logit_diff.json").read_text())) == 4
 
 

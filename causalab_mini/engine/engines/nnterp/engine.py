@@ -31,18 +31,19 @@ import torch
 from ....address import Address, AddressError
 from ....ops import intervene
 from ....plan import Forward, Plan
-from ... import steps
-from ...base import Engine
+from ... import provenance, steps
+from ...base import Engine, EngineError
 from .loading import load
 
 
 class NNterpEngine(Engine):
-    def __init__(self, model: Any) -> None:
+    def __init__(self, model: Any, weights: bool = True) -> None:
         self.model = model
+        self.weights = weights
 
     @classmethod
-    def load(cls, spec: Any, **options: Any) -> "NNterpEngine":
-        return cls(load(spec, **options))
+    def load(cls, spec: Any, weights: bool = True, **options: Any) -> "NNterpEngine":
+        return cls(load(spec, weights=weights, **options), weights=weights)
 
     # ----------------------------------------------------------------- #
     # what the compiler asks
@@ -82,10 +83,17 @@ class NNterpEngine(Engine):
     # ----------------------------------------------------------------- #
 
     def execute(self, plan: Plan, remote: bool | str = False) -> Plan:
+        if not self.weights:
+            raise EngineError(
+                "this engine was loaded with weights=False — enough to compile, "
+                "validate and explain a document, not to run one. Load it again "
+                "with weights to execute."
+            )
         if remote:
             # Our own package is not installed on an NDIF server, so the
             # functions the block calls have to ship by value.
             nnsight.register("causalab_mini")
+        plan.provenance.update(provenance.record(self, remote))
         engine, model = self, self.model
         with model.session(remote=remote):
             executed = nnsight.save(plan)

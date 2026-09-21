@@ -23,7 +23,7 @@ def rotation(d=16, k=8, seed=0):
 
 @pytest.fixture
 def das_plan(das_raw, data_root, model_engine):
-    return plan.build(document.Document.from_json(das_raw), data_root, model_engine)
+    return plan.build_request(das_raw, data_root, model_engine)
 
 
 # --------------------------------------------------------------------- #
@@ -149,18 +149,18 @@ def test_the_rotation_reaches_the_read_and_the_write_and_not_the_head(das_plan):
 def test_a_k_wider_than_the_site_is_a_load_error(das_raw, data_root, model_engine):
     das_raw["method"]["featurizers"]["rot"]["k"] = 17
     with pytest.raises(plan.PlanError, match="not a subspace of the 16-wide site"):
-        plan.build(document.Document.from_json(das_raw), data_root, model_engine)
+        plan.build_request(das_raw, data_root, model_engine)
 
 
 def test_an_eval_split_sharing_rows_with_the_fit_is_a_load_error(das_raw, data_root, model_engine):
     das_raw["method"]["train"]["eval"]["split"] = "weekdays/data"  # train + test
     with pytest.raises(plan.PlanError, match="endpoint-disjoint"):
-        plan.build(document.Document.from_json(das_raw), data_root, model_engine)
+        plan.build_request(das_raw, data_root, model_engine)
 
 
 def test_the_same_ref_for_both_is_the_visible_train_equals_test_ablation(das_raw, data_root, model_engine):
     das_raw["method"]["train"]["eval"]["split"] = "weekdays/data#train"
-    fitted = plan.build(document.Document.from_json(das_raw), data_root, model_engine)
+    fitted = plan.build_request(das_raw, data_root, model_engine)
     assert fitted.step("fit", plan.Fit).evaluation.forwards[0].input_ids == (
         fitted.step("observe", plan.Observe).forwards[0].input_ids
     )
@@ -222,7 +222,7 @@ def test_early_stopping_ends_the_fit_before_its_epoch_budget(fitted):
 def test_the_same_seed_fits_the_same_rotation_and_another_seed_does_not(das_raw, data_root, model_engine):
     def fit(seed):
         das_raw["method"]["train"]["seed"] = seed
-        built = plan.build(document.Document.from_json(das_raw), data_root, model_engine)
+        built = plan.build_request(das_raw, data_root, model_engine)
         return model_engine.execute(built).result("rot")
 
     assert torch.equal(fit(0), fit(0))
@@ -235,13 +235,13 @@ def test_a_full_width_rotation_is_a_plain_swap_end_to_end(das_raw, data_root, mo
     entire — whatever the rotation is, trained or not — and the run's metrics are
     the identity featurizer's to five decimals."""
     das_raw["method"]["featurizers"]["rot"]["k"] = 16
-    rotated = model_engine.execute(plan.build(document.Document.from_json(das_raw), data_root, model_engine))
+    rotated = model_engine.execute(plan.build_request(das_raw, data_root, model_engine))
 
     del das_raw["method"]["featurizers"], das_raw["method"]["train"]
     del das_raw["method"]["reads"]["v_cf"]["featurizer"]
     del das_raw["method"]["writes"]["patch"]["featurizer"]
     das_raw["method"]["save"] = das_raw["method"]["save"][:2]
-    plain = model_engine.execute(plan.build(document.Document.from_json(das_raw), data_root, model_engine))
+    plain = model_engine.execute(plan.build_request(das_raw, data_root, model_engine))
 
     for name in ("iia", "ce"):
         assert torch.allclose(rotated.result(name), plain.result(name), atol=1e-5), name
@@ -269,11 +269,13 @@ def test_the_artifact_is_written_stamped_and_reloads_to_the_trained_values(model
     results = model_engine.execute(das_plan)
     written = results.write(tmp_path)
 
-    assert sorted(path.name for path in written) == ["ce.json", "iia.json", "rot.safetensors"]
+    # the manifest, plus the two files every run carries: the document that
+    # produced it and what ran it
+    assert sorted(path.name for path in written) == [
+        "ce.json", "document.json", "iia.json", "rot.safetensors", "run.json"
+    ]
     assert sorted(path.name for path in tmp_path.iterdir()) == [
-        "ce.json",
-        "iia.json",
-        "rot.safetensors",
+        "ce.json", "document.json", "iia.json", "rot.safetensors", "run.json"
     ]
     with safetensors.safe_open(tmp_path / "rot.safetensors", "pt") as bundle:
         assert bundle.keys() == ["weight"]  # one auto-declared slot, `rot.weight`
@@ -292,6 +294,7 @@ def test_the_artifact_is_written_stamped_and_reloads_to_the_trained_values(model
 def test_the_cli_runs_the_das_document_end_to_end(tmp_path, data_root):
     exit_code = cli.main(
         [
+            "run",
             str(data_root.parent / "das_cpu_reduction.json"),
             "--data-root",
             str(data_root),

@@ -35,9 +35,21 @@ def write(step: Step, out_dir: str | Path) -> list[Path]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     written = [_file(step, save, out) for save in step.saves]
+    if isinstance(step, Plan):
+        # A plan's directory carries the experiment that produced it and, on
+        # the root, what ran it — so a result is never a file with no way back.
+        if step.source is not None:
+            written.append(_json(out / "document.json", step.source))
+        if step.provenance:
+            written.append(_json(out / "run.json", step.provenance))
     for name, child in children(step):
         written.extend(write(child, out / name if isinstance(child, Plan) else out))
     return written
+
+
+def _json(path: Path, payload: object) -> Path:
+    path.write_text(json.dumps(payload, indent=1) + "\n")
+    return path
 
 
 def _file(step: Step, save: SaveFile, out: Path) -> Path:

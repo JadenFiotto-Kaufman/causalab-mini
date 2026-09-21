@@ -14,7 +14,7 @@ from causalab_mini.engine.engines.nnterp import engine as nnterp
 
 
 def build(raw, data_root, engine):
-    return plan.build(document.Document.from_json(raw), data_root, engine)
+    return plan.build_request(raw, data_root, engine)
 
 
 @pytest.fixture
@@ -182,8 +182,17 @@ def test_the_run_writes_the_save_manifest_and_nothing_else(model_engine, tmp_pat
     results = model_engine.execute(minimal_plan)
     written = results.write(tmp_path)
 
-    assert sorted(path.name for path in tmp_path.iterdir()) == ["iia.json", "logit_diff.json"]
-    assert sorted(path.name for path in written) == ["iia.json", "logit_diff.json"]
+    manifest = ["iia.json", "logit_diff.json"]
+    carried = ["document.json", "run.json"]  # the experiment, and what ran it
+    assert sorted(path.name for path in tmp_path.iterdir()) == sorted(manifest + carried)
+    assert sorted(path.name for path in written) == sorted(manifest + carried)
+
+    # the two carried files are enough to re-run and to say what ran
+    assert json.loads((tmp_path / "document.json").read_text()) == minimal_plan.source
+    ran = json.loads((tmp_path / "run.json").read_text())
+    assert ran["engine"] == "NNterpEngine" and ran["remote"] is False
+    assert set(ran["versions"]) >= {"torch", "nnsight", "nnterp", "transformers"}
+    assert len(ran["causalab_mini"]) == 64
 
     rows = json.loads((tmp_path / "logit_diff.json").read_text())
     assert [row["example_id"] for row in rows] == ["0", "1", "2", "3"]
@@ -196,6 +205,7 @@ def test_the_run_writes_the_save_manifest_and_nothing_else(model_engine, tmp_pat
 def test_the_cli_runs_the_document_end_to_end(tmp_path, data_root, capsys):
     exit_code = cli.main(
         [
+            "run",
             str(data_root.parent / "minimal_cpu.json"),
             "--data-root",
             str(data_root),

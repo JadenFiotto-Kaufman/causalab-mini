@@ -98,7 +98,7 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
             )
         else:  # pragma: no cover — the discriminated union has no other arm
             raise PlanError(f"step {name!r}: {kind} is not a step this compiler knows")
-    return Plan(steps=steps)
+    return Plan(steps=steps, source=spec.model_dump(mode="json"))
 
 
 def _spec_fit(
@@ -279,12 +279,13 @@ def build_request(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Pl
     """
     points = sweep.points(raw)
     if len(points) == 1 and not points[0][0]:
-        return build(Document.from_json(raw), data_root, engine)
+        return replace(build(Document.from_json(raw), data_root, engine), source=raw)
     return Plan(
         steps={
-            label: build(Document.from_json(point), data_root, engine)
+            label: replace(build(Document.from_json(point), data_root, engine), source=point)
             for label, point in points
-        }
+        },
+        source=raw,
     )
 
 

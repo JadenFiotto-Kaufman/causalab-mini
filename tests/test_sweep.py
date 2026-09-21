@@ -156,13 +156,22 @@ def test_each_point_writes_its_own_files_in_its_own_directory(swept_plan, model_
     what nesting cost the writer."""
     written = model_engine.execute(swept_plan).write(tmp_path)
 
+    # each point carries the lowered document it is; the root carries the
+    # swept one and the run record
     assert sorted(str(path.relative_to(tmp_path)) for path in written) == [
+        "document.json",
+        "pos=-1/document.json",
         "pos=-1/iia.json",
         "pos=-1/logit_diff.json",
+        "pos=-2/document.json",
         "pos=-2/iia.json",
         "pos=-2/logit_diff.json",
+        "pos=-3/document.json",
         "pos=-3/iia.json",
         "pos=-3/logit_diff.json",
+        "run.json",
     ]
+    point = json.loads((tmp_path / "pos=-2" / "document.json").read_text())
+    assert point["method"]["writes"]["patch"]["pos"] == -2
     rows = json.loads((tmp_path / "pos=-1" / "iia.json").read_text())
     assert [row["example_id"] for row in rows] == ["0", "1", "2", "3"]

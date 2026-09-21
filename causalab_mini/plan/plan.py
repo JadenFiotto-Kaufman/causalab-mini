@@ -25,8 +25,9 @@ and, inside an `Observe`, the ops that make one pass:
           WriteOp(name, positions, operand, mechanism, featurizer)   address
           ReadOp(name, positions, featurizer)
 
-**`results` is the only mutable thing in here.** Every other field is frozen:
-a plan cannot be edited, only filled. Filling it is how results come home —
+**`results` is the only mutable thing on a step, and `provenance` the only
+other one on a plan.** Every other field is frozen: a plan cannot be edited,
+only filled. Filling it is how results come home —
 the engine saves the root plan at the top of its session, so what the run
 produced is navigable exactly where it happened,
 `root.steps["fit"].results["train/loss"]`.
@@ -194,6 +195,14 @@ class Plan(Step):
     """
 
     steps: dict[str, Step] = field(default_factory=dict)
+    #: The document this plan was compiled from, verbatim, so an output
+    #: directory can carry the experiment that produced it. JSON, so pure
+    #: data; set by the compiler on the root and on each sweep point.
+    source: dict[str, Any] | None = None
+    #: What ran: engine, remote, versions, code digest. The one thing besides
+    #: `results` that is filled in rather than compiled — by the engine at the
+    #: top of `execute`, before the session opens.
+    provenance: dict[str, Any] = field(default_factory=dict)
 
     def step(self, name: str, kind: type[S] = Step) -> S:  # type: ignore[assignment]
         """The step called `name`, checked to be the kind you expected.

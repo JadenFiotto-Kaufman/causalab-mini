@@ -223,3 +223,20 @@ class Address:
         for segment in self.path.split("."):
             target = target[int(segment)] if segment.isdigit() else getattr(target, segment)
         return target
+
+
+def describe() -> dict[str, dict[str, Any]]:
+    """The component vocabulary, as data an agent can read: for each name,
+    where it is and what kind of place that is. This is the table, not a
+    description of it, so it cannot drift."""
+    return {
+        name: {
+            "path": entry.path,
+            "side": entry.side,
+            "interior": entry.op is not None,
+            "layered": "{layer}" in entry.path,
+            "seq_axis": entry.seq_axis,
+            "width": entry.width,
+        }
+        for name, entry in _COMPONENTS.items()
+    }

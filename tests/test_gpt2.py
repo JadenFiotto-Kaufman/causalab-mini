@@ -42,7 +42,7 @@ def gpt2_raw():
 
 
 def _build(raw, data_root, engine):
-    return plan.build(document.Document.from_json(raw), data_root, engine)
+    return plan.build_request(raw, data_root, engine)
 
 
 def _at(raw, component, layer):
@@ -162,7 +162,7 @@ def test_the_engines_head_read_is_the_models_own_logits_here_too(gpt2, gpt2_raw,
 def test_the_document_runs_end_to_end(tmp_path, gpt2_raw, data_root, gpt2_engine):
     built = _build(gpt2_raw, data_root, gpt2_engine)
     written = gpt2_engine.execute(built).write(tmp_path)
-    assert [path.name for path in written] == ["logit_diff.json"]
+    assert sorted(path.name for path in written) == ["document.json", "logit_diff.json", "run.json"]
     assert len(json.loads((tmp_path / "logit_diff.json").read_text())) == 4
 
 

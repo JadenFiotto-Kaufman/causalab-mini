@@ -40,7 +40,7 @@ def hooks_engine():
 
 
 def _build(raw, data_root, engine):
-    return plan.build(document.Document.from_json(raw), data_root, engine)
+    return plan.build_request(raw, data_root, engine)
 
 
 # --------------------------------------------------------------------- #

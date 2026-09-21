@@ -113,41 +113,43 @@ against it. `execute` on a weightless engine refuses by name.
 This unlocks every verb in §3 that is not `run`, and it is the precondition
 for an agent that authors on one machine and runs on another.
 
-### B. Cross-step references — the plan tree *is* the run state
+### B. Cross-step outputs — one ephemeral dict per `steps` list
 
-HANDOFF §4 decided there is no run-state object and that results live on plan
-nodes. Those two decisions compose into the answer here: **a reference is a
-path into the tree.** `{"ref": "harvest.mean"}` names a result of the step
-called `harvest`. The value already exists on that node while the run is in
-progress; nothing new has to be carried, and it is ephemeral unless a save on
-`harvest` says otherwise — exactly the semantics asked for.
+The owner's design, which replaces an earlier path-based proposal here:
 
-Three rules keep it honest.
+    state = {}
+    for step in steps:
+        run(step, state)
 
-- **A reference is a tensor, never a coordinate.** It may be a write's
+A step declares `outputs` — names for values it makes available to the
+steps after it — and the engine puts them in `state` as it goes. A later
+step references one with `{"ref": "mean"}`. The dict is a local of the walk:
+it is never saved, never shipped, and dies with the plan, so an output is
+ephemeral unless a save on the producing step also names it. Sweep points
+are sibling *plans*, each with its own `steps` list and its own `state`, so
+they cannot see each other's outputs.
+
+This is not a new mechanism. `featurizers` is already this dict, threaded
+through `steps.run` for the one channel that exists today; the change is to
+generalize it. Three rules keep it honest:
+
+- **An output is a tensor, never a coordinate.** It may be a write's
   operand, a featurizer's initial basis, a metric's target. It may *not* be a
   layer number or a position. "Pick the best layer, then patch there" would
   make the plan undecidable before the session opens, and that rule is
   load-bearing. That case is two documents.
-- **The compiler validates existence and order.** A reference to a step that
-  runs later, or to a value that step does not produce, is refused with its
-  path. This is the same check that fixes today's silent failure: `score`
-  before `fit` scores an untrained rotation and nothing complains. Featurizer
-  use gets the same check — a step that uses `rot` before a step that trains
-  it is refused.
-- **The compiler marks what to keep.** Today a pass's reads die inside it. If
-  a later step references `harvest.acts`, the compiler marks that read as
-  kept on that `Observe`, and the engine records it. Nothing is kept that
-  nothing names — the client decides.
+- **The compiler validates existence and order.** A reference to a name no
+  earlier sibling outputs is refused with its path. This is the same check
+  that fixes today's silent failure: `score` before `fit` scores an untrained
+  rotation and nothing complains. Featurizer use gets the same check.
+- **The compiler marks what to keep.** Today a pass's reads die inside it.
+  An `Observe` that declares `outputs: {"acts": "v_cf"}` has that read kept
+  and published; nothing is kept that nothing names — the client decides.
 
-What it costs: a `Reference` model in `spec.py`, a resolution step in
-`steps.run` before an operand reaches `apply_write`, and the keep-marking in
-`build_spec`. The engine's `forward` does not change: by the time it runs,
-operands are tensors.
-
-Featurizers stay as they are — a live object shared by name — because a
-trained rotation is not a result tensor and the by-name sharing is the common
-case. The ordering check above is what was missing, not a new channel.
+What it costs: an `outputs` field on the step models, a `Reference` model,
+the order check in `Spec._cross_check`, and a resolution step in `steps.run`
+before an operand reaches `apply_write`. The engine's `forward` does not
+change: by the time it runs, operands are tensors.
 
 ### C. Named interventions
 
@@ -281,6 +283,11 @@ Recorded so they are not rediscovered.
 ---
 
 ## 7. Order of work
+
+> Status: step 1 landed 2026-09-21. `Engine.load(spec, weights=False)` on
+> both engines; `document.json` and `run.json` in every output directory;
+> the verbs `schema`, `vocab`, `model`, `tokens`, `data`, `validate`,
+> `explain`, `run`, each with `--json`.
 
 1. **A + provenance + the read-only CLI verbs** (`schema`, `vocab`, `model`,
    `tokens`, `data`, `validate`, `explain`). This is goal 2 delivered: an

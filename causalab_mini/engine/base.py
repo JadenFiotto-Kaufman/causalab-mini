@@ -11,6 +11,7 @@ An engine is an object, not a namespace, because it holds the model it loaded.
 The contract in two halves. What the **compiler** asks, because a plan is
 compiled against a particular model and none of it may be decided later:
 
+    load(spec, weights)  the model — or, with weights=False, its shape only
     tokenizer            resolves prompts and answer columns
     num_layers           bounds the layer band a site may name
     locate(component, layer) -> Address      resolve a site, now, on the client
@@ -37,20 +38,32 @@ from ..address import Address
 from ..plan import Forward, Plan
 
 
+class EngineError(ValueError):
+    pass
+
+
 class Engine:
     #: The loaded model. What kind of object it is, is the engine's business.
     model: Any
+    #: Whether the model has weights. An engine loaded with `weights=False`
+    #: answers everything the compiler asks — the tokenizer, the layer count,
+    #: the widths, an interior's operation — from the config and a meta-device
+    #: module tree, in well under a second for any size of model. It cannot
+    #: run, and `execute` on it refuses by name.
+    weights: bool
 
     # ----------------------------------------------------------------- #
     # loading
     # ----------------------------------------------------------------- #
 
     @classmethod
-    def load(cls, spec: Any, **options: Any) -> "Engine":
+    def load(cls, spec: Any, weights: bool = True, **options: Any) -> "Engine":
         """The engine, holding the model the document named.
 
         `spec` is a model block from either authoring format — both carry
         `key`, `revision` and `dtype`, and an engine needs nothing else.
+        `weights=False` is how a document is compiled, validated and explained
+        on a machine that will never run it.
         """
         raise NotImplementedError
 

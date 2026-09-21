@@ -18,7 +18,7 @@ from typing import Any
 
 import torch
 from torch import nn
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 
 
@@ -31,11 +31,21 @@ class HooksEngineError(ValueError):
 DTYPES = {"fp32": torch.float32, "bf16": torch.bfloat16}
 
 
-def load(spec: Any, device_map: str = "cpu") -> tuple[Any, Any]:
-    """The model and the tokenizer — two loads, because nothing pairs them."""
-    model = AutoModelForCausalLM.from_pretrained(
-        spec.key, revision=spec.revision, dtype=DTYPES[spec.dtype], device_map=device_map
-    )
+def load(spec: Any, device_map: str = "cpu", weights: bool = True) -> tuple[Any, Any]:
+    """The model and the tokenizer — two loads, because nothing pairs them.
+
+    `weights=False` builds the module tree from the config on the meta
+    device: the shape of the model and nothing else, which is all the
+    compiler needs and a third thing nnsight does with one keyword.
+    """
+    if weights:
+        model = AutoModelForCausalLM.from_pretrained(
+            spec.key, revision=spec.revision, dtype=DTYPES[spec.dtype], device_map=device_map
+        )
+    else:
+        config = AutoConfig.from_pretrained(spec.key, revision=spec.revision)
+        with torch.device("meta"):
+            model = AutoModelForCausalLM.from_config(config, dtype=DTYPES[spec.dtype])
     tokenizer = AutoTokenizer.from_pretrained(spec.key, revision=spec.revision)
     # nnsight forces this on every model it loads (`modeling/transformers.py`:
     # `self.tokenizer.padding_side = "left"`), and the numbers depend on it: a

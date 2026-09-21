@@ -14,8 +14,8 @@ engine-specific part is this small is the finding, not the design; what the
 hooks engine had to supply that nnterp was quietly providing is FINDINGS §6.
 """
 
-from .base import Engine
+from .base import Engine, EngineError
 from .engines.hooks import HooksEngine
 from .engines.nnterp import NNterpEngine
 
-__all__ = ["Engine", "HooksEngine", "NNterpEngine"]
+__all__ = ["Engine", "EngineError", "HooksEngine", "NNterpEngine"]

@@ -17,12 +17,28 @@ which points it at `.venv` and at the nnterp checkout (installed editable
 through an import hook, which a static checker cannot follow on its own). The
 package ships a `py.typed`, so anything importing it gets the annotations.
 
-To run a document:
+The command line has two kinds of verb. These need no weights and run in
+seconds — they are the loop an author lives in:
 
 ```bash
-uv run causalab-mini documents/minimal_cpu.json --data-root documents/data \
+uv run causalab-mini schema                       # the JSON Schema of a document
+uv run causalab-mini vocab                        # components, mechanisms, kinds
+uv run causalab-mini model <hf key>               # layers, widths, what resolves
+uv run causalab-mini tokens <hf key> " Paris"     # is each string one token?
+uv run causalab-mini data weekdays/train          # columns, rows, a sample
+uv run causalab-mini validate documents/v2/das.json
+uv run causalab-mini explain  documents/v2/das.json   # the compiled plan, printed
+```
+
+Every verb takes `--json`. `run` is the one that needs the model:
+
+```bash
+uv run causalab-mini run documents/minimal_cpu.json --data-root documents/data \
     --out out --device-map cpu
 ```
+
+An output directory carries `document.json` (the experiment, verbatim) and
+`run.json` (engine, versions, a digest of this package) beside the results.
 
 `documents/das_cpu_reduction.json` is the same command and takes a few seconds
 longer: it declares a `train` block, so the run fits a rotation before it scores
