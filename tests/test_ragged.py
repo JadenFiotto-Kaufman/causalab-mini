@@ -107,7 +107,7 @@ def test_entity_mean_ablation_runs_and_both_engines_agree(entity_raw, data_root,
     one vector, swapped in at the answer position."""
     built = plan.build_request(entity_raw, data_root, model_engine)
     read = built.step("harvest", plan.Observe).forwards[0].taps[0].reads[0]
-    assert ops.is_ragged(read.positions), [len(w) for w in read.positions]
+    assert ops.is_ragged(read.at.positions), [len(w) for w in read.at.positions]
     assert "[" in explain(built)  # ragged windows print as spans
 
     traced = model_engine.execute(built)

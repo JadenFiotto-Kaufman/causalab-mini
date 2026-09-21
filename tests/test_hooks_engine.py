@@ -113,7 +113,7 @@ def test_a_swap_lands_the_source_read_bit_for_bit(hooks_engine, minimal_raw, dat
     watched = replace(
         patched,
         taps=(
-            replace(tap, reads=(ReadOp(name="landed", positions=tap.writes[0].positions),)),
+            replace(tap, reads=(ReadOp(name="landed", at=tap.writes[0].at),)),
             *patched.taps[1:],
         ),
     )

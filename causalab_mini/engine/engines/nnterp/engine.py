@@ -73,17 +73,7 @@ class NNterpEngine(Engine):
         return address_module.head_count(self.model.config, address)
 
     def width(self, address: Address) -> int:
-        attribute = address.width_attribute
-        if attribute == "head_dim":
-            # a per-head tensor is handed on flat: every head, side by side
-            return self.heads(address) * address_module.head_dim(self.model.config)
-        if attribute is None:
-            raise AddressError(
-                f"the width of {address.component!r} is not derivable here; "
-                "nnterp publishes hidden_size and vocab_size on the handle and "
-                "nothing for an attention interior"
-            )
-        return int(getattr(self.model, attribute))
+        return address_module.width(self.model.config, address)
 
     # ----------------------------------------------------------------- #
     # what the run asks
@@ -159,22 +149,20 @@ def apply_taps(
         for write_op in tap.writes:
             patched = intervene.apply_write(
                 read(model, tap.address),
-                intervene.at_step(write_op.positions, read(model, tap.address), tap.address.seq_axis, tap.step, step),
+                intervene.at_step(write_op.at, read(model, tap.address), tap.address.seq_axis, tap.step, step),
                 intervene.resolve_operand(values, write_op.operand),
                 write_op.mechanism,
                 featurizers[write_op.featurizer],
                 tap.address.seq_axis,
                 write_op.params,
-                write_op.heads,
             )
             write(model, tap.address, patched)
         for read_op in tap.reads:
             tensor = read(model, tap.address)
             gathered = intervene.gather(
                 tensor,
-                intervene.at_step(read_op.positions, tensor, tap.address.seq_axis, tap.step, step),
+                intervene.at_step(read_op.at, tensor, tap.address.seq_axis, tap.step, step),
                 tap.address.seq_axis,
-                read_op.heads,
             )
             if read_op.view == "logits":
                 # The logit lens: the residual pushed through the final norm and

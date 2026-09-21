@@ -56,21 +56,21 @@ def test_a_swap_lands_the_source_read_bit_for_bit(model, minimal_plan):
     with model.session():
         landed = nnsight.save({})
         with model.trace(nnterp.batch(source_forward)):
-            v_cf = ops.gather(nnterp.read(model, tap.address), read.positions).clone()
+            v_cf = ops.gather(nnterp.read(model, tap.address), read.at.positions).clone()
         with model.trace(nnterp.batch(patched_forward)):
             nnterp.write(
                 model,
                 tap.address,
                 ops.apply_write(
                     nnterp.read(model, tap.address),
-                    write.positions,
+                    write.at.positions,
                     v_cf,
                     write.mechanism,
                     write.featurizer,
                 ),
             )
             landed["after"] = ops.gather(
-                nnterp.read(model, tap.address), write.positions
+                nnterp.read(model, tap.address), write.at.positions
             ).clone()
             landed["source"] = v_cf
 
@@ -128,14 +128,14 @@ def test_a_write_touches_only_the_position_it_declares(model, minimal_plan):
     with model.session():
         seen = nnsight.save({})
         with model.trace(nnterp.batch(source)):
-            v_cf = ops.gather(nnterp.read(model, tap.address), write.positions).clone()
+            v_cf = ops.gather(nnterp.read(model, tap.address), write.at.positions).clone()
             seen["source"] = v_cf
         with model.trace(nnterp.batch(patched)):
             seen["clean_first"] = ops.gather(
                 nnterp.read(model, tap.address), first_token
             ).clone()
             seen["clean_last"] = ops.gather(
-                nnterp.read(model, tap.address), write.positions
+                nnterp.read(model, tap.address), write.at.positions
             ).clone()
         with model.trace(nnterp.batch(patched)):
             nnterp.write(
@@ -143,7 +143,7 @@ def test_a_write_touches_only_the_position_it_declares(model, minimal_plan):
                 tap.address,
                 ops.apply_write(
                     nnterp.read(model, tap.address),
-                    write.positions,
+                    write.at.positions,
                     v_cf,
                     write.mechanism,
                     write.featurizer,

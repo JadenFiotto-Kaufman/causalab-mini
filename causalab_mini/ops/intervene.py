@@ -24,11 +24,12 @@ once.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Callable, Protocol, runtime_checkable
 
 import torch
 
-from ..shapes import Positions
+from ..shapes import Positions, Selection
 
 
 @runtime_checkable
@@ -100,7 +101,7 @@ def applies(frame: int | str | None, step: int | None) -> bool:
     return step == frame
 
 
-def at_step(positions: Positions, tensor: Any, seq_axis: int, frame: int | str | None, step: int | None) -> Positions:
+def at_step(at: Selection, tensor: Any, seq_axis: int, frame: int | str | None, step: int | None) -> Selection:
     """Where a tap's positions land in *this* forward's tensor.
 
     In the prompt frame at the prefill the plan's positions are right. Past
@@ -114,8 +115,8 @@ def at_step(positions: Positions, tensor: Any, seq_axis: int, frame: int | str |
     length = tensor.shape[seq_axis]
     if frame is not None or (step is not None and length == 1):
         last = length - 1
-        return tuple((last,) if window else () for window in positions)
-    return positions
+        return replace(at, positions=tuple((last,) if window else () for window in at.positions))
+    return at
 
 
 def resolve_operand(values: dict[str, Any], operand: Any) -> Any:
@@ -162,8 +163,12 @@ def _flat(positions: Positions, device: Any) -> tuple[Any, Any]:
     return torch.as_tensor(rows, device=device), torch.as_tensor(index, device=device)
 
 
-def gather(tensor: Any, positions: Positions, seq_axis: int = 1, heads: Heads | None = None) -> Any:
-    """A window per row.
+def _selection(at: Selection | Positions) -> Selection:
+    return at if isinstance(at, Selection) else Selection(at)
+
+
+def gather(tensor: Any, at: Selection | Positions, seq_axis: int = 1) -> Any:
+    """A window per row, and of it the features the selection names.
 
     Uniform windows keep the rectangle: (batch, seq, width) -> (batch, w,
     width), with the unit window w=1 that a metric squeezes. Ragged windows
@@ -177,7 +182,14 @@ def gather(tensor: Any, positions: Positions, seq_axis: int = 1, heads: Heads | 
     head_dim). Which one it is is a fact about the address, not about the
     tensor, so it is passed in.
     """
-    return _heads_out(_window(tensor, positions, seq_axis), positions, heads)
+    at = _selection(at)
+    window = _window(tensor, at.positions, seq_axis)
+    if at.groups is None:
+        return window
+    split = window.reshape(*_lead(window, at), at.groups, -1)
+    if at.take is not None:
+        split = split[..., list(at.take), :]
+    return split.flatten(-2)
 
 
 def _window(tensor: Any, positions: Positions, seq_axis: int) -> Any:
@@ -190,45 +202,27 @@ def _window(tensor: Any, positions: Positions, seq_axis: int) -> Any:
     return moved[rows, index]
 
 
-#: A per-head tensor: how many heads it has, and which a site named (None:
-#: all of them). Whether the model holds it as one head-major axis or as
-#: `(heads, per_head)`, it is handed on flat — `(…, n · per_head)`.
-Heads = tuple[int, tuple[int, ...] | None]
+def _lead(window: Any, at: Selection) -> tuple[int, ...]:
+    """The axes of a gathered window that are not features: `(total,)` for a
+    ragged one, `(rows, w)` for a rectangle."""
+    return tuple(window.shape[: 1 if is_ragged(at.positions) else 2])
 
 
-def _heads_out(window: Any, positions: Positions, heads: Heads | None) -> Any:
-    if heads is None:
-        return window
-    count, chosen = heads
-    lead = window.shape[: 1 if is_ragged(positions) else 2]
-    split = window.reshape(*lead, count, -1)
-    if chosen is not None:
-        split = split[..., list(chosen), :]
-    return split.flatten(-2)
-
-
-def _heads_in(window: Any, positions: Positions, heads: Heads | None, values: Any) -> Any:
-    """`window` with the named heads replaced by `values`, in the shape the
-    model holds it."""
-    if heads is None:
-        return values
-    count, chosen = heads
-    lead = window.shape[: 1 if is_ragged(positions) else 2]
-    split = window.reshape(*lead, count, -1).clone()
-    chosen = tuple(range(count)) if chosen is None else chosen
-    piece = values.to(split.dtype).expand(*lead, len(chosen) * split.shape[-1])
-    split[..., list(chosen), :] = piece.reshape(*lead, len(chosen), -1)
-    return split.reshape(window.shape)
-
-
-def scatter(
-    tensor: Any, positions: Positions, values: Any, seq_axis: int = 1, heads: Heads | None = None
-) -> Any:
-    """A copy of `tensor` with each row's window replaced by `values`: the
-    shape `gather` would return for these positions, or anything that
-    broadcasts to it — a published (w, width) or (width,) mean, say."""
-    if heads is not None:
-        values = _heads_in(_window(tensor, positions, seq_axis), positions, heads, values)
+def scatter(tensor: Any, at: Selection | Positions, values: Any, seq_axis: int = 1) -> Any:
+    """A copy of `tensor` with the selection replaced by `values`: the shape
+    `gather` would return for it, or anything that broadcasts to that — a
+    published (w, width) or (width,) mean, say. Features the selection does
+    not name are left as they were."""
+    at = _selection(at)
+    positions = at.positions
+    if at.groups is not None:
+        window = _window(tensor, positions, seq_axis)
+        lead = _lead(window, at)
+        split = window.reshape(*lead, at.groups, -1).clone()
+        take = tuple(range(at.groups)) if at.take is None else at.take
+        piece = values.to(split.dtype).expand(*lead, len(take) * split.shape[-1])
+        split[..., list(take), :] = piece.reshape(*lead, len(take), -1)
+        values = split.reshape(window.shape)
     out = tensor.clone()
     moved = out.movedim(seq_axis, 1)  # a view of `out`
     if is_ragged(positions):
@@ -243,16 +237,15 @@ def scatter(
 
 def apply_write(
     tensor: Any,
-    positions: Positions,
+    at: Selection | Positions,
     operand: Any,
     mechanism: str = "swap",
     featurizer: str | Featurizer = "identity",
     seq_axis: int = 1,
     params: dict[str, Any] | None = None,
-    heads: Heads | None = None,
 ) -> Any:
     featurize = FEATURIZERS[featurizer] if isinstance(featurizer, str) else featurizer
-    x = gather(tensor, positions, seq_axis, heads)
+    x = gather(tensor, at, seq_axis)
     f, err = featurize.featurize(x)
     f = MECHANISMS[mechanism](f, operand, **(params or {}))
-    return scatter(tensor, positions, featurize.inverse(f, err, x), seq_axis, heads)
+    return scatter(tensor, at, featurize.inverse(f, err, x), seq_axis)

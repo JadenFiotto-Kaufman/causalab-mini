@@ -25,7 +25,7 @@ from ..address import Address
 from ..data import encoding, rows as rows_module
 from ..ops import metrics as metrics_module
 from . import sweep
-from ..shapes import Positions
+from ..shapes import Positions, Selection
 from .document import Document, SaveSpec
 from .plan import (
     FeaturizerOp,
@@ -65,14 +65,18 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
         name: engine.locate(site.component, site.layers[0] if site.layers else None)
         for name, site in spec.sites.items()
     }
-    heads = {}
+    # site -> (groups, take): the feature half of every selection made there
+    features: dict[str, tuple[int, tuple[int, ...] | None]] = {}
     for name, site in spec.sites.items():
-        if addresses[name].heads_attribute is None:
+        if site.units is not None:
+            count, take, what = engine.width(addresses[name]), site.units, "unit"
+        elif addresses[name].heads_attribute is not None:
+            count, take, what = engine.heads(addresses[name]), site.heads, "head"
+        else:
             continue
-        count = engine.heads(addresses[name])
-        if site.heads is not None and max(site.heads) >= count:
-            raise PlanError(f"site {name!r}: head {max(site.heads)} of a {count}-head tensor")
-        heads[name] = (count, None if site.heads is None else tuple(site.heads))
+        if take is not None and max(take) >= count:
+            raise PlanError(f"site {name!r}: {what} {max(take)} of a {count}-{what} tensor")
+        features[name] = (count, None if take is None else tuple(take))
     fits = [one for one in spec.steps.values() if type(one).__name__ == "Fit"]
     featurizers = tuple(
         _spec_featurizer(name, one, spec, addresses, engine, fits)
@@ -100,7 +104,7 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
     for name, step in spec.steps.items():
         kind = type(step).__name__
         experiment = (
-            replace(_Experiment.of_spec(spec, spec.intervention_of(step)), heads=heads)
+            replace(_Experiment.of_spec(spec, spec.intervention_of(step)), features=features)
             if kind in ("Observe", "Fit")
             else None
         )
@@ -154,7 +158,7 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
             )
             observe = _pass(experiment, rows, addresses, engine.tokenizer)
             read_positions = {
-                read.name: read.positions
+                read.name: read.at.positions
                 for forward in observe.forwards for tap in forward.taps for read in tap.reads
             }
             for out in outputs:
@@ -251,6 +255,8 @@ def _spec_featurizer(
     d = engine.width(addresses[site])
     if spec.sites[site].heads is not None:
         d = d // engine.heads(addresses[site]) * len(spec.sites[site].heads)
+    if spec.sites[site].units is not None:
+        d = len(spec.sites[site].units)
     # a gate's features are the site's units, so its k is d
     k = d if one.k is None else one.k
     if not 0 < k <= d:
@@ -433,8 +439,8 @@ class _Experiment:
     models: dict[str, Any]
     metrics: dict[str, Any]
     decode: int = 0
-    #: site -> `(head count, the heads it names)`, for the per-head sites.
-    heads: dict[str, Any] = field(default_factory=dict)
+    #: site -> `(groups, take)`: which part of the feature axis the site is.
+    features: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def of_document(cls, document: Document) -> "_Experiment":
@@ -783,12 +789,12 @@ def _check_ragged(forwards: tuple[Forward, ...], experiment: _Experiment) -> Non
     any forward, because the positions are.
     """
     reads = {
-        read.name: read.positions for forward in forwards for tap in forward.taps for read in tap.reads
+        read.name: read.at.positions for forward in forwards for tap in forward.taps for read in tap.reads
     }
     for forward in forwards:
         for tap in forward.taps:
             for write in tap.writes:
-                empty = [row for row, window in enumerate(write.positions) if not window]
+                empty = [row for row, window in enumerate(write.at.positions) if not window]
                 if empty:
                     raise PlanError(
                         f"write {write.name!r} has nothing to write on row(s) {empty}: its "
@@ -797,7 +803,7 @@ def _check_ragged(forwards: tuple[Forward, ...], experiment: _Experiment) -> Non
                     )
                 if isinstance(write.operand, str) and write.operand in reads:
                     have = [len(window) for window in reads[write.operand]]
-                    want = [len(window) for window in write.positions]
+                    want = [len(window) for window in write.at.positions]
                     mismatched = [row for row, (a, b) in enumerate(zip(have, want)) if a != b]
                     if mismatched:
                         raise PlanError(
@@ -879,12 +885,11 @@ def _forward(
             writes.setdefault((addresses[spec.site], encoding.step_of(spec.pos)), []).append(
                 WriteOp(
                     name=write_name,
-                    positions=resolve(spec.pos),
+                    at=Selection(resolve(spec.pos), *experiment.features.get(spec.site, ())),
                     operand=spec.operand,
                     mechanism=spec.mechanism,
                     featurizer=spec.featurizer,
                     params=dict(getattr(spec, "params", {})),
-                    heads=experiment.heads.get(spec.site),
                 )
             )
     reads: dict[tuple[Address, Any], list[ReadOp]] = {}
@@ -894,10 +899,9 @@ def _forward(
         reads.setdefault((addresses[spec.site], encoding.step_of(spec.pos)), []).append(
             ReadOp(
                 name=read_name,
-                positions=resolve(spec.pos),
+                at=Selection(resolve(spec.pos), *experiment.features.get(spec.site, ())),
                 featurizer=spec.featurizer,
                 view=getattr(spec, "view", "raw"),
-                heads=experiment.heads.get(spec.site),
             )
         )
 

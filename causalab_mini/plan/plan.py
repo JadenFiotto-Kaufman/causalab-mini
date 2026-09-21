@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from ..address import Address
-from ..shapes import ExampleIds, Positions, TokenIds, TokenRows
+from ..shapes import ExampleIds, Selection, TokenIds, TokenRows
 
 
 class PlanError(ValueError):
@@ -55,20 +55,18 @@ class PlanError(ValueError):
 @dataclass(frozen=True)
 class ReadOp:
     name: str
-    positions: Positions
+    at: Selection  # where in the tensor: positions, and which features
     featurizer: str = "identity"
     #: "raw" is the tensor at the address. "logits" is that tensor pushed
     #: through the model's final norm and head — the logit lens: what the
     #: model would say if this layer were its last.
     view: str = "raw"
-    #: At a per-head tensor: `(how many heads, which of them)`.
-    heads: tuple[int, tuple[int, ...] | None] | None = None
 
 
 @dataclass(frozen=True)
 class WriteOp:
     name: str
-    positions: Positions
+    at: Selection
     #: A name — a read of this pass, or an output published before it — a
     #: literal number (zero ablation is `0.0`), or nothing for a mechanism
     #: that takes none.
@@ -77,7 +75,6 @@ class WriteOp:
     featurizer: str
     #: The mechanism's numbers: a scale, a seed.
     params: dict[str, float] = field(default_factory=dict)
-    heads: tuple[int, tuple[int, ...] | None] | None = None
 
 
 @dataclass(frozen=True)

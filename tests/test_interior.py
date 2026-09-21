@@ -112,7 +112,7 @@ def test_the_query_is_head_shaped_and_already_rotated(model_engine, model, data_
         projected = model.attentions[0].q_proj.output.clone().save()
         whole = nnterp.read(model, tap.address).clone().save()
         at_position = ops.gather(
-            nnterp.read(model, tap.address), tap.reads[0].positions, tap.address.seq_axis
+            nnterp.read(model, tap.address), tap.reads[0].at.positions, tap.address.seq_axis
         ).clone().save()
 
     rows, heads, seq, head_dim = whole.shape
@@ -149,7 +149,7 @@ def test_a_swap_at_the_interior_lands_bit_for_bit(model_engine, model, data_root
         landed = nnsight.save({})
         with model.trace(nnterp.batch(source_forward)):
             v_cf = ops.gather(
-                nnterp.read(model, tap.address), read.positions, tap.address.seq_axis
+                nnterp.read(model, tap.address), read.at.positions, tap.address.seq_axis
             ).clone()
         with model.trace(nnterp.batch(patched_forward)):
             nnterp.write(
@@ -157,7 +157,7 @@ def test_a_swap_at_the_interior_lands_bit_for_bit(model_engine, model, data_root
                 tap.address,
                 ops.apply_write(
                     nnterp.read(model, tap.address),
-                    write.positions,
+                    write.at.positions,
                     v_cf,
                     write.mechanism,
                     write.featurizer,
@@ -165,7 +165,7 @@ def test_a_swap_at_the_interior_lands_bit_for_bit(model_engine, model, data_root
                 ),
             )
             landed["after"] = ops.gather(
-                nnterp.read(model, tap.address), write.positions, tap.address.seq_axis
+                nnterp.read(model, tap.address), write.at.positions, tap.address.seq_axis
             ).clone()
             landed["source"] = v_cf
 
@@ -196,7 +196,7 @@ def test_only_the_declared_position_of_the_query_changes(model_engine, model, da
         seen = nnsight.save({})
         with model.trace(nnterp.batch(source_forward)):
             v_cf = ops.gather(
-                nnterp.read(model, tap.address), write.positions, tap.address.seq_axis
+                nnterp.read(model, tap.address), write.at.positions, tap.address.seq_axis
             ).clone()
         with model.trace(nnterp.batch(patched_forward)):
             seen["clean_first"] = ops.gather(
@@ -208,7 +208,7 @@ def test_only_the_declared_position_of_the_query_changes(model_engine, model, da
                 tap.address,
                 ops.apply_write(
                     nnterp.read(model, tap.address),
-                    write.positions,
+                    write.at.positions,
                     v_cf,
                     write.mechanism,
                     write.featurizer,

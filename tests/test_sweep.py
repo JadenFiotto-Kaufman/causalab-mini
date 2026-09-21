@@ -99,7 +99,7 @@ def test_the_root_is_a_plan_with_three_child_plans(swept_plan, minimal_raw, data
 
 def test_the_points_differ_in_the_swept_field_and_nothing_else(swept_plan):
     positions = [
-        point.step("observe", plan.Observe).forwards[1].taps[0].writes[0].positions
+        point.step("observe", plan.Observe).forwards[1].taps[0].writes[0].at.positions
         for point in swept_plan.steps.values()
     ]
     # Four rows, one position each. The rows are left-padded to a common
@@ -108,7 +108,7 @@ def test_the_points_differ_in_the_swept_field_and_nothing_else(swept_plan):
     # tokenizer actually produced.
     assert positions == [((10,),) * 4, ((9,),) * 4, ((8,),) * 4]
     reads = {
-        point.step("observe", plan.Observe).forwards[0].taps[0].reads[0].positions
+        point.step("observe", plan.Observe).forwards[0].taps[0].reads[0].at.positions
         for point in swept_plan.steps.values()
     }
     assert len(reads) == 1

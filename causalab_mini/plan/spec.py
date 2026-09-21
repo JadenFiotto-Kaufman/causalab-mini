@@ -75,9 +75,19 @@ class Site(Node):
     #: theirs — `len(heads) · head_dim` — so a featurizer, a swap or a harvest
     #: here is of those heads and leaves the others alone.
     heads: list[int] | None = None
+    #: Anywhere with a known width, the single features this site is — the
+    #: neurons of `mlp_activation`, say. Heads and units are one mechanism
+    #: (a group of the feature axis) at two grains, so a site names one.
+    units: list[int] | None = None
 
     @model_validator(mode="after")
     def _one_layer(self) -> "Site":
+        if self.heads is not None and self.units is not None:
+            raise ValueError("a site names heads or units, not both: they slice the same axis")
+        if self.units is not None and (
+            not self.units or len(set(self.units)) != len(self.units) or min(self.units) < 0
+        ):
+            raise ValueError("units is a non-empty list of distinct feature indices")
         if self.heads is not None:
             if not address.describe().get(self.component, {}).get("heads", False):
                 per_head = sorted(n for n, one in address.describe().items() if one["heads"])

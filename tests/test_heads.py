@@ -25,6 +25,7 @@ from causalab_mini.engine import NNterpEngine
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.ops import intervene
 from causalab_mini.plan.spec import Spec
+from causalab_mini.shapes import Selection
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 PATCHING = REPO / "documents" / "v2" / "patching.json"
@@ -65,11 +66,11 @@ def test_a_head_slice_is_the_same_however_the_model_holds_the_tensor(held):
     tensor = two_axes if held == "two axes" else two_axes.reshape(batch, seq, heads * per)
     positions = ((4,), (2,))
 
-    got = intervene.gather(tensor, positions, 1, (heads, (1, 3)))
+    got = intervene.gather(tensor, Selection(positions, heads, (1, 3)))
     assert got.shape == (2, 1, 2 * per)
     assert torch.equal(got[0, 0], torch.cat([two_axes[0, 4, 1], two_axes[0, 4, 3]]))
 
-    written = intervene.scatter(tensor, positions, torch.zeros(2, 1, 2 * per), 1, (heads, (1, 3)))
+    written = intervene.scatter(tensor, Selection(positions, heads, (1, 3)), torch.zeros(2, 1, 2 * per))
     view = written.reshape(batch, seq, heads, per)
     assert view[0, 4, [1, 3]].abs().sum() == 0
     assert torch.equal(view[0, 4, [0, 2]], two_axes[0, 4, [0, 2]]), "the other heads are untouched"
@@ -79,7 +80,7 @@ def test_a_head_slice_is_the_same_however_the_model_holds_the_tensor(held):
 
 def test_a_ragged_window_splits_heads_too():
     tensor = torch.arange(2 * 5 * 8, dtype=torch.float32).reshape(2, 5, 8)
-    got = intervene.gather(tensor, ((0, 1), (4,)), 1, (4, (2,)))
+    got = intervene.gather(tensor, Selection(((0, 1), (4,)), 4, (2,)))
     assert got.shape == (3, 2)
     assert torch.equal(got[2], tensor[1, 4, 4:6])
 
@@ -116,7 +117,7 @@ def test_two_sites_of_disjoint_heads_are_one_tap_and_add_up(data_root, model_eng
 
     built = plan.build_request(raw, data_root, model_engine)
     (tap,) = [t for t in built.step("score", plan.Observe).forwards[-1].taps if t.writes]
-    assert [w.heads for w in tap.writes] == [(4, (0, 1)), (4, (2, 3))]
+    assert [(w.at.groups, w.at.take) for w in tap.writes] == [(4, (0, 1)), (4, (2, 3))]
     assert torch.equal(
         model_engine.execute(built).result("logit_diff"),
         _score(_at("attention_z"), data_root, model_engine),
@@ -242,3 +243,63 @@ def test_the_pattern_is_at_the_same_address_on_gpt2(data_root):
     engine = NNterpEngine.load(spec, device_map="cpu", attn_implementation="eager")
     located = engine.locate("attention_probs", 0)
     assert (located.op, located.inner) == ("attention_interface_1", "nn_functional_softmax_0")
+
+
+# --------------------------------------------------------------------- #
+# units: the same mechanism at the grain of one feature
+# --------------------------------------------------------------------- #
+
+
+def test_units_are_single_features_of_any_site_with_a_width(data_root, model_engine):
+    """Heads and units are one rule — view the features as groups, keep some
+    — so a neuron patch is a site that names `units`, and compiles to the
+    same `Selection` a head patch does."""
+    raw = _at("mlp_activation")
+    width = model_engine.width(model_engine.locate("mlp_activation", 0))
+    raw["sites"]["target"]["units"] = [1, 5]
+    built = plan.build_request(raw, data_root, model_engine)
+    (tap,) = [t for t in built.step("score", plan.Observe).forwards[-1].taps if t.writes]
+    assert (tap.writes[0].at.groups, tap.writes[0].at.take) == (width, (1, 5))
+    assert "features=[1, 5]/" in __import__("causalab_mini.plan.explain", fromlist=["x"]).explain(built)
+
+    some = model_engine.execute(built).result("logit_diff")
+    every = _score({**raw, "sites": {**raw["sites"], "target": {**raw["sites"]["target"], "units": list(range(width))}}},
+                   data_root, model_engine)
+    assert torch.equal(every, _score(_at("mlp_activation"), data_root, model_engine))
+    assert not torch.equal(some, every)
+
+
+def test_the_mlps_width_is_the_down_projections_input_on_both_families(model_engine):
+    """Llama says `intermediate_size`; GPT-2 says `n_inner`, and leaves it
+    None to mean four times hidden. Checked against the module the activation
+    feeds rather than the config it was read from — which is what caught the
+    tiny GPT-2 carrying a stray `intermediate_size: 37` beside 128-wide MLPs."""
+    from causalab_mini.plan import document
+
+    gpt2 = NNterpEngine.load(document.Document.load(REPO / "documents" / "gpt2_cpu.json").model, dispatch=False)
+    assert gpt2.width(gpt2.locate("mlp_activation", 0)) == gpt2.model.mlps[0].c_proj.weight.shape[0] == 128
+    llama = model_engine.model.mlps[0].down_proj.in_features
+    assert model_engine.width(model_engine.locate("mlp_neuron_output", 0)) == llama
+
+
+def test_a_gate_over_neurons_is_a_gate_at_a_site_of_units(data_root, model_engine):
+    """DBM over a chosen set of neurons: nothing but the site changed."""
+    from causalab_mini.plan import sweep
+
+    _, raw = sweep.points(json.loads((REPO / "documents" / "v2" / "dbm.json").read_text()))[0]
+    raw["sites"]["target"] = {"component": "mlp_activation", "layers": [0], "units": [0, 2, 4, 6]}
+    built = plan.build_request(raw, data_root, model_engine)
+    (spec,) = built.step("featurizers", plan.Featurizers).specs
+    assert spec.d == 4
+    assert model_engine.execute(built).result("mask").shape == (4,)
+
+
+def test_what_a_site_of_units_may_not_say(data_root, model_engine):
+    with pytest.raises(ValidationError, match="heads or units, not both"):
+        Spec.model_validate({**_at("attention_z", [0]), "sites": {
+            **_at("attention_z", [0])["sites"],
+            "target": {"component": "attention_z", "layers": [0], "heads": [0], "units": [1]}}})
+    raw = _at("block_output")
+    raw["sites"]["target"]["units"] = [16]
+    with pytest.raises(plan.PlanError, match="unit 16 of a 16-unit tensor"):
+        plan.build_request(raw, data_root, model_engine)

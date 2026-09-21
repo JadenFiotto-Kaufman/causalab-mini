@@ -32,7 +32,9 @@ def any_plan(request):
 # --------------------------------------------------------------------- #
 
 ALLOWED = (str, int, float, bool, type(None), tuple, dict, list)
-PLAN_TYPES = {"causalab_mini.plan.plan", "causalab_mini.address"}
+# `shapes.Selection` is where an op is — positions and feature groups, integers
+# all the way down; the walk goes into it like any other node.
+PLAN_TYPES = {"causalab_mini.plan.plan", "causalab_mini.address", "causalab_mini.shapes"}
 
 
 def _walk(value, where="plan"):

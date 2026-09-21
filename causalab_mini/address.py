@@ -239,13 +239,13 @@ _COMPONENTS = {
     "mlp_activation": _Component(
         # The activation function's output. No width: nnterp publishes no
         # intermediate size, which refuses a featurizer here.
-        path="mlps.{layer}.act_fn|mlps.{layer}.act", side="output", stage=11,
+        path="mlps.{layer}.act_fn|mlps.{layer}.act", side="output", stage=11, width="intermediate_size",
     ),
     "mlp_neuron_output": _Component(
         # The down-projection's input: act(gate)·up on a gated MLP, and the
         # activation itself on GPT-2, which has no gate — the same *place*,
         # a different tensor, and the table says so rather than hiding it.
-        path="mlps.{layer}.down_proj|mlps.{layer}.c_proj", side="input", stage=12,
+        path="mlps.{layer}.down_proj|mlps.{layer}.c_proj", side="input", stage=12, width="intermediate_size",
     ),
     "mlp_output": _Component(
         # block_output = block_mid + mlp_output.
@@ -428,6 +428,29 @@ def head_count(config: Any, address: Address) -> int:
     if attribute is None:
         raise AddressError(f"component {address.component!r} is not a per-head tensor")
     return int(getattr(config, attribute, None) or config.num_attention_heads)
+
+
+def width(config: Any, address: Address) -> int:
+    """The feature width at `address`, off the config — the one place that
+    knows how each family spells it."""
+    attribute = address.width_attribute
+    if attribute is None:
+        raise AddressError(
+            f"the width of {address.component!r} is not derivable from a config: "
+            "it depends on the batch (the attention pattern's key axis) or is not a tensor's"
+        )
+    if attribute == "head_dim":
+        # a per-head tensor is handed on flat: every head, side by side
+        return head_count(config, address) * head_dim(config)
+    if attribute == "intermediate_size":
+        # GPT-2 calls it n_inner, and leaves it None to mean four times
+        # hidden. Asked first, because a GPT-2 config can also carry a stray
+        # `intermediate_size` its modules never read — the tiny test
+        # checkpoint says 37 there and builds 128-wide MLPs.
+        if hasattr(config, "n_inner"):
+            return int(config.n_inner or 4 * config.hidden_size)
+        return int(config.intermediate_size)
+    return int(getattr(config, attribute))
 
 
 def head_dim(config: Any) -> int:

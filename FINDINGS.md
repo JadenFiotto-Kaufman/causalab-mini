@@ -1273,3 +1273,36 @@ padded batch's length, so base and counterfactual patterns only line up when
 their batches pad to the same width; nothing checks that on the client yet,
 and torch is what would complain. The hooks engine refuses both components,
 as it does every interior.
+
+
+### 17.3 Corrected the same day: `heads` was the first case of `Selection`
+
+§17.1 shipped as a `heads` field on `ReadOp` and `WriteOp`, threaded as an
+extra argument through `gather`, `scatter`, `apply_write` and both engines.
+That was too specific, and the threading was the symptom: positions say
+*where along the sequence*, heads say *where along the features*, and the
+second is one rule — view the features as `(groups, -1)`, keep some groups —
+whatever the groups are called.
+
+So an op now carries one `at: Selection(positions, groups, take)`
+(`shapes.py`, integers all the way down), `gather`/`scatter` take it whole,
+and the engines pass `op.at` and know nothing about heads. A bare `Positions`
+is still accepted by the tensor functions as the selection of every feature,
+so the fifty-odd direct callers did not change. **No subclass was added**:
+an op that knew how to resolve heads would have behaviour, and ops are data
+the engine executes; and heads are orthogonal to ragged/rectangular, raw/
+logits and prompt/step, so a `HeadRead` would fork the type rather than
+compose with it.
+
+What generality bought, for one validator and four compiler lines: a site
+may name **`units`** — single features, anywhere the width is known — so
+neuron patching (`documents/v2/neuron_patching.json`) and a **gate over
+chosen neurons** (DBM at a site of units: `d` = 4, nothing else changed) both
+work. `heads` and `units` are exclusive on a site: they slice the same axis.
+
+Found on the way: `mlp_activation`'s width. Llama says `intermediate_size`;
+GPT-2 says `n_inner`, None meaning 4·hidden — and the tiny GPT-2 *also*
+carries a stray `intermediate_size: 37` its 128-wide MLPs never read. The
+test compares against the module the activation feeds, not the config,
+which is the only reason that was caught. Width now lives once, in
+`address.width(config, address)`, and both engines call it.

@@ -143,7 +143,7 @@ def test_the_window_shows_in_the_plan(data_root, model_engine):
 
     built = plan.build_request(json.loads(WINDOW.read_text()), data_root, model_engine)
     write = built.step("score", plan.Observe).forwards[1].taps[0].writes[0]
-    assert write.positions == ((7, 8, 9),) * 4  # -4, -3, -2 of an 11-token row
+    assert write.at.positions == ((7, 8, 9),) * 4  # -4, -3, -2 of an 11-token row
     assert "pos=[7:10], [7:10], [7:10], [7:10]" in explain(built)
 
 

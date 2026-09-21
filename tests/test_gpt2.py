@@ -210,7 +210,7 @@ def test_the_query_at_layer_0_carries_nothing_a_prompt_pair_differs_in(gpt2_engi
     tap = source.taps[0]
     with gpt2.trace(nnterp.batch(source)):
         query = ops.gather(
-            nnterp.read(gpt2, tap.address), tap.reads[0].positions, tap.address.seq_axis
+            nnterp.read(gpt2, tap.address), tap.reads[0].at.positions, tap.address.seq_axis
         ).clone().save()
     assert {sum(row) for row in source.attention_mask} == {12}
     assert all(torch.equal(query[0], query[row]) for row in range(4))

@@ -82,20 +82,7 @@ class HooksEngine(Engine):
         return address_module.head_count(self.model.config, address)
 
     def width(self, address: Address) -> int:
-        """The tap's width, off the config.
-
-        The attribute names happen to be the config's own — nnterp publishes
-        `hidden_size` and `vocab_size` on the handle because it read them off
-        the config — so the translation here is `model.config` and nothing
-        more.
-        """
-        attribute = address.width_attribute
-        if attribute is None:
-            raise AddressError(
-                f"the width of {address.component!r} is not derivable here; a config "
-                "has hidden_size and vocab_size and nothing for an attention interior"
-            )
-        return int(getattr(self.model.config, attribute))
+        return address_module.width(self.model.config, address)
 
     # ----------------------------------------------------------------- #
     # what the run asks
@@ -226,20 +213,18 @@ def _apply(
     for write in tap.writes:
         activation = intervene.apply_write(
             activation,
-            intervene.at_step(write.positions, activation, tap.address.seq_axis, tap.step, step),
+            intervene.at_step(write.at, activation, tap.address.seq_axis, tap.step, step),
             intervene.resolve_operand(values, write.operand),
             write.mechanism,
             featurizers[write.featurizer],
             tap.address.seq_axis,
             write.params,
-            write.heads,
         )
     for read in tap.reads:
         gathered = intervene.gather(
             activation,
-            intervene.at_step(read.positions, activation, tap.address.seq_axis, tap.step, step),
+            intervene.at_step(read.at, activation, tap.address.seq_axis, tap.step, step),
             tap.address.seq_axis,
-            read.heads,
         )
         if read.view == "logits":
             gathered = names.lm_head(names.ln_final(gathered))

@@ -8,7 +8,14 @@ the loop an author lives in: write, explain, fix.
 
 from __future__ import annotations
 
+from typing import Any
+
 from .plan import Featurizers, Fit, Observe, Plan, Step, Weights
+
+
+def _features(at: Any) -> str:
+    """Which part of the feature axis, when the selection names one."""
+    return "" if at.take is None else f" features={list(at.take)}/{at.groups}"
 
 
 def _pos(positions: tuple[tuple[int, ...], ...]) -> str:
@@ -72,13 +79,13 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
                     args = [] if write.operand is None else [str(write.operand)]
                     args += [f"{k}={v}" for k, v in write.params.items()]
                     out.append(
-                        f"{pad}      write {write.name!r} at {where} pos={_pos(write.positions)} "
+                        f"{pad}      write {write.name!r} at {where} pos={_pos(write.at.positions)}{_features(write.at)} "
                         f"{write.mechanism}({', '.join(args)}) via {write.featurizer!r}"
                     )
                 for read in tap.reads:
                     view = "" if read.view == "raw" else f" as {read.view}"
                     out.append(
-                        f"{pad}      read  {read.name!r} at {where} pos={_pos(read.positions)} via {read.featurizer!r}{view}"
+                        f"{pad}      read  {read.name!r} at {where} pos={_pos(read.at.positions)}{_features(read.at)} via {read.featurizer!r}{view}"
                     )
     elif isinstance(step, Weights):
         out.append(f"{pad}{name}: Weights  names={list(step.names)}{tail}")

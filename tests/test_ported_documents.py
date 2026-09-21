@@ -57,7 +57,7 @@ def test_three_writes_share_one_address_and_one_tap(multi_raw, data_root, model_
 
     (tap,) = [one for one in patched.taps if one.writes]
     assert [write.name for write in tap.writes] == ["at_m4", "at_m3", "at_m2"]
-    positions = [write.positions for write in tap.writes]
+    positions = [write.at.positions for write in tap.writes]
     assert len({tuple(one) for one in positions}) == 3, "the three writes must be disjoint"
     # and the three reads they take their operands from share the source tap
     assert [read.name for read in source.taps[0].reads] == ["v_m4", "v_m3", "v_m2"]
