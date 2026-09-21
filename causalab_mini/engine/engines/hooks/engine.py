@@ -15,6 +15,7 @@ metrics, the write algebra — is the shared code in `engine/steps.py` and
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, Callable
 
 import torch
@@ -23,6 +24,7 @@ from .... import address as address_module
 from ....address import Address, AddressError
 from ....ops import intervene
 from ....plan import Forward, Plan, Tap
+from ....plan import plan as plan_module
 from ... import provenance, steps
 from ...base import Engine, EngineError
 from .loading import HooksEngineError, load, standardized
@@ -122,14 +124,23 @@ class HooksEngine(Engine):
         # The decode step, shared by every hook of this forward: a hook on
         # the root fires once per pass and counts. None for a plain forward.
         clock = {"step": 0 if forward.decode else None}
+        # one hook per ADDRESS, holding every tap there: two frames at one
+        # address are one moment at the prefill (`plan.at_one_moment`)
+        by_address: dict[Address, list[Tap]] = {}
+        for tap in forward.taps:
+            by_address.setdefault(tap.address, []).append(tap)
         handles = [
-            _install(self._names, tap, values, featurizers, clock) for tap in forward.taps
+            _install(self._names, address, taps, values, featurizers, clock)
+            for address, taps in by_address.items()
         ]
         if forward.decode:
             handles.append(self.model.register_forward_hook(lambda *_: _tick(clock)))
         try:
             if not forward.decode:
-                self.model(**batch(forward, self.model.get_input_embeddings().weight.device))
+                inputs = batch(forward, self.model.get_input_embeddings().weight.device)
+                if "position_ids" in inspect.signature(self.model.forward).parameters:
+                    inputs["position_ids"] = positions_of(inputs["attention_mask"])  # not ALiBi's Bloom
+                self.model(**inputs)
             else:
                 prompt = len(forward.input_ids[0])
                 ids = self.model.generate(
@@ -143,6 +154,15 @@ class HooksEngine(Engine):
         finally:
             for handle in handles:
                 handle.remove()
+
+
+def positions_of(mask: Any) -> Any:
+    """`cumsum(mask) − 1`: a left-padded row's first real token is position 0.
+    nnsight gives its engine exactly this; a bare `model(input_ids, mask)`
+    numbers the pads too. Rotary positions are relative, so every Llama test
+    agreed anyway — GPT-2's learned absolute positions do not, and the two
+    engines differed by 0.29 on the padded rows of one batch."""
+    return (mask.cumsum(-1) - 1).clamp(min=0)
 
 
 def batch(forward: Forward, device: Any = None) -> dict[str, Any]:
@@ -161,19 +181,20 @@ def _tick(clock: dict[str, Any]) -> None:
 
 
 def _install(
-    names: Any, tap: Tap, values: dict[str, Any], featurizers: dict[str, Any], clock: dict[str, Any]
+    names: Any, address: Address, taps: list[Tap], values: dict[str, Any],
+    featurizers: dict[str, Any], clock: dict[str, Any],
 ) -> Any:
     """Hook one address, on the side it is addressed on."""
-    module = tap.address.resolve(names)
-    if tap.address.side == "output":
-        return module.register_forward_hook(intervene_at(tap, values, featurizers, names, clock))
+    module = address.resolve(names)
+    if address.side == "output":
+        return module.register_forward_hook(intervene_at(address, taps, values, featurizers, names, clock))
     return module.register_forward_pre_hook(
-        intervene_before(tap, values, featurizers, names, clock), with_kwargs=True
+        intervene_before(address, taps, values, featurizers, names, clock), with_kwargs=True
     )
 
 
 def intervene_before(
-    tap: Tap, values: dict[str, Any], featurizers: dict[str, Any], names: Any, clock: dict[str, Any]
+    address: Address, taps: list[Tap], values: dict[str, Any], featurizers: dict[str, Any], names: Any, clock: dict[str, Any]
 ) -> Callable[[Any, Any, Any], Any]:
     """The same body, on the way *in*.
 
@@ -185,7 +206,7 @@ def intervene_before(
     """
 
     def hook(module: Any, args: Any, kwargs: Any) -> Any:
-        if not intervene.applies(tap.step, clock["step"]):
+        if not any(intervene.applies(tap.step, clock["step"]) for tap in taps):
             return None
         if args:
             activation, where = args[0], None
@@ -199,7 +220,7 @@ def intervene_before(
                 )
             where = tensors[0]
             activation = kwargs[where]
-        activation = _apply(tap, activation, values, featurizers, names, clock["step"])
+        activation = _apply(address, taps, activation, values, featurizers, names, clock["step"])
         if where is None:
             return (activation, *args[1:]), kwargs
         return args, {**kwargs, where: activation}
@@ -208,28 +229,32 @@ def intervene_before(
 
 
 def _apply(
-    tap: Tap, activation: Any, values: dict[str, Any], featurizers: dict[str, Any], names: Any, step: int | None
+    address: Address, taps: list[Tap], activation: Any, values: dict[str, Any],
+    featurizers: dict[str, Any], names: Any, step: int | None,
 ) -> Any:
-    """This address's writes, then its reads. A read in a model sees that
-    model's writes, so at one address the writes go first."""
+    """This address's writes, then its reads, over every tap that applies at
+    this step. A read in a model sees that model's writes, so at one address
+    the writes go first — whichever frames they were declared in."""
+    active = [tap for tap in taps if intervene.applies(tap.step, step)]
+    ((_, writes, reads),) = plan_module.at_one_moment(active)
     original = activation  # what a renormalize measures against
-    for write in tap.writes:
+    for write, tap in writes:
         activation = intervene.apply_write(
             activation,
-            intervene.at_step(write.at, activation, tap.address.seq_axis, tap.step, step),
+            intervene.at_step(write.at, activation, address.seq_axis, tap.step, step),
             intervene.resolve_operand(values, write.operand),
             write.mechanism,
             featurizers[write.featurizer],
-            tap.address.seq_axis,
+            address.seq_axis,
             write.params,
             original,
             write.features,
         )
-    for read in tap.reads:
+    for read, tap in reads:
         gathered = intervene.gather(
             activation,
-            intervene.at_step(read.at, activation, tap.address.seq_axis, tap.step, step),
-            tap.address.seq_axis,
+            intervene.at_step(read.at, activation, address.seq_axis, tap.step, step),
+            address.seq_axis,
         )
         if read.view == "logits":
             gathered = names.lm_head(names.ln_final(gathered))
@@ -239,7 +264,7 @@ def _apply(
 
 
 def intervene_at(
-    tap: Tap, values: dict[str, Any], featurizers: dict[str, Any], names: Any, clock: dict[str, Any]
+    address: Address, taps: list[Tap], values: dict[str, Any], featurizers: dict[str, Any], names: Any, clock: dict[str, Any]
 ) -> Callable[[Any, Any, Any], Any]:
     """The hook for one address: its writes, then its reads, on the way out.
 
@@ -256,10 +281,9 @@ def intervene_at(
     """
 
     def hook(module: Any, args: Any, output: Any) -> Any:
-        if not intervene.applies(tap.step, clock["step"]):
+        if not any(intervene.applies(tap.step, clock["step"]) for tap in taps):
             return None
-        address = tap.address
-        activation = _apply(tap, address.get(output), values, featurizers, names, clock["step"])
+        activation = _apply(address, taps, address.get(output), values, featurizers, names, clock["step"])
         return address.put(output, activation)
 
     return hook
