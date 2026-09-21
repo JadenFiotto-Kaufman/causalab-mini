@@ -368,6 +368,14 @@ because the optimizer only holds `rot.weight`, but the memory is real and a
 longer fit on a real model would notice. "The model is frozen" is a property of
 which tensors the optimizer was given, not a property of the model.
 
+*Closed 2026-09-21:* both loaders now `eval()` and `requires_grad_(False)`
+the model. One trap on the way: nnsight loads weights lazily, on the first
+trace, by **replacing** the module — so a freeze applied after construction
+lands on the meta shell and is thrown away with it (measured: 0 of 21
+parameters trainable after load, 21 of 21 after the first trace). The nnterp
+loader therefore dispatches at load unless asked for a shell. On NDIF the
+served model is the server's to freeze.
+
 ### 1.9 dtype names
 
 `{"fp32": torch.float32, "bf16": torch.bfloat16}` in `engine/engines/nnterp/loading.py`. Small, but it is

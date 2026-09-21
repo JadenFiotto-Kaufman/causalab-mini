@@ -28,10 +28,28 @@ def load(spec: Any, **options: Any) -> StandardizedTransformer:
     """
     if options.get("dispatch") is False:
         options.setdefault("device_map", None)
+    else:
+        # nnsight loads weights lazily, on the first trace, by *replacing* the
+        # module — which would discard the freeze below along with the meta
+        # shell it was applied to. Load them now, so what is frozen is what runs.
+        options["dispatch"] = True
     if getattr(spec, "attn_implementation", None) is not None:
         # the document's, because it decides which tensors exist (the
         # attention pattern is only ever materialized under "eager")
         options.setdefault("attn_implementation", spec.attn_implementation)
-    return StandardizedTransformer(
+    model = StandardizedTransformer(
         spec.key, revision=spec.revision, dtype=DTYPES[spec.dtype], **options
     )
+    freeze(model._module)
+    return model
+
+
+def freeze(module: Any) -> None:
+    """The model is an instrument, not a parameter. Without this a fit's
+    backward reaches every weight the patched forward touched and leaves a
+    `.grad` the size of the model behind (FINDINGS §1.15): nothing reads it,
+    because the optimizer holds only the featurizers, but the memory is real.
+    `eval()` is the other half — dropout in a measurement is noise. (On NDIF
+    the served model is the server's to freeze; this is the local one.)"""
+    module.eval()
+    module.requires_grad_(False)

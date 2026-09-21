@@ -311,3 +311,28 @@ def test_the_cli_runs_the_das_document_end_to_end(tmp_path, data_root):
     assert exit_code == 0
     assert len(json.loads((tmp_path / "iia.json").read_text())) == 2
     assert (tmp_path / "rot.safetensors").exists()
+
+
+def test_a_fit_leaves_no_gradient_on_the_model(model_engine, das_plan):
+    """FINDINGS §1.15, closed: the loaders freeze the model, so the backward
+    stops at the featurizer and the model's weights carry no `.grad` — on a
+    real model that is a second copy of it."""
+    from causalab_mini.engine.engines.hooks import HooksEngine
+
+    model_engine.execute(das_plan)
+    module = model_engine.model._module
+    assert not module.training
+    assert all(not p.requires_grad and p.grad is None for p in module.parameters())
+
+    hooks = HooksEngine.load(das_plan_model(), device_map="cpu")
+    assert all(not p.requires_grad for p in hooks.model.parameters()) and not hooks.model.training
+
+
+def das_plan_model():
+    import json, pathlib
+
+    from causalab_mini.plan.spec import Spec
+
+    return Spec.model_validate(
+        json.loads((pathlib.Path(__file__).resolve().parents[1] / "documents" / "v2" / "das.json").read_text())
+    ).model
