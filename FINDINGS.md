@@ -1570,9 +1570,16 @@ resolved path against its own standardized tree (`self_attn` / `mlp` are
 nnterp renames, mapped to its per-layer lists). Ignored otherwise, by
 decision.
 
-Kept in mini: the four layerless boundaries (`embeddings`, `input_ids`,
-`ln_final`, `lm_head` — modules nnterp renames), and the five interiors
-(`attention_query/key/scores/probs/z`), which nnterp does not address yet.
+Kept in mini: the five interiors (`attention_query/key/scores/probs/z`),
+which nnterp does not address yet. The four whole-model boundaries
+(`embeddings`, `input_ids`, `ln_final`, `lm_head`) were briefly mini's own
+paths with an inline "first of a tuple" rule — the one convention of nnterp's
+`select` default, copied — until nnterp's registry stopped being about
+layers: `Address(per_layer=False)` rows, read at no layer, so *every*
+boundary goes through an accessor and a family's `select`/`Lens` reaches all
+of them. `locate` also asks `unavailable_on(layer)` now, so a place one layer
+lacks (DeepSeek's mixture-of-experts blocks) is refused at compile time with
+nnterp's reason rather than inside the trace.
 
 Checked through mini after the port: Gemma-2 `block_input + attention_output
 == block_mid` at 0.0; NeoX and Phi refuse `block_mid` / `mlp_input_norm` at

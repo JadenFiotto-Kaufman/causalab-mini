@@ -10,11 +10,13 @@ from causalab_mini.address import Address, AddressError
 def test_an_address_is_the_documents_words_and_pickles_as_such():
     one = Address("block_output", 0)
     assert pickle.loads(pickle.dumps(one)) == one
-    assert Address("lm_head").path == "lm_head"
-    # a component nnterp addresses has its module spelled by the checkpoint,
+    assert Address("attention_query", 0).path == "attentions.0"  # an interior: mini's own row
+    # a boundary is a nnterp accessor, whose module the checkpoint spells —
     # which the document's words alone cannot say
-    with pytest.raises(AddressError, match="engine.locate"):
-        one.path
+    for bare in (one, Address("lm_head")):
+        with pytest.raises(AddressError, match="engine.locate"):
+            bare.path
+    assert Address("lm_head", module="lm_head").path == "lm_head"
     assert Address("block_output", 0, module="").path == "layers.0"
     assert Address("block_mid", 1, module="post_attention_layernorm").path == "layers.1.post_attention_layernorm"
 

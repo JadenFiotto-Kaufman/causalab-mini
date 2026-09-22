@@ -215,23 +215,18 @@ def find_op(source: Any, call_site: str) -> str:
 def read(model: Any, address: Address) -> Any:
     """The tensor at `address`, during a trace.
 
-    A boundary inside the block is one of nnterp's accessors, which knows the
-    module, the side and where in the value the tensor sits. A layerless
-    boundary is a module nnterp renames, whose output may be a bare tensor or
-    a tuple whose first element is the hidden state. Inside a forward the
-    tensor is one argument of one call, or one element of its return, and
-    the address says which.
+    A module boundary is one of nnterp's accessors, which knows the module,
+    the side and where in the value the tensor sits — a layered one is read
+    at its layer, a whole-model one at `None`. Inside a forward the tensor is
+    one argument of one call, or one element of its return, and the address
+    says which.
 
     This is the engine's half of an address: `address` says *where*, in terms
     that are true of the architecture, and this says how to reach there with
     nnsight. A different engine says it differently.
     """
     if address.accessor is not None:
-        assert address.layer is not None
         return model.internals[address.accessor][address.layer]
-    if not address.interior:
-        value = getattr(address.resolve(model), address.side)
-        return value[0] if isinstance(value, tuple) else value
     call = operation(model, address)
     if address.handle == "output":
         return call.output if address.arg is None else call.output[address.arg]
@@ -243,13 +238,7 @@ def write(model: Any, address: Address, tensor: Any) -> None:
     """Put a tensor back: rebuilding the tuple if there was one, or rebuilding
     the call's arguments around the new one."""
     if address.accessor is not None:
-        assert address.layer is not None
         model.internals[address.accessor][address.layer] = tensor
-        return
-    if not address.interior:
-        envoy = address.resolve(model)
-        current = getattr(envoy, address.side)
-        setattr(envoy, address.side, (tensor, *current[1:]) if isinstance(current, tuple) else tensor)
         return
     call = operation(model, address)
     index = address.arg

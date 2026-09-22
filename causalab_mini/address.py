@@ -9,9 +9,10 @@ one of two kinds:
   child module a family spells the place with, whether the block even has such
   a place (a parallel-residual block has no mid-stream, a mixture of experts no
   single activation), and every width and head count, are nnterp's to know.
-  The row here names the accessor and where it sits in the forward pass. Four
-  layerless components (`embeddings`, `ln_final`, `lm_head`, `input_ids`) are
-  modules nnterp renames, and keep a plain path.
+  The row here names the accessor and where it sits in the forward pass —
+  the four whole-model components (`embeddings`, `ln_final`, `lm_head`,
+  `input_ids`) included, so every boundary goes through an accessor and a
+  family's `select`/`Lens` applies to all of them.
 * an **interior** — `attention_query`. The tensor never crosses a module
   boundary, so the address is a module *plus one operation inside its forward*,
   reached through nnsight's `.source`. The operation is named by the call site
@@ -40,8 +41,8 @@ class _Component:
     #: knows the module path on this checkpoint, whether the place exists, and
     #: which side of the module it is.
     accessor: str | None = None
-    #: A layerless boundary, or an interior's module: a dotted path against
-    #: the nnterp handle, in nnterp's standardized names.
+    #: An interior's module: a dotted path against the nnterp handle, in
+    #: nnterp's standardized names.
     path: str | None = None
     side: str = "output"  # "output" or "input"
     #: Where this tap sits relative to the layer stack: 0 before it, 1 inside
@@ -162,14 +163,12 @@ _COMPONENTS = {
         heads="q",
         width="head_dim",
     ),
-    "input_ids": _Component(
-        path="embed_tokens", side="input", stage=0, band=0, read_only=True
-    ),
+    "input_ids": _Component(accessor="embeddings_input", stage=0, band=0, read_only=True),
     "embeddings": _Component(
         # The embedding table's output, before layer 0: `block_input` at layer 0
-        # is the same tensor, and this is the one address for it that names
-        # no layer.
-        path="embed_tokens", stage=1, band=0, width="hidden_size",
+        # is the same tensor on a model with nothing between them (GPT-2 adds
+        # position embeddings), and this is the one address that names no layer.
+        accessor="embeddings_output", stage=1, band=0, width="hidden_size",
     ),
     # --- the block, as nnterp addresses it. Definitions (nnterp's, asserted
     # there on 26 families): block_mid = block_input + attention_output,
@@ -193,8 +192,8 @@ _COMPONENTS = {
     ),
     "mlp_output": _Component(accessor="mlps_output", stage=13, width="hidden_size"),
     "block_output": _Component(accessor="layers_output", stage=14, width="hidden_size"),
-    "ln_final": _Component(path="ln_final", stage=0, band=2, width="hidden_size"),
-    "lm_head": _Component(path="lm_head", stage=1, band=2, width="vocab_size"),
+    "ln_final": _Component(accessor="ln_final_output", stage=0, band=2, width="hidden_size"),
+    "lm_head": _Component(accessor="lm_head_output", stage=1, band=2, width="vocab_size"),
 }
 
 
@@ -210,11 +209,11 @@ class Address:
     component: str
     layer: int | None = None
     op: str | None = None
-    #: For a boundary nnterp addresses: the child module this checkpoint
-    #: spells it with, relative to the layer (`post_attention_layernorm`,
-    #: `self_attn.o_proj`, "" for the layer itself). Filled by `locate`; a
-    #: plan holds the string, so an engine without nnterp's accessors can
-    #: still walk to the module.
+    #: For a boundary: the module this checkpoint spells it with — relative
+    #: to the layer for a layered one (`post_attention_layernorm`,
+    #: `self_attn.o_proj`, "" for the layer itself), to the model for a
+    #: whole-model one (`lm_head`). Filled by `locate`; a plan holds the
+    #: string, so an engine without nnterp's accessors can still walk to it.
     module: str | None = None
     #: For the same boundaries: which side of that module, as nnterp knows it.
     io: str | None = None
@@ -265,6 +264,8 @@ class Address:
                 f"component {self.component!r}: its module is a fact about the checkpoint; "
                 "build the address with engine.locate(...)"
             )
+        if entry.band != 1:
+            return self.module
         return f"layers.{self.layer}" + (f".{self.module}" if self.module else "")
 
     @property
@@ -367,9 +368,9 @@ def locate(model: Any, component: str, layer: int | None) -> Address:
     if address.accessor is None:
         return address
     accessor = model.internals[address.accessor]
-    if accessor.disabled_reason is not None:
-        raise AddressError(f"component {component!r}: {accessor.disabled_reason}")
-    accessor.get_module(layer or 0)  # a layer that lacks the place is refused here, by nnterp
+    reason = accessor.unavailable_on(layer if accessor.per_layer else None)
+    if reason is not None:  # a place this family, or this layer, lacks — nnterp says why
+        raise AddressError(f"component {component!r}: {reason}")
     return Address(component, layer, module=accessor.address.module, io=accessor.io_type.value)
 
 
