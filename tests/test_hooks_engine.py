@@ -22,6 +22,7 @@ from causalab_mini import plan
 from causalab_mini.address import AddressError
 from causalab_mini.engine import HooksEngine, NNterpEngine
 from causalab_mini.engine.engines.hooks import HooksEngineError
+from causalab_mini.engine.engines.hooks import engine as hooks
 from causalab_mini.engine.engines.hooks.loading import standardized
 from causalab_mini.ops import intervene
 from causalab_mini.plan import Observe, ReadOp, document
@@ -133,7 +134,7 @@ def test_a_forward_leaves_no_hook_behind(hooks_engine, minimal_raw, data_root):
     not an error — so the count is asserted rather than trusted."""
     compiled = _build(minimal_raw, data_root, hooks_engine)
     source, _ = compiled.step("observe", Observe).forwards
-    layer = hooks_engine.locate("block_output", 0).resolve(standardized(hooks_engine.model))
+    layer = hooks.resolve(hooks_engine.locate("block_output", 0), standardized(hooks_engine.model))
 
     before = len(layer._forward_hooks)
     hooks_engine.forward(source, {}, dict(intervene.FEATURIZERS))
@@ -193,6 +194,6 @@ def test_the_standardized_names_reach_a_second_family(data_root):
     model = engine.model
 
     assert engine.num_layers == len(model.transformer.h)
-    assert engine.locate("block_output", 3).resolve(standardized(model)) is model.transformer.h[3]
-    assert engine.locate("lm_head").resolve(standardized(model)) is model.lm_head
+    assert hooks.resolve(engine.locate("block_output", 3), standardized(model)) is model.transformer.h[3]
+    assert hooks.resolve(engine.locate("lm_head"), standardized(model)) is model.lm_head
     assert engine.width(engine.locate("block_output", 0)) == model.config.n_embd

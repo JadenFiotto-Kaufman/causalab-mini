@@ -106,7 +106,9 @@ def vocab(args: argparse.Namespace) -> dict[str, Any]:
     }
     lines = ["components:"]
     for name, entry in payload["components"].items():
-        kind = "interior" if entry["interior"] else f"{entry['side']} of {entry['path']}"
+        kind = "interior" if entry["interior"] else (
+            f"nnterp {entry['accessor']}" if entry["accessor"] else f"{entry['side']} of {entry['path']}"
+        )
         lines.append(f"  {name:22s} {kind}{'  (read-only)' if entry['read_only'] else ''}"
                      f"{'  [heads]' if entry['heads'] else ''}"
                      f"{'  needs ' + entry['needs'] + ' attention' if entry['needs'] else ''}")

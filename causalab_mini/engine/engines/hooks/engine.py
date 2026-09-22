@@ -29,17 +29,23 @@ from .loading import HooksEngineError, load, standardized
 
 
 class HooksEngine(Engine):
-    def __init__(self, model: Any, tokenizer: Any, dispatched: bool = True) -> None:
+    def __init__(self, model: Any, tokenizer: Any, shell: Any, dispatched: bool = True) -> None:
         self.model = model
         self._dispatched = dispatched
-        # Two things nnterp hands over with the model and nobody else does: the
-        # tokenizer, and the standardized names an address is written in.
+        # What nnterp hands over with the model and nobody else does: the
+        # tokenizer, the standardized names an address is written in, and —
+        # through a weightless shell of the same checkpoint — which child
+        # module each component is on this family, and every width.
         self._tokenizer = tokenizer
         self._names = standardized(model)
+        self._shell = shell
 
     @classmethod
     def load(cls, spec: Any, **options: Any) -> "HooksEngine":
-        return cls(*load(spec, **options), dispatched=options.get("dispatch", True))
+        from ..nnterp.loading import load as load_shell
+
+        model, tokenizer = load(spec, **options)
+        return cls(model, tokenizer, load_shell(spec, dispatch=False), dispatched=options.get("dispatch", True))
 
     # ----------------------------------------------------------------- #
     # what the compiler asks
@@ -67,7 +73,9 @@ class HooksEngine(Engine):
         embedding that the address says have already happened by the time the
         query is the query.
         """
-        address = Address(component, layer, family=getattr(self.model.config, "model_type", None))
+        # The child's spelling is a fact about the checkpoint that nnterp
+        # knows; this engine has no nnterp handle, so it asks the shell.
+        address = address_module.locate(self._shell, component, layer)
         if address.interior:
             raise AddressError(
                 f"component {component!r} is an interior — one argument of one call "
@@ -79,10 +87,10 @@ class HooksEngine(Engine):
         return address
 
     def heads(self, address: Address) -> int:
-        return address_module.head_count(self.model.config, address)
+        return address_module.head_count(self._shell, address)
 
     def width(self, address: Address) -> int:
-        return address_module.width(self.model.config, address)
+        return address_module.width(self._shell, address)
 
     # ----------------------------------------------------------------- #
     # what the run asks
@@ -164,12 +172,34 @@ def _install(
     names: Any, tap: Tap, values: dict[str, Any], featurizers: dict[str, Any], clock: dict[str, Any]
 ) -> Any:
     """Hook one address, on the side it is addressed on."""
-    module = tap.address.resolve(names)
+    module = resolve(tap.address, names)
     if tap.address.side == "output":
         return module.register_forward_hook(intervene_at(tap, values, featurizers, names, clock))
     return module.register_forward_pre_hook(
         intervene_before(tap, values, featurizers, names, clock), with_kwargs=True
     )
+
+
+def resolve(address: Address, names: Any) -> Any:
+    """The raw module an address names, against the standardized tree. The
+    path is in nnterp's spellings, and inside a block two of them are
+    renames (`self_attn`, `mlp`) that the raw tree does not have: those go
+    through the per-layer lists `standardized()` built."""
+    segments = address.path.split(".")
+    if segments[0] != "layers":
+        return address.resolve(names)
+    layer = int(segments[1])
+    module = names.layers[layer]
+    for index, segment in enumerate(segments[2:]):
+        if index == 0 and segment == "self_attn":
+            module = names.attentions[layer]
+        elif index == 0 and segment == "mlp":
+            module = names.mlps[layer]
+        else:
+            module = getattr(module, segment, None)
+        if module is None:
+            raise AddressError(f"component {address.component!r}: {address.path!r} does not exist on this model")
+    return module
 
 
 def intervene_before(
@@ -259,7 +289,8 @@ def intervene_at(
         if not intervene.applies(tap.step, clock["step"]):
             return None
         address = tap.address
-        activation = _apply(tap, address.get(output), values, featurizers, names, clock["step"])
-        return address.put(output, activation)
+        # nnterp's accessors unwrap a tuple's first element; the same rule here
+        activation = _apply(tap, output[0] if isinstance(output, tuple) else output, values, featurizers, names, clock["step"])
+        return (activation, *output[1:]) if isinstance(output, tuple) else activation
 
     return hook

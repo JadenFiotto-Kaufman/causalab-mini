@@ -1531,3 +1531,51 @@ one mover head, L12 H28. Swapping only its *pattern* at the last token does
 nothing (logit-diff −2.396 against a −2.403 median over 32 heads); swapping
 its whole result had given +0.05. The head looks at the same place whatever
 the day is — what differs between prompts is what it reads there.
+
+
+## 23. The block is nnterp's to address
+
+The exploratory-testing pass (six agents, 24 families) found that mini's own
+component table was wrong or missing on most families outside Llama and
+GPT-2: Gemma-2/3 and OLMo-2 put a norm on a sublayer's output before adding
+it, so `block_mid` read the attention module's raw output (bit-identical to
+`attention_output`, a 17x smaller tensor than the stream); GPT-NeoX's second
+norm exists and normalizes the block *input*; BLOOM adds the residual inside
+its sublayers; Phi, NeoX and OPT spell their children differently; the
+o_proj input is `heads * head_dim` wide, not `hidden_size`, on Qwen3 and
+Gemma. Each was one more row, one more `a|b` alternative, one more override
+in mini — a second family table beside nnterp's.
+
+The decision was to have one. nnterp (PR ndif-team/nnterp#61) now addresses
+the block itself: `layers_mid`, `attentions_norm_output`, `mlps_norm_output`,
+`attentions_premix`, `mlps_activation`, `mlps_neurons` beside the accessors
+it had, each defined by a residual identity and asserted on 26 families;
+`attentions_output` / `mlps_output` are the contributions on every family;
+`block_structure` says which places a block has; `head_dim`, `qk_head_dim`,
+`num_kv_heads`, `intermediate_size` are published.
+
+Mini's table shrank accordingly. A boundary row is now the *name of the
+nnterp accessor* and its stage in the forward; the path alternatives, the
+`select`/`Lens` pair, the `_OVERRIDES` table, and the width/head-count
+config logic are gone (417 lines from 534, and every family-specific line of
+those). `locate` asks the checkpoint through nnterp — `internals[name]` is
+disabled with a reason where the family lacks the place, and `get_module`
+refuses a layer that lacks it — and writes the resolved child (`self_attn.
+o_proj`, `post_attention_layernorm`) and side into the `Address`, so the plan
+still says where in plain strings. The nnterp engine reads and writes
+boundaries through the accessor; widths and heads come off the model's
+attributes. The hooks engine, which has no nnterp handle, loads a weightless
+nnterp shell of the same checkpoint for exactly those facts and walks the
+resolved path against its own standardized tree (`self_attn` / `mlp` are
+nnterp renames, mapped to its per-layer lists). Ignored otherwise, by
+decision.
+
+Kept in mini: the four layerless boundaries (`embeddings`, `input_ids`,
+`ln_final`, `lm_head` — modules nnterp renames), and the five interiors
+(`attention_query/key/scores/probs/z`), which nnterp does not address yet.
+
+Checked through mini after the port: Gemma-2 `block_input + attention_output
+== block_mid` at 0.0; NeoX and Phi refuse `block_mid` / `mlp_input_norm` at
+compile time, citing the parallel block; Qwen3's premix width equals the
+tensor's; BLOOM's boundaries are right and only its interiors refuse. Mini's
+own suite: 435 (the `select` tests went with the mechanism, to nnterp).

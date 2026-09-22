@@ -23,6 +23,7 @@ from conftest import same_numbers
 
 from causalab_mini import ops, plan
 from causalab_mini.address import Address, _COMPONENTS
+from causalab_mini.engine.engines.hooks import engine as hooks
 from causalab_mini.engine import NNterpEngine
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.engine.engines.nnterp import engine as nnterp
@@ -33,7 +34,7 @@ GPT2 = REPO / "documents" / "gpt2_cpu.json"
 
 #: Every module boundary. The interiors are covered by `test_interior.py`.
 BOUNDARIES = [name for name, entry in _COMPONENTS.items() if entry.op is None]
-LAYERED = [name for name in BOUNDARIES if "{layer}" in _COMPONENTS[name].path]
+LAYERED = [name for name in BOUNDARIES if _COMPONENTS[name].band == 1]
 
 
 @pytest.fixture(scope="session")
@@ -154,7 +155,7 @@ def test_the_hooks_engine_translates_every_name_to_the_right_raw_module(family, 
     engine = hooks_engines[family]
     for component, expected in RAW_PATHS[family].items():
         layer = 0 if _COMPONENTS[component].band == 1 else None
-        module = engine.locate(component, layer).resolve(engine._names)
+        module = hooks.resolve(engine.locate(component, layer), engine._names)
         assert _qualified(engine.model, module) == expected, component
 
 
@@ -367,18 +368,12 @@ def test_the_token_ids_can_be_read_and_never_written(minimal_raw, data_root, mod
         Spec.model_validate(raw)
 
 
-def test_a_path_with_alternatives_needs_exactly_one_to_exist():
-    """`input_layernorm|ln_1` is a question the checkpoint answers. If it
-    answers neither, or both, the address refuses rather than guessing."""
-    from types import SimpleNamespace
-
-    from causalab_mini.address import AddressError
-
-    norm = Address("attention_input_norm", 0)
-    llama_like = SimpleNamespace(layers=[SimpleNamespace(input_layernorm="L")])
-    gpt2_like = SimpleNamespace(layers=[SimpleNamespace(ln_1="G")])
-    assert norm.resolve(llama_like) == "L" and norm.resolve(gpt2_like) == "G"
-    for broken in (SimpleNamespace(layers=[SimpleNamespace()]),
-                   SimpleNamespace(layers=[SimpleNamespace(input_layernorm="L", ln_1="G")])):
-        with pytest.raises(AddressError, match="an address needs exactly one"):
-            norm.resolve(broken)
+def test_a_childs_spelling_is_nnterps_to_know(model_engine, gpt2_engine):
+    """`input_layernorm` on Llama, `ln_1` on GPT-2: which a checkpoint has is a
+    fact nnterp reads off its module tree, and `locate` writes into the
+    address so the plan says where."""
+    assert model_engine.locate("attention_input_norm", 0).module == "input_layernorm"
+    assert gpt2_engine.locate("attention_input_norm", 0).module == "ln_1"
+    assert model_engine.locate("attention_premix", 0) == Address(
+        "attention_premix", 0, module="self_attn.o_proj", io="input"
+    )

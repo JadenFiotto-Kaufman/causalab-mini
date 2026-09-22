@@ -9,9 +9,14 @@ from causalab_mini.address import Address, AddressError
 
 def test_an_address_is_the_documents_words_and_pickles_as_such():
     one = Address("block_output", 0)
-    assert (one.path, one.side) == ("layers.0", "output")
     assert pickle.loads(pickle.dumps(one)) == one
     assert Address("lm_head").path == "lm_head"
+    # a component nnterp addresses has its module spelled by the checkpoint,
+    # which the document's words alone cannot say
+    with pytest.raises(AddressError, match="engine.locate"):
+        one.path
+    assert Address("block_output", 0, module="").path == "layers.0"
+    assert Address("block_mid", 1, module="post_attention_layernorm").path == "layers.1.post_attention_layernorm"
 
 
 def test_addresses_sort_into_forward_order():

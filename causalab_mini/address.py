@@ -1,75 +1,49 @@
 """ENGINE: a component -> where that tensor lives.
 
 This is the only file in the project that knows anything about a model's
-*internals*. Every model fact we had to encode ourselves is in the table
-below, and each one is an entry in FINDINGS.md.
+*internals*, and most of what it knows it now asks nnterp for. A component is
+one of two kinds:
 
-An address says **where**, in terms that are true of the architecture: which
-module, which side, which argument of which operation, which axis the sequence
-runs along. It does not say how to reach there, because that is a property of
-the runtime and not of the model — `engine/engines/nnterp/` reads an address
-with nnsight envoys, and another engine reads the same address differently.
-
-An `Address` stays pure data — the document's `(component, layer)`, plus, for an
-interior, the name of one `.source` operation — so it pickles, sorts, prints and
-travels in a plan. Everything a model is needed for (which module path, which
-side, where the sequence axis is, where in the forward pass it sits) is a lookup
-in `_COMPONENTS`, and the model is passed in, never held.
-
-Two kinds of address live here:
-
-* a **module boundary** — `block_output`, `lm_head`. A path is a string walked
-  by getattr against the nnterp handle, with a numeric segment taken as an
-  index: "layers.0" is `model.layers[0]`. The plan holds the string; the envoy
-  is never pickled.
+* a **module boundary** — `block_output`, `block_mid`, `mlp_activation`. These
+  are nnterp accessors (`layers_output`, `layers_mid`, `mlps_activation`): which
+  child module a family spells the place with, whether the block even has such
+  a place (a parallel-residual block has no mid-stream, a mixture of experts no
+  single activation), and every width and head count, are nnterp's to know.
+  The row here names the accessor and where it sits in the forward pass. Four
+  layerless components (`embeddings`, `ln_final`, `lm_head`, `input_ids`) are
+  modules nnterp renames, and keep a plain path.
 * an **interior** — `attention_query`. The tensor never crosses a module
   boundary, so the address is a module *plus one operation inside its forward*,
   reached through nnsight's `.source`. The operation is named by the call site
-  it appears on, and that name is resolved against the loaded model by
-  `Address.locate`, because an occurrence suffix is a property of the
-  transformers version, not of the document.
+  it appears on, resolved against the loaded model by `locate`, because an
+  occurrence suffix is a property of the transformers version. nnterp does not
+  address these yet; the rows are still ours.
+
+An `Address` stays pure data — the document's `(component, layer)`, plus what
+`locate` resolved on the checkpoint (an interior's operation name, a boundary's
+module path) — so it pickles, sorts, prints and travels in a plan.
 """
 
 from __future__ import annotations
 
-import copy
-from collections.abc import Callable, MutableMapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 
 
 @dataclass(frozen=True)
-class Lens:
-    """The escape hatch for a boundary value a path cannot describe: two
-    module-level functions, because a write needs the way back as much as a
-    read needs the way in. `get(value)` is the activation; `put(value,
-    tensor)` is `value` with the activation replaced."""
-
-    get: Callable[[Any], Any]
-    put: Callable[[Any, Any], Any]
-
-
-#: How the activation sits inside what a module boundary hands over.
-#:   None     decided from the value: a tuple's first element, or the tensor
-#:            itself — which of the two a block returns is a property of the
-#:            transformers version, so the default must not pin it
-#:   a path   indices and keys, walked in: `(1,)`, `("hidden_states",)`
-#:   a Lens   anything else
-Select = None | tuple[int | str, ...] | Lens
-
-
-@dataclass(frozen=True)
 class _Component:
-    """Everything about one component that is a fact about models."""
+    """Everything about one component that is a fact about models — or, for a
+    boundary, the name under which nnterp knows that fact."""
 
-    #: A dotted path template against the nnterp handle. `a|b` is a choice:
-    #: the one alternative that exists on this checkpoint — `input_layernorm`
-    #: on Llama, `ln_1` on GPT-2. nnterp standardizes the block, the mixer
-    #: and the MLP; it does not name their children, and the checkpoint can
-    #: say which it has without a family column here.
-    path: str
-    side: str  # "output" or "input"
     stage: int  # order within one block, in forward order
+    #: A module boundary: the nnterp accessor this component is. The accessor
+    #: knows the module path on this checkpoint, whether the place exists, and
+    #: which side of the module it is.
+    accessor: str | None = None
+    #: A layerless boundary, or an interior's module: a dotted path against
+    #: the nnterp handle, in nnterp's standardized names.
+    path: str | None = None
+    side: str = "output"  # "output" or "input"
     #: Where this tap sits relative to the layer stack: 0 before it, 1 inside
     #: it, 2 after it. The embeddings are the reason this exists — every other
     #: layerless tap is downstream of every layer, and that one is upstream of
@@ -90,33 +64,23 @@ class _Component:
     #: The attention implementation this place exists under. sdpa and flash
     #: never materialize the pattern, so there is no tensor to address.
     needs: str | None = None
-    #: The config attribute counting the heads of a head-major tensor. Such a
-    #: tensor is handed on flat, `(rows, w, heads · per_head)`, whether the
-    #: model holds it flat (`o_proj`'s input) or as two axes (the query) —
-    #: so a site may name `heads`, and a featurizer sees one width.
+    #: The tensor is head-major: "q" per query head, "kv" per key/value head
+    #: (fewer under grouped-query attention). Such a tensor is handed on flat,
+    #: `(rows, w, heads · per_head)`, whether the model holds it flat
+    #: (`o_proj`'s input) or as two axes (the query) — so a site may name
+    #: `heads`, and a featurizer sees one width.
     heads: str | None = None
     #: Its last axis is the *keys* of the padded batch, not a feature width:
     #: true of the attention pattern and the scores under it. A value read
     #: here only means something beside a prompt laid out the same way.
     keys: bool = False
     seq_axis: int = 1  # which axis of the tensor the sequence runs along
-    width: str | None = None  # the nnterp handle attribute holding this tap's width
+    #: The model attribute nnterp publishes this tap's width as; "head_dim"
+    #: and "qk_head_dim" are per head and multiplied out.
+    width: str | None = None
     #: A tensor that may be read and never written: the token ids are the
     #: model's input, and swapping a float activation into them means nothing.
     read_only: bool = False
-    #: At a module boundary: where in the boundary's value the activation is.
-    select: Select = None
-
-
-#: The exceptions, and only those: `(config.model_type, component)` -> the
-#: fields of the row that differ on that family. The `a|b` paths cover a
-#: child that is *named* differently, because the checkpoint can say which
-#: it has; this covers the same name handing over a different *structure*,
-#: which nothing about existence can distinguish. Empty until a model needs
-#: it — e.g. a block returning `(router_logits, hidden)` would be
-#:
-#:     ("some_moe", "block_output"): {"select": (1,)},
-_OVERRIDES: dict[tuple[str, str], dict[str, Any]] = {}
 
 
 _COMPONENTS = {
@@ -133,8 +97,8 @@ _COMPONENTS = {
         op="attention_interface(",
         arg=1,
         seq_axis=2,
-        heads="num_attention_heads",
-        width="head_dim",
+        heads="q",
+        width="qk_head_dim",
     ),
     "attention_key": _Component(
         # The same call as the query, argument 2: the keys *before* GQA's
@@ -147,8 +111,8 @@ _COMPONENTS = {
         op="attention_interface(",
         arg=2,
         seq_axis=2,
-        heads="num_key_value_heads",
-        width="head_dim",
+        heads="kv",
+        width="qk_head_dim",
     ),
     "attention_scores": _Component(
         # Inside the eager attention function the call dispatches to: the
@@ -164,7 +128,7 @@ _COMPONENTS = {
         arg=0,
         seq_axis=2,
         needs="eager",
-        heads="num_attention_heads",
+        heads="q",
         keys=True,
     ),
     "attention_probs": _Component(
@@ -180,7 +144,7 @@ _COMPONENTS = {
         arg=None,
         seq_axis=2,
         needs="eager",
-        heads="num_attention_heads",
+        heads="q",
         keys=True,
     ),
     "attention_z": _Component(
@@ -195,77 +159,42 @@ _COMPONENTS = {
         handle="output",
         arg=0,
         seq_axis=1,
-        heads="num_attention_heads",
+        heads="q",
         width="head_dim",
     ),
     "input_ids": _Component(
-        # The model's input: integer token ids, (batch, seq), no width axis.
         path="embed_tokens", side="input", stage=0, band=0, read_only=True
     ),
     "embeddings": _Component(
-        # The vector the token ids look up. Band 0: it is the one tap upstream
-        # of the whole stack.
-        path="embed_tokens",
-        side="output",
-        stage=1,
-        band=0,
-        width="hidden_size",
+        # The embedding table's output, before layer 0: `block_input` at layer 0
+        # is the same tensor, and this is the one address for it that names
+        # no layer.
+        path="embed_tokens", stage=1, band=0, width="hidden_size",
     ),
-    "block_input": _Component(
-        path="layers.{layer}", side="input", stage=0, width="hidden_size"
-    ),
-    "attention_input_norm": _Component(
-        # The first norm's output — what the mixer actually consumes.
-        path="layers.{layer}.input_layernorm|layers.{layer}.ln_1",
-        side="output", stage=1, width="hidden_size",
-    ),
+    # --- the block, as nnterp addresses it. Definitions (nnterp's, asserted
+    # there on 26 families): block_mid = block_input + attention_output,
+    # block_output = block_mid + mlp_output, mlp_input_norm = mlp_input.
+    "block_input": _Component(accessor="layers_input", stage=0, width="hidden_size"),
+    "attention_input_norm": _Component(accessor="attentions_norm_output", stage=1, width="hidden_size"),
     "attention_premix": _Component(
-        # The output projection's *input*: the heads' results, merged
-        # head-major and not yet mixed — where a per-head edit belongs.
-        path="attentions.{layer}.o_proj|attentions.{layer}.c_proj",
-        side="input", stage=6, width="hidden_size", heads="num_attention_heads",
+        # every head's result side by side: heads * head_dim wide, which is
+        # not hidden_size on Qwen3 or Gemma
+        accessor="attentions_premix", stage=6, width="head_dim", heads="q",
     ),
-    "attention_output": _Component(
-        # The mixer's contribution to the residual stream, before it is added:
-        # block_mid = block_input + attention_output.
-        path="attentions.{layer}", side="output", stage=7, width="hidden_size"
-    ),
-    "block_mid": _Component(
-        # The residual stream after the mixer is added: the second norm's input.
-        path="layers.{layer}.post_attention_layernorm|layers.{layer}.ln_2",
-        side="input", stage=8, width="hidden_size",
-    ),
-    "mlp_input_norm": _Component(
-        path="layers.{layer}.post_attention_layernorm|layers.{layer}.ln_2",
-        side="output", stage=9, width="hidden_size",
-    ),
-    "mlp_input": _Component(
-        path="mlps.{layer}", side="input", stage=10, width="hidden_size"
-    ),
-    "mlp_activation": _Component(
-        # The activation function's output. No width: nnterp publishes no
-        # intermediate size, which refuses a featurizer here.
-        path="mlps.{layer}.act_fn|mlps.{layer}.act", side="output", stage=11, width="intermediate_size",
-    ),
+    "attention_output": _Component(accessor="attentions_output", stage=7, width="hidden_size"),
+    "block_mid": _Component(accessor="layers_mid", stage=8, width="hidden_size"),
+    "mlp_input_norm": _Component(accessor="mlps_norm_output", stage=9, width="hidden_size"),
+    "mlp_input": _Component(accessor="mlps_input", stage=10, width="hidden_size"),
+    "mlp_activation": _Component(accessor="mlps_activation", stage=11, width="intermediate_size"),
     "mlp_neuron_output": _Component(
-        # The down-projection's input: act(gate)·up on a gated MLP, and the
-        # activation itself on GPT-2, which has no gate — the same *place*,
-        # a different tensor, and the table says so rather than hiding it.
-        path="mlps.{layer}.down_proj|mlps.{layer}.c_proj", side="input", stage=12, width="intermediate_size",
+        # act(gate)·up on a gated MLP, the activation itself on GPT-2, which
+        # has no gate — the same place, a different tensor
+        accessor="mlps_neurons", stage=12, width="intermediate_size",
     ),
-    "mlp_output": _Component(
-        # block_output = block_mid + mlp_output.
-        path="mlps.{layer}", side="output", stage=13, width="hidden_size"
-    ),
-    "block_output": _Component(
-        path="layers.{layer}", side="output", stage=14, width="hidden_size"
-    ),
-    "ln_final": _Component(
-        path="ln_final", side="output", stage=0, band=2, width="hidden_size"
-    ),
-    "lm_head": _Component(
-        path="lm_head", side="output", stage=1, band=2, width="vocab_size"
-    ),
+    "mlp_output": _Component(accessor="mlps_output", stage=13, width="hidden_size"),
+    "block_output": _Component(accessor="layers_output", stage=14, width="hidden_size"),
+    "ln_final": _Component(path="ln_final", stage=0, band=2, width="hidden_size"),
+    "lm_head": _Component(path="lm_head", stage=1, band=2, width="vocab_size"),
 }
 
 
@@ -275,15 +204,20 @@ class AddressError(ValueError):
 
 @dataclass(frozen=True)
 class Address:
-    """One tap, as the document named it — plus, for an interior, the operation
-    `locate` resolved against the model."""
+    """One tap, as the document named it — plus what `locate` resolved against
+    the model: an interior's operation, a boundary's module path."""
 
     component: str
     layer: int | None = None
     op: str | None = None
-    #: `config.model_type`, when the engine that located this knows it. A
-    #: string, so the plan stays data; it selects a row's overrides.
-    family: str | None = None
+    #: For a boundary nnterp addresses: the child module this checkpoint
+    #: spells it with, relative to the layer (`post_attention_layernorm`,
+    #: `self_attn.o_proj`, "" for the layer itself). Filled by `locate`; a
+    #: plan holds the string, so an engine without nnterp's accessors can
+    #: still walk to the module.
+    module: str | None = None
+    #: For the same boundaries: which side of that module, as nnterp knows it.
+    io: str | None = None
 
     def __post_init__(self) -> None:
         if self.component not in _COMPONENTS:
@@ -293,37 +227,17 @@ class Address:
 
     @property
     def _entry(self) -> _Component:
-        entry = _COMPONENTS[self.component]
-        differs = _OVERRIDES.get((self.family or "", self.component))
-        return replace(entry, **differs) if differs else entry
+        return _COMPONENTS[self.component]
 
     @property
     def where(self) -> tuple[str, int | None, str | None]:
-        """The place, without the family it was located on. Equal across
-        families whenever the table needed no exception for either."""
+        """The place, as the document said it and the checkpoint resolved it."""
         return (self.component, self.layer, self.op)
 
-    def get(self, value: Any) -> Any:
-        """The activation inside a boundary's value."""
-        select = self._entry.select
-        if select is None:
-            return value[0] if isinstance(value, tuple) else value
-        found = select.get(value) if isinstance(select, Lens) else _walk(value, select)
-        if not hasattr(found, "shape"):
-            raise AddressError(
-                f"component {self.component!r} on {self.family!r}: select {select!r} "
-                f"reaches a {type(found).__name__}, not a tensor"
-            )
-        return found
-
-    def put(self, value: Any, tensor: Any) -> Any:
-        """`value` with the activation replaced — what a write hands back."""
-        select = self._entry.select
-        if select is None:
-            return (tensor, *value[1:]) if isinstance(value, tuple) else tensor
-        if isinstance(select, Lens):
-            return select.put(value, tensor)
-        return _rebuild(value, select, tensor)
+    @property
+    def accessor(self) -> str | None:
+        """The nnterp accessor this component is, at a boundary nnterp addresses."""
+        return self._entry.accessor
 
     @property
     def call_site(self) -> str | None:
@@ -333,20 +247,30 @@ class Address:
 
     @property
     def width_attribute(self) -> str | None:
-        """The nnterp handle attribute holding this tap's width, if it has
+        """The model attribute nnterp publishes this tap's width as, if it has
         one. Names an attribute rather than reading it, because reading is the
         engine's job."""
         return self._entry.width
 
     @property
     def path(self) -> str:
-        """The module, as a dotted path against the nnterp handle."""
-        return self._entry.path.format(layer=self.layer)
+        """The module, as a dotted path against the nnterp handle, in nnterp's
+        standardized names. For a boundary nnterp addresses this is known
+        only once `locate` has asked the checkpoint."""
+        entry = self._entry
+        if entry.path is not None:
+            return entry.path.format(layer=self.layer)
+        if self.module is None:
+            raise AddressError(
+                f"component {self.component!r}: its module is a fact about the checkpoint; "
+                "build the address with engine.locate(...)"
+            )
+        return f"layers.{self.layer}" + (f".{self.module}" if self.module else "")
 
     @property
     def side(self) -> str:
         """`input` or `output` — of the module, or of the operation."""
-        return self._entry.side
+        return self.io or self._entry.side
 
     @property
     def interior(self) -> bool:
@@ -377,8 +301,8 @@ class Address:
         return self._entry.keys
 
     @property
-    def heads_attribute(self) -> str | None:
-        """The config attribute counting this tensor's heads, if it has any."""
+    def heads_kind(self) -> str | None:
+        """"q" or "kv": which heads this tensor is per, if it is per head."""
         return self._entry.heads
 
     @property
@@ -411,101 +335,67 @@ class Address:
 
         The path is written in nnterp's standardized names. An engine that
         does not have those names translates first — how much translating that
-        takes is a measurement of what the standardization is worth. Where
-        the path offers alternatives, exactly one must exist here.
+        takes is a measurement of what the standardization is worth.
         """
-        found = []
-        for candidate in self.path.split("|"):
-            target = root
-            try:
-                for segment in candidate.split("."):
-                    target = target[int(segment)] if segment.isdigit() else getattr(target, segment)
-            except (AttributeError, IndexError, KeyError, TypeError):
-                continue
-            found.append(target)
-        if len(found) != 1:
+        target = root
+        try:
+            for segment in self.path.split("."):
+                target = target[int(segment)] if segment.isdigit() else getattr(target, segment)
+        except (AttributeError, IndexError, KeyError, TypeError) as error:
             raise AddressError(
-                f"component {self.component!r}: {len(found)} of {self.path.split('|')} "
-                "exist on this model; an address needs exactly one"
-            )
-        return found[0]
+                f"component {self.component!r}: {self.path!r} does not exist on this model"
+            ) from error
+        if target is None:
+            raise AddressError(f"component {self.component!r}: {self.path!r} is None on this model")
+        return target
 
 
-def head_count(config: Any, address: Address) -> int:
-    """How many heads the tensor at `address` has. Key-head space is
-    narrower than the query's on a model that groups, and a config that
-    does not group does not say so."""
-    attribute = address.heads_attribute
-    if attribute is None:
-        raise AddressError(f"component {address.component!r} is not a per-head tensor")
-    return int(getattr(config, attribute, None) or config.num_attention_heads)
-
-
-def width(config: Any, address: Address) -> int:
-    """The feature width at `address`, off the config — the one place that
-    knows how each family spells it."""
-    attribute = address.width_attribute
-    if attribute is None:
-        raise AddressError(
-            f"the width of {address.component!r} is not derivable from a config: "
-            "it depends on the batch (the attention pattern's key axis) or is not a tensor's"
-        )
-    if attribute == "head_dim":
-        # a per-head tensor is handed on flat: every head, side by side
-        return head_count(config, address) * head_dim(config)
-    if attribute == "intermediate_size":
-        # GPT-2 calls it n_inner, and leaves it None to mean four times
-        # hidden. Asked first, because a GPT-2 config can also carry a stray
-        # `intermediate_size` its modules never read — the tiny test
-        # checkpoint says 37 there and builds 128-wide MLPs.
-        if hasattr(config, "n_inner"):
-            return int(config.n_inner or 4 * config.hidden_size)
-        return int(config.intermediate_size)
-    return int(getattr(config, attribute))
-
-
-def head_dim(config: Any) -> int:
-    """One head's width: the config's own `head_dim` where it has one (it is
-    not always hidden/heads), else the quotient."""
-    return int(getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads)
-
-
-def check(config: Any, address: Address) -> None:
-    """Refuse a place this checkpoint, as loaded, does not have."""
-    have = getattr(config, "_attn_implementation", None)
+def locate(model: Any, component: str, layer: int | None) -> Address:
+    """The address of `(component, layer)` on a loaded nnterp model, or a
+    refusal: a boundary nnterp has no accessor for on this family, or the
+    pattern under an attention implementation that never forms it. What
+    nnterp resolved — the child's spelling on this checkpoint — is written
+    into the address, so the plan says where and any engine can walk there."""
+    address = Address(component, layer)
+    have = getattr(model.config, "_attn_implementation", None)
     if address.needs is not None and have != address.needs:
         raise AddressError(
-            f"component {address.component!r} exists only under {address.needs!r} attention, "
+            f"component {component!r} exists only under {address.needs!r} attention, "
             f"and this model runs {have!r}: say \"attn_implementation\": \"{address.needs}\" "
             "in the document's model block"
         )
+    if address.accessor is None:
+        return address
+    accessor = model.internals[address.accessor]
+    if accessor.disabled_reason is not None:
+        raise AddressError(f"component {component!r}: {accessor.disabled_reason}")
+    accessor.get_module(layer or 0)  # a layer that lacks the place is refused here, by nnterp
+    return Address(component, layer, module=accessor.address.module, io=accessor.io_type.value)
 
 
-def _walk(value: Any, path: tuple[int | str, ...]) -> Any:
-    for step in path:
-        try:
-            value = value[step]
-        except (IndexError, KeyError, TypeError) as error:
-            raise AddressError(f"select {path!r}: no {step!r} in a {type(value).__name__}") from error
-    return value
+def head_count(model: Any, address: Address) -> int:
+    """How many heads the tensor at `address` has, off what nnterp publishes."""
+    kind = address.heads_kind
+    if kind is None:
+        raise AddressError(f"component {address.component!r} is not a per-head tensor")
+    return int(model.num_heads if kind == "q" else model.num_kv_heads)
 
 
-def _rebuild(value: Any, path: tuple[int | str, ...], tensor: Any) -> Any:
-    """`value` with the thing at `path` replaced, containers rebuilt on the
-    way out: a tuple is immutable, and the caller's value is not ours to
-    edit in place."""
-    if not path:
-        return tensor
-    step, rest = path[0], path[1:]
-    inner = _rebuild(_walk(value, (step,)), rest, tensor)
-    if isinstance(value, tuple):
-        items = [*value[:step], inner, *value[step + 1 :]]  # type: ignore[index, operator]
-        return type(value)(*items) if hasattr(value, "_fields") else tuple(items)
-    if isinstance(value, (list, MutableMapping)):
-        copied = copy.copy(value)
-        copied[step] = inner  # type: ignore[index]
-        return copied
-    raise AddressError(f"select {path!r}: cannot rebuild a {type(value).__name__}")
+def width(model: Any, address: Address) -> int:
+    """The feature width at `address`, off what nnterp publishes. A per-head
+    tensor is handed on flat: every head, side by side."""
+    attribute = address.width_attribute
+    if attribute is None:
+        raise AddressError(
+            f"the width of {address.component!r} is not a fact about the model: "
+            "it depends on the batch (the attention pattern's key axis) or is not a tensor's"
+        )
+    value = getattr(model, attribute)
+    if value is None:
+        raise AddressError(f"nnterp could not find {attribute!r} for this model")
+    if attribute in ("head_dim", "qk_head_dim"):
+        return head_count(model, address) * int(value)
+    return int(value)
 
 
 def describe() -> dict[str, dict[str, Any]]:
@@ -514,21 +404,16 @@ def describe() -> dict[str, dict[str, Any]]:
     description of it, so it cannot drift."""
     return {
         name: {
+            "accessor": entry.accessor,
             "path": entry.path,
             "side": entry.side,
             "interior": entry.op is not None,
-            "layered": "{layer}" in entry.path,
+            "layered": entry.band == 1,
             "seq_axis": entry.seq_axis,
             "width": entry.width,
             "read_only": entry.read_only,
             "heads": entry.heads is not None,
             "needs": entry.needs,
-            # the families this row has an exception for, and what differs
-            "overrides": {
-                family: {key: repr(value) for key, value in differs.items()}
-                for (family, component), differs in _OVERRIDES.items()
-                if component == name
-            },
         }
         for name, entry in _COMPONENTS.items()
     }

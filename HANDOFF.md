@@ -106,11 +106,14 @@ These are load-bearing. Several tests enforce them.
    tokenizer. `tests/test_structure.py` is an AST tripwire over every
    `with ….trace(`/`.session(` block, package-wide; it has a vacuity guard.
 6. **`address.py` is the only file that knows anything about model
-   internals**, and it says *where* only — which module path (in nnterp's
-   standardized names), which side, which axis the sequence runs along, what
-   order taps go in. Reaching there is the engine's
-   (`engine/engines/nnterp/engine.py`'s `read`/`write`). `ops/` knows nothing
-   about models at all.
+   internals**, and since FINDINGS §23 most of what it knows it asks nnterp
+   for: a boundary inside the block is the *name of a nnterp accessor* plus
+   its stage in the forward, and which child module that is on a checkpoint,
+   whether the block has the place at all, and every width and head count
+   are nnterp's (`locate` writes the resolved child and side into the
+   `Address`). Interiors and the four layerless modules are still mini's
+   rows. Reaching there is the engine's (`engine/engines/nnterp/engine.py`'s
+   `read`/`write`). `ops/` knows nothing about models at all.
 7. **An engine is seven members and no more**: `load`, then `tokenizer`,
    `num_layers`, `locate` and `width` — what the compiler asks of a runtime —
    then `execute` and `forward`, what the run asks.

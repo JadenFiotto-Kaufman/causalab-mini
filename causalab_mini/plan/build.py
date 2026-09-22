@@ -72,7 +72,7 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
     for name, site in spec.sites.items():
         if site.units is not None:
             count, take, what = engine.width(addresses[name]), site.units, "unit"
-        elif addresses[name].heads_attribute is not None:
+        elif addresses[name].heads_kind is not None:
             count, take, what = engine.heads(addresses[name]), site.heads, "head"
         else:
             continue
