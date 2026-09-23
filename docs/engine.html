@@ -94,7 +94,7 @@
           sits on the node that produced it, and a node's path in the tree is its
           path on disk.</p>
 
-          <h2>At a glance</h2>
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/explain.py:32 prints the compiled tree.
                ran 2026-09-23, this box, CPU, fp32 -->
@@ -113,7 +113,7 @@
           <p>That tree is the plan. Everything below is what put it there and
           what walks it.</p>
 
-          <h2>The pipeline</h2>
+          <h2 id="the-pipeline">The pipeline <a class="anchor" href="#the-pipeline" aria-label="Link to this section">#</a></h2>
 
           <figure>
             <svg viewBox="0 0 460 384" role="img" aria-labelledby="eng-t eng-d" width="460">
@@ -186,7 +186,7 @@
             writes itself to disk.</figcaption>
           </figure>
 
-          <h2>One document, all the way through</h2>
+          <h2 id="one-document-all-the-way-through">One document, all the way through <a class="anchor" href="#one-document-all-the-way-through" aria-label="Link to this section">#</a></h2>
 
           <p>The document is
           <a href="use-cases/layer-sweep.html">the smallest real experiment</a> in
@@ -196,7 +196,7 @@
           <a href="index.html">home page</a> shows it in full; what follows is
           what happens to it.</p>
 
-          <h3>1. Compile</h3>
+          <h3 id="1-compile">1. Compile <a class="anchor" href="#1-compile" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/build.py:51-107 -->
           <p><code>build_spec</code> works in the order of the file. Each site's
@@ -242,7 +242,7 @@
             inside the featurizer's space.</strong></li>
           </ul>
 
-          <h3>2. The plan</h3>
+          <h3 id="2-the-plan">2. The plan <a class="anchor" href="#2-the-plan" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/plan.py:1-38 -->
           <p>A <code>Plan</code> is a dict of named steps, and is itself a step,
@@ -271,7 +271,7 @@
           nested plan gets its own <code>outputs</code> and the same featurizers,
           so sweep points cannot see each other's values.</p>
 
-          <h3>3. The walk</h3>
+          <h3 id="3-the-walk">3. The walk <a class="anchor" href="#3-the-walk" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/engine/steps.py:67-86 -->
           <p><code>steps.run(engine, step)</code> is the whole executor: a
@@ -288,7 +288,7 @@
           because a fit differentiates them, and recorded detached, because what
           comes home should not carry a graph.</p>
 
-          <h3>4. The per-forward frame</h3>
+          <h3 id="4-the-per-forward-frame">4. The per-forward frame <a class="anchor" href="#4-the-per-forward-frame" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/engine/steps.py:294-318 -->
           <p>Positions are resolved <em>here</em> — inside the session, in the
@@ -330,7 +330,7 @@
             batched run names the row an author would count to.</p>
           </div>
 
-          <h3>5. One forward</h3>
+          <h3 id="5-one-forward">5. One forward <a class="anchor" href="#5-one-forward" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/engine/base.py:120-128 -->
           <p><code>engine.forward(forward, values, featurizers)</code> is the only
@@ -341,7 +341,7 @@
           earlier step published — and the engine cannot tell the difference and
           does not need to.</p>
 
-          <h3>6. Home</h3>
+          <h3 id="6-home">6. Home <a class="anchor" href="#6-home" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/plan.py:399-415 -->
           <p><code>results_of</code> flattens a run into
@@ -389,7 +389,7 @@ out/logit_diff.json</code></pre>
  "served_dtype": "torch.float32"
 }</code></pre>
 
-          <h2>The engine contract</h2>
+          <h2 id="the-engine-contract">The engine contract <a class="anchor" href="#the-engine-contract" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/engine/base.py:50-128 -->
           <p>Nine names: eight members, and <code>model</code>, which is an
@@ -428,7 +428,7 @@ out/logit_diff.json</code></pre>
           test asserts the set of public names each engine class overrides, on
           both engines, so a member added quietly fails the suite.</p>
 
-          <h2>What both engines share below <code>forward</code></h2>
+          <h2 id="what-both-engines-share-below-forward">What both engines share below <code>forward</code> <a class="anchor" href="#what-both-engines-share-below-forward" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/ops/intervene.py:1-23 -->
           <p><code>ops/intervene.py</code> knows nothing about layers, models or
@@ -464,7 +464,7 @@ out/logit_diff.json</code></pre>
           <code>linalg.solve</code> refuses the pair. A featurizer declares its
           own dtype, fp32, and this is where that declaration is kept.</p>
 
-          <h2>One session</h2>
+          <h2 id="one-session">One session <a class="anchor" href="#one-session" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/engine/engines/nnterp/engine.py:1-6 -->
           <p>The nnterp engine's whole request is one
@@ -565,7 +565,7 @@ out/logit_diff.json</code></pre>
           document that cannot be addressed fails at compile time, not inside
           someone else's process.</p>
 
-          <h2>The reference engine</h2>
+          <h2 id="the-reference-engine">The reference engine <a class="anchor" href="#the-reference-engine" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/engine/engines/hooks/engine.py:1-13 -->
           <p>The second engine is a plain <code>AutoModelForCausalLM</code> and
@@ -647,7 +647,7 @@ out/logit_diff.json</code></pre>
           loop is wrapped in <code>try/finally</code>, and a test asserts the
           module's <code>_forward_hooks</code> count is unchanged afterwards.</p>
 
-          <h2>Batching windows</h2>
+          <h2 id="batching-windows">Batching windows <a class="anchor" href="#batching-windows" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/engine/steps.py:245-291; causalab_mini/engine/base.py:113-116 -->
           <p><code>batch_size</code> bounds how many rows one model call holds. It
@@ -698,7 +698,7 @@ out/logit_diff.json</code></pre>
           the backward. A fit's memory knob is <code>pairs</code>. Windowing does
           bound the held-out pass, which runs under <code>no_grad</code>.</p>
 
-          <h2>A fit is the same plan, repeatedly</h2>
+          <h2 id="a-fit-is-the-same-plan-repeatedly">A fit is the same plan, repeatedly <a class="anchor" href="#a-fit-is-the-same-plan-repeatedly" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/plan.py:265-288; causalab_mini/engine/steps.py:499-507 -->
           <p>Nothing about the training loop is a second engine. A
@@ -767,7 +767,7 @@ out/logit_diff.json</code></pre>
           <code>root.steps["fit"].epochs[0][1].results["iia"]</code>. On a long
           fit that is a real amount of small tensors coming home.</p>
 
-          <h2>What the tests pin</h2>
+          <h2 id="what-the-tests-pin">What the tests pin <a class="anchor" href="#what-the-tests-pin" aria-label="Link to this section">#</a></h2>
 
           <p>486 tests, and these are the ones about the seam.</p>
 
@@ -834,7 +834,7 @@ $ jq -c '[.[].value]' out/nnterp/logit_diff.json out/hooks/logit_diff.json
           </div>
 
           <div class="seealso">
-            <h2>See also</h2>
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
             <ul>
               <li><a href="standardization.html">Standardization</a> — what nnterp
                 names for the nnterp engine, and what the hooks engine had to

@@ -92,7 +92,7 @@
           <em>cut of the finished continuation</em> — the last token of a word the model said
           — which is a place a row may not have, and the run reports which rows had it.</p>
 
-          <h2>At a glance</h2>
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
 
           <!-- ran 2026-09-23, CPU, fp32; 22 lines, the first point and the last -->
           <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/generate_probe.json
@@ -118,7 +118,7 @@
           the prompt frame at <code>pos={index:-1}</code>, so it happens once, at the prefill;
           the read is <code>@step 2</code>, two greedy tokens later.</p>
 
-          <h2>The decode is a bound, not a stop</h2>
+          <h2 id="the-decode-is-a-bound-not-a-stop">The decode is a bound, not a stop <a class="anchor" href="#the-decode-is-a-bound-not-a-stop" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/engine/engines/nnterp/engine.py:121 — min_new_tokens=decode,
                max_new_tokens=decode, do_sample=False -->
@@ -146,7 +146,7 @@
           boundary the decode never saw, and then a span found in the re-encoded text would
           name tokens that never existed.</p>
 
-          <h2>The two halves of the frame</h2>
+          <h2 id="the-two-halves-of-the-frame">The two halves of the frame <a class="anchor" href="#the-two-halves-of-the-frame" aria-label="Link to this section">#</a></h2>
 
           <p>A read may name any cut of the continuation, because by the time the run scores
           it the whole continuation exists. A write happens <em>during</em> the decode, so it
@@ -182,7 +182,7 @@ Traceback (most recent call last):
 pydantic_core._pydantic_core.ValidationError: 1 validation error for Spec
   Value error, interventions.steer: write &#x27;push&#x27;: a write in the continuation frame is at a step the decode has reached — {&#x27;index&#x27;: k} with k &gt;= 0, or {&#x27;all&#x27;: true}. {generated index:-1} names a cut of the finished continuation, which is something to read and not something to write into</code></pre>
 
-          <h2>Reading at a step: <code>generate_probe</code></h2>
+          <h2 id="reading-at-a-step-generate-probe">Reading at a step: <code>generate_probe</code> <a class="anchor" href="#reading-at-a-step-generate-probe" aria-label="Link to this section">#</a></h2>
 
           <details class="listing">
             <summary><code>documents/v2/generate_probe.json</code> <span class="what">— the whole document</span></summary>
@@ -353,7 +353,7 @@ out/b-gen/index=2/generated.safetensors</code></pre>
   &quot;unit&quot;: &quot;probability&quot;,
 …</code></pre>
 
-          <h3>The generated ids come home</h3>
+          <h3 id="the-generated-ids-come-home">The generated ids come home <a class="anchor" href="#the-generated-ids-come-home" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/engine/engines/nnterp/engine.py:126 —
                values[f"{forward.name}.generated"] = tracer.result[:, prompt:].clone() -->
@@ -369,7 +369,7 @@ out/b-gen/index=2/generated.safetensors</code></pre>
           probabilities move by up to 1.4e-07 at step 0, where the write lands, and by up to
           4.6e-09 at steps 1 and 2. Small, and not zero.</p>
 
-          <h2>Reading where the model said something: <code>generated_answer</code></h2>
+          <h2 id="reading-where-the-model-said-something-generated-answer">Reading where the model said something: <code>generated_answer</code> <a class="anchor" href="#reading-where-the-model-said-something-generated-answer" aria-label="Link to this section">#</a></h2>
 
           <details class="listing">
             <summary><code>documents/v2/generated_answer.json</code> <span class="what">— the whole document</span></summary>
@@ -547,7 +547,7 @@ out/b-genans/p_answer.json</code></pre>
             fails to resolve rather than an error.</p>
           </div>
 
-          <h2>Writing at every step: steering</h2>
+          <h2 id="writing-at-every-step-steering">Writing at every step: steering <a class="anchor" href="#writing-at-every-step-steering" aria-label="Link to this section">#</a></h2>
 
           <p>No document in <code>documents/</code> writes in the continuation frame. This one
           was written for this page and run here; it is not part of the corpus. It reads the
@@ -696,7 +696,7 @@ steered.generated    [4598,  5448, 31926]   'Handler wurden𝓝'</code></pre>
           — the step-0 probabilities differ — but not by enough to move the argmax on this
           checkpoint.</p>
 
-          <h2>What is refused</h2>
+          <h2 id="what-is-refused">What is refused <a class="anchor" href="#what-is-refused" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/spec.py:678, 685, 702, 705 — all four checked on the Spec,
                so no model is loaded to find out -->
@@ -731,7 +731,7 @@ steered.generated    [4598,  5448, 31926]   'Handler wurden𝓝'</code></pre>
           </div>
 
           <div class="seealso">
-            <h2>See also</h2>
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
             <ul>
               <li><a href="../positions.html">Positions</a> — the whole <code>Where</code>
                   vocabulary the continuation frame is one field of, and what

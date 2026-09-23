@@ -97,7 +97,7 @@
           The table is a floor and not a fence: a name mini has never heard of but
           <code>model.internals</code> has is addressable as well.</p>
 
-          <h2>At a glance</h2>
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
 
           <p><code>explain</code> compiles a document against the model, with no
           weights, and prints the place every read and every write resolved to.
@@ -129,7 +129,7 @@
           layer because there is only one of it. The whole document, and what it
           produces, is <a href="#worked">at the bottom of this page</a>.</p>
 
-          <h2 id="site">The <code>site</code> field</h2>
+          <h2 id="site">The <code>site</code> field <a class="anchor" href="#site" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/spec.py:76-108 -->
           <table>
@@ -163,7 +163,7 @@
           <p>A layer outside the model's stack is refused when the document is compiled,
           by number: <code>site 'target': layer 24 is outside the model's 16 layers</code>.</p>
 
-          <h2 id="components">The component list</h2>
+          <h2 id="components">The component list <a class="anchor" href="#components" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/address.py:108-221 -->
           <p>What each name is, and what the tensor at it is. <em>Width</em> is the
@@ -272,7 +272,7 @@
           because pushing a tensor through the final norm and the head only means
           something for a tensor those two expect.</p>
 
-          <h3>Where each one lands on a checkpoint</h3>
+          <h3 id="where-each-one-lands-on-a-checkpoint">Where each one lands on a checkpoint <a class="anchor" href="#where-each-one-lands-on-a-checkpoint" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/address.py:417-468: `locate` stamps nnterp's module, io
                and rank into the address -->
@@ -351,7 +351,7 @@ logits                 rank=(2, 1002) io=output  llama=''                       
             <code>mlp_neuron_output</code>, all of which are read on the way in.</p>
           </div>
 
-          <h2 id="whole-model">The whole-model places</h2>
+          <h2 id="whole-model">The whole-model places <a class="anchor" href="#whole-model" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/document.py:56 and 188-194 -->
           <p>Five components are one per model and take no <code>layers</code>:
@@ -379,7 +379,7 @@ logits                 rank=(2, 1002) io=output  llama=''                       
           layer 0 on a model with nothing between them, and not on GPT-2, which adds
           position embeddings.</p>
 
-          <h3><code>lm_head</code> and <code>logits</code></h3>
+          <h3 id="lm-head-and-logits"><code>lm_head</code> and <code>logits</code> <a class="anchor" href="#lm-head-and-logits" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/address.py:215-220; nnterp/nnterp/rename_utils.py:900-904 -->
           <p>nnterp carries the head's output and the model's output as two rows,
@@ -435,7 +435,7 @@ for name in ("lm_head", "logits"):
 logits module= '' io= output
    -- component 'logits': '' does not exist on this model</code></pre>
 
-          <h2 id="attention">The attention pattern, and the scores under it</h2>
+          <h2 id="attention">The attention pattern, and the scores under it <a class="anchor" href="#attention" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/address.py:139-169 -->
           <p>Two places name the attention matrix, and they are on either side of the
@@ -496,7 +496,7 @@ logits module= '' io= output
           <code>documents/v2/attention_pattern_patching.json</code> runs on. See
           <a href="use-cases/attention-pattern.html">Attention pattern</a>.</p>
 
-          <h2 id="interiors">Inside a forward</h2>
+          <h2 id="interiors">Inside a forward <a class="anchor" href="#interiors" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/address.py:16-26 -->
           <p>Four components — <code>attention_query</code>,
@@ -557,7 +557,7 @@ Address(component='attention_z', layer=0, op='attention_interface_1', module=Non
             engines.</p>
           </div>
 
-          <h2 id="features">Heads and units</h2>
+          <h2 id="features">Heads and units <a class="anchor" href="#features" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/shapes.py:166-201 -->
           <p><code>heads</code> and <code>units</code> are one mechanism at two grains.
@@ -610,7 +610,7 @@ Address(component='attention_z', layer=0, op='attention_interface_1', module=Non
           <p>A head or unit index past the end is refused when the document is compiled,
           against the real count: <code>site 'target': head 3 of a 2-head tensor</code>.</p>
 
-          <h2 id="asking">Asking a model what it has</h2>
+          <h2 id="asking">Asking a model what it has <a class="anchor" href="#asking" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/cli.py:96-124 -->
           <p><code>causalab-mini vocab</code> prints the table itself — the names, which
@@ -670,7 +670,7 @@ hf-internal-testing/tiny-random-LlamaForCausalLM via nnterp: 2 layers, padding_s
             <code>None</code> for every accessor, without running the model.</p>
           </div>
 
-          <h2 id="unavailable">When a place is not there</h2>
+          <h2 id="unavailable">When a place is not there <a class="anchor" href="#unavailable" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/address.py:458-460; nnterp/nnterp/rename_utils.py:644-670 -->
           <p>Every refusal about existence is nnterp's <code>unavailable_on</code>,
@@ -746,7 +746,7 @@ hf-internal-testing/tiny-random-GptOssForCausalLM via nnterp: 2 layers, padding_
             move one side only.</p>
           </div>
 
-          <h2 id="custom">A name only nnterp knows</h2>
+          <h2 id="custom">A name only nnterp knows <a class="anchor" href="#custom" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/address.py:34-36 and 432-438;
                nnterp/nnterp/rename_utils.py:123-128 -->
@@ -802,7 +802,7 @@ except AddressError as refusal:
             <code>engine.execute(...)</code> as the CLI does.</p>
           </div>
 
-          <h2 id="refused">What is refused</h2>
+          <h2 id="refused">What is refused <a class="anchor" href="#refused" aria-label="Link to this section">#</a></h2>
 
           <p>Every one of these happens before a forward runs — most at validation, the
           rest when the document is compiled against the model.</p>
@@ -860,7 +860,7 @@ except AddressError as refusal:
             </tbody>
           </table>
 
-          <h2 id="worked">A read of four heads, and a read of the whole model</h2>
+          <h2 id="worked">A read of four heads, and a read of the whole model <a class="anchor" href="#worked" aria-label="Link to this section">#</a></h2>
 
           <p><code>documents/v2/head_patching.json</code> is the interchange of
           <code>patching.json</code> done one attention head at a time. Two sites:
@@ -1030,7 +1030,7 @@ out/heads/heads=3/logit_diff.json</code></pre>
           </div>
 
           <div class="seealso">
-            <h2>See also</h2>
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
             <ul>
               <li><a href="positions.html">Positions</a> — the other half of a
               selection: which tokens along the sequence, and why the sequence axis is a

@@ -92,7 +92,7 @@
           <code>index: -1</code> then cuts the last one of that run. Two independent
           questions, two fields.</p>
 
-          <h2>At a glance</h2>
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
 
           <!-- ran 2026-09-23, CPU, fp32 -->
           <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/entity_patch.json
@@ -108,7 +108,7 @@
           could be resolved without the tokenizer and the row, so nothing is: the plan
           carries the anchor text per row and the run turns each one into indices.</p>
 
-          <h2>The data</h2>
+          <h2 id="the-data">The data <a class="anchor" href="#the-data" aria-label="Link to this section">#</a></h2>
 
           <!-- ran 2026-09-23 in the repo root -->
           <pre><code class="language-bash">$ uv run causalab-mini data weekdays/train
@@ -150,7 +150,7 @@ weekdays/train: 4 rows
           <code>index: -1</code> inside it is what makes the window one token wide on
           every row.</p>
 
-          <h2>The document</h2>
+          <h2 id="the-document">The document <a class="anchor" href="#the-document" aria-label="Link to this section">#</a></h2>
 
           <figure class="listing">
             <figcaption><code>documents/v2/entity_patch.json</code> <span class="what">— the document this page runs, verbatim</span></figcaption>
@@ -285,7 +285,7 @@ weekdays/train: 4 rows
             <code>weekdays/train</code>.</li>
           </ul>
 
-          <h2>Running it</h2>
+          <h2 id="running-it">Running it <a class="anchor" href="#running-it" aria-label="Link to this section">#</a></h2>
 
           <!-- run 2026-09-23 on CPU, fp32, 12-core Ryzen 9 5900X -->
           <pre><code class="language-bash">$ time uv run causalab-mini run documents/v2/entity_patch.json --out out/entity
@@ -299,7 +299,7 @@ real	0m8.971s</code></pre>
           <p>Nine seconds, most of it the model load. One plan and no sweep, so the
           saves land straight in <code>out/entity</code>.</p>
 
-          <h2>Where it landed</h2>
+          <h2 id="where-it-landed">Where it landed <a class="anchor" href="#where-it-landed" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/write.py:89 — a metric table's `positions` is the
                positions of the read the metric scores -->
@@ -386,7 +386,7 @@ for name in (&quot;v_cf&quot;, &quot;patch&quot;):
             being addressed is a token.</p>
           </div>
 
-          <h2>A row whose entity is not in its prompt</h2>
+          <h2 id="a-row-whose-entity-is-not-in-its-prompt">A row whose entity is not in its prompt <a class="anchor" href="#a-row-whose-entity-is-not-in-its-prompt" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/ops/locate.py:234 no hits -> alignment_missing;
                :236 more than one -> alignment_ambiguous; locate.py:39 the three -->
@@ -420,7 +420,7 @@ causalab_mini.plan.plan.PlanError: write &#x27;patch&#x27; has nothing to write 
             depended on it.</p>
           </div>
 
-          <h2>The same anchor, every token of it</h2>
+          <h2 id="the-same-anchor-every-token-of-it">The same anchor, every token of it <a class="anchor" href="#the-same-anchor-every-token-of-it" aria-label="Link to this section">#</a></h2>
 
           <p><code>index: -1</code> is not the only cut. <code>{"all": true}</code>
           over the same scope reads every token of the row's entity — one for
@@ -583,7 +583,7 @@ causalab_mini.plan.plan.PlanError: write &#x27;patch&#x27; has nothing to write 
           <!-- causalab_mini/engine/steps.py:490 — "covers N positions per row but its
                operand was read over M; rows … differ" -->
 
-          <h2>What this page does not show</h2>
+          <h2 id="what-this-page-does-not-show">What this page does not show <a class="anchor" href="#what-this-page-does-not-show" aria-label="Link to this section">#</a></h2>
 
           <div class="caution">
             <span class="label">the numbers here are noise</span>
@@ -597,7 +597,7 @@ causalab_mini.plan.plan.PlanError: write &#x27;patch&#x27; has nothing to write 
           </div>
 
           <div class="seealso">
-            <h2>See also</h2>
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
             <ul>
               <li><a href="../positions.html">Positions</a> — the three independent
                   questions a position asks, the other anchor kind

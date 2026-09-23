@@ -144,7 +144,7 @@
             that produced it, and a node's path in the tree is its path on disk.</figcaption>
           </figure>
 
-          <h2>Install</h2>
+          <h2 id="install">Install <a class="anchor" href="#install" aria-label="Link to this section">#</a></h2>
 
           <!-- CONTRIBUTING.md:3-11 -->
           <pre><code class="language-bash">git clone https://github.com/JadenFiotto-Kaufman/causalab-mini
@@ -160,7 +160,7 @@ uv run causalab-mini validate documents/v2/patching.json
 uv run causalab-mini explain  documents/v2/patching.json</code></pre>
 
 
-          <h2>Run one document</h2>
+          <h2 id="run-one-document">Run one document <a class="anchor" href="#run-one-document" aria-label="Link to this section">#</a></h2>
 
           <p>The smallest real experiment in the repository is an interchange
           intervention: read the residual stream at the last token of a
@@ -298,7 +298,7 @@ out/iia.json
 out/logit_diff.json</code></pre>
 
 
-          <h2>Read the output</h2>
+          <h2 id="read-the-output">Read the output <a class="anchor" href="#read-the-output" aria-label="Link to this section">#</a></h2>
 
           <p>A metric table is a JSON array of row objects, one file per metric, with
           the labels repeated on every row so <code>jq</code> and a person can both
@@ -337,25 +337,25 @@ out/logit_diff.json</code></pre>
           fixture that proves the machinery, not a model that knows anything. For a
           real result, see the worked example below.</p>
 
-          <h2>A map of the site</h2>
+          <h2 id="a-map-of-the-site">A map of the site <a class="anchor" href="#a-map-of-the-site" aria-label="Link to this section">#</a></h2>
 
-          <h3>The document</h3>
+          <h3 id="the-document">The document <a class="anchor" href="#the-document" aria-label="Link to this section">#</a></h3>
           <ul class="cards">
-            <li><a href="documents.html" data-status="stub"><span class="title">Documents</span>
+            <li><a href="documents.html"><span class="title">Documents</span>
               <span class="blurb">The protocol field by field, and the JSON Schema the
               <code>schema</code> verb prints.</span></a></li>
-            <li><a href="locations.html" data-status="stub"><span class="title">Locations</span>
+            <li><a href="locations.html"><span class="title">Locations</span>
               <span class="blurb">Naming <em>where</em>: components, layers, heads and
               units, the attention pattern, interiors, what resolves on which model.</span></a></li>
-            <li><a href="positions.html" data-status="stub"><span class="title">Positions</span>
+            <li><a href="positions.html"><span class="title">Positions</span>
               <span class="blurb">The <code>Where</code> vocabulary, eligibility and its
               reasons, the generated frame.</span></a></li>
-            <li><a href="ops.html" data-status="stub"><span class="title">Reads, writes, metrics</span>
+            <li><a href="ops.html"><span class="title">Reads, writes, metrics</span>
               <span class="blurb">Write mechanisms, operands, featurizers, metric kinds,
               <code>reduce</code>, and sweeps.</span></a></li>
           </ul>
 
-          <h3>Use cases</h3>
+          <h3 id="use-cases">Use cases <a class="anchor" href="#use-cases" aria-label="Link to this section">#</a></h3>
           <p>Ten worked experiments, each one a real document run end to end.
           <a href="use-cases/layer-sweep.html">The layer sweep</a> is the one to read
           first: it is a complete result on a real model, from the document to the
@@ -368,23 +368,23 @@ out/logit_diff.json</code></pre>
               crosses to the last token.</span></a></li>
           </ul>
 
-          <h3>Running, and how it works</h3>
+          <h3 id="running-and-how-it-works">Running, and how it works <a class="anchor" href="#running-and-how-it-works" aria-label="Link to this section">#</a></h3>
           <ul class="cards">
-            <li><a href="cli.html" data-status="stub"><span class="title">The CLI</span>
+            <li><a href="cli.html"><span class="title">The CLI</span>
               <span class="blurb">Every verb, every flag, and what lands on disk.</span></a></li>
-            <li><a href="engine.html" data-status="stub"><span class="title">The engine</span>
+            <li><a href="engine.html"><span class="title">The engine</span>
               <span class="blurb">Eight members, one session, and why a plan has no
               <code>execute</code>.</span></a></li>
-            <li><a href="standardization.html" data-status="stub"><span class="title">Standardization</span>
+            <li><a href="standardization.html"><span class="title">Standardization</span>
               <span class="blurb">What nnterp names and what mini still knows about
               model internals.</span></a></li>
-            <li><a href="remote.html" data-status="stub"><span class="title">Remote &amp; NDIF</span>
+            <li><a href="remote.html"><span class="title">Remote &amp; NDIF</span>
               <span class="blurb"><code>--engine ndif</code>: the same document, no local
               weights.</span></a></li>
           </ul>
 
           <div class="seealso">
-            <h2>See also</h2>
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
             <ul>
               <li><a href="use-cases/layer-sweep.html">Layer sweep</a> — the worked example, end to end</li>
               <li><a href="https://github.com/JadenFiotto-Kaufman/causalab-mini">The repository</a>

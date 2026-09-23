@@ -93,7 +93,7 @@
           <!-- causalab_mini/ops/intervene.py:6-15 -->
           <pre><code>write = inverse(do(featurize(x)), err, x)</code></pre>
 
-          <h2>At a glance</h2>
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
 
           <p>The closed vocabularies are printed by the <code>vocab</code> verb, which
           needs no model, no weights and no network:</p>
@@ -115,7 +115,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
           position forms are <a href="positions.html">Positions</a>. The three lines
           between them are this page.</p>
 
-          <h2>A read</h2>
+          <h2 id="a-read">A read <a class="anchor" href="#a-read" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/spec.py:172-181 -->
           <p>A read names a place, a cut of the sequence, which pass to take it from,
@@ -135,7 +135,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
             </tbody>
           </table>
 
-          <h3>What it yields</h3>
+          <h3 id="what-it-yields">What it yields <a class="anchor" href="#what-it-yields" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/ops/intervene.py:219-241 -->
           <p>A read is a window of positions per row, and of that window the features
@@ -159,7 +159,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
           them. A read that should not see them names <code>model: "original"</code>,
           which is a different forward.</p>
 
-          <h3><code>view: "logits"</code></h3>
+          <h3 id="view-logits"><code>view: "logits"</code> <a class="anchor" href="#view-logits" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/engine/engines/nnterp/engine.py:180-189 -->
           <!-- causalab_mini/ops/intervene.py:332-340 -->
@@ -179,7 +179,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
             logits: the projection takes an activation, not a feature vector.</p>
           </div>
 
-          <h2>The write contract</h2>
+          <h2 id="the-write-contract">The write contract <a class="anchor" href="#the-write-contract" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/ops/intervene.py:296-329 -->
           <p>Every write is the same five steps. Gather the activation at the site and
@@ -277,7 +277,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
             <code>linalg.solve</code> refuses the pair.</p>
           </div>
 
-          <h2>Mechanisms</h2>
+          <h2 id="mechanisms">Mechanisms <a class="anchor" href="#mechanisms" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/ops/intervene.py:69-111, 183-190 -->
           <!-- causalab_mini/plan/spec.py:199, 238-249 -->
@@ -309,7 +309,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
           <code>gaussian</code> and <code>clamp</code> have no document, and are covered
           by <code>tests/test_mechanisms.py</code>.</p>
 
-          <h3>The operand</h3>
+          <h3 id="the-operand">The operand <a class="anchor" href="#the-operand" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/spec.py:203, 184-187 -->
           <!-- causalab_mini/ops/intervene.py:161-168 -->
@@ -334,7 +334,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
           side has no width until the rows are known, and the compiler checks those row
           by row.</p>
 
-          <h3>One site, several writes</h3>
+          <h3 id="one-site-several-writes">One site, several writes <a class="anchor" href="#one-site-several-writes" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/build.py:993-1005 -->
           <!-- causalab_mini/engine/engines/nnterp/engine.py:157-175 -->
@@ -357,7 +357,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
             doing nothing.</p>
           </div>
 
-          <h3>A scaled add, run</h3>
+          <h3 id="a-scaled-add-run">A scaled add, run <a class="anchor" href="#a-scaled-add-run" aria-label="Link to this section">#</a></h3>
 
           <p><code>documents/v2/steer_renormalize.json</code> is both rules at once: a
           harvested mean is added to the residual stream at four times its own scale,
@@ -454,7 +454,7 @@ out/ops-steer/logit_diff_steered.json</code></pre>
             see <a href="use-cases/layer-sweep.html">the layer sweep</a>.</p>
           </div>
 
-          <h3>A swap, run</h3>
+          <h3 id="a-swap-run">A swap, run <a class="anchor" href="#a-swap-run" aria-label="Link to this section">#</a></h3>
 
           <p>The cheapest write there is: the residual stream at the answer position
           replaced by the number <code>0.0</code>, scored against the un-intervened
@@ -592,7 +592,7 @@ out/ops-steer/logit_diff_steered.json</code></pre>
         read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;</code></pre>
 
 
-          <h2>Featurizers</h2>
+          <h2 id="featurizers">Featurizers <a class="anchor" href="#featurizers" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/ops/featurizer.py:241-256 -->
           <!-- causalab_mini/plan/spec.py:118-148 -->
@@ -618,7 +618,7 @@ out/ops-steer/logit_diff_steered.json</code></pre>
           site; a name that appears at two is refused. <code>d</code> is never authored
           — the compiler fills it in from the model and the site.</p>
 
-          <h3><code>subspace</code> and <code>pca</code></h3>
+          <h3 id="subspace-and-pca"><code>subspace</code> and <code>pca</code> <a class="anchor" href="#subspace-and-pca" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/ops/featurizer.py:19-27, 49-55 -->
           <p>A <code>subspace</code> stores a <code>(d, k)</code> parameter, not the
@@ -645,7 +645,7 @@ out/ops-steer/logit_diff_steered.json</code></pre>
           file and nothing trains one — it is the control a DAS fit is compared against.
           The basis it loads is what <code>reduce: pca</code> writes.</p>
 
-          <h3><code>sae</code> and <code>linear</code>: the error term</h3>
+          <h3 id="sae-and-linear-the-error-term"><code>sae</code> and <code>linear</code>: the error term <a class="anchor" href="#sae-and-linear-the-error-term" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/ops/featurizer.py:137-178 -->
           <p>These two are the reason <code>err</code> is in the seam at all:</p>
@@ -662,7 +662,7 @@ inverse(f′, err, x)  = decode(f′) + err</code></pre>
           missing <code>W_dec</code> means tied weights, <code>W_encᵀ</code>.
           <code>linear</code> is the same object with the nonlinearity off.</p>
 
-          <h3><code>gate</code>: the one piece of mode</h3>
+          <h3 id="gate-the-one-piece-of-mode"><code>gate</code>: the one piece of mode <a class="anchor" href="#gate-the-one-piece-of-mode" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/ops/featurizer.py:181-222 -->
           <p>A gate is a learned binary mask over the site's units — the DBM featurizer.
@@ -729,7 +729,7 @@ inverse(f, 0, x)  = m ⊙ f + (1 − m) ⊙ x</code></pre>
         ]
       ],</code></pre>
 
-          <h3><code>features</code>: acting on part of the space</h3>
+          <h3 id="features-acting-on-part-of-the-space"><code>features</code>: acting on part of the space <a class="anchor" href="#features-acting-on-part-of-the-space" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/spec.py:206-208 -->
           <!-- causalab_mini/ops/intervene.py:308-327 -->
@@ -745,7 +745,7 @@ inverse(f, 0, x)  = m ⊙ f + (1 − m) ⊙ x</code></pre>
           (<a href="locations.html">Locations</a>); <code>features</code> is part of the
           <em>write</em> and narrows the feature vector after.</p>
 
-          <h3>A subspace read, run</h3>
+          <h3 id="a-subspace-read-run">A subspace read, run <a class="anchor" href="#a-subspace-read-run" aria-label="Link to this section">#</a></h3>
 
           <p><code>documents/v2/das_apply.json</code> loads the rotation that
           <code>das.json</code> fitted and scores it on the held-out split: no fit, no
@@ -778,7 +778,7 @@ out/ops-das/ce.json</code></pre>
           built, and it is built <em>where the run runs</em>: a tensor drawn on the
           client would not be the tensor the block rotates by.</p>
 
-          <h2>Metrics</h2>
+          <h2 id="metrics">Metrics <a class="anchor" href="#metrics" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/ops/metrics.py:23-53, 67-81 -->
           <p>A metric binds to one read, takes one vocabulary id per row per operand, and
@@ -813,7 +813,7 @@ out/ops-das/ce.json</code></pre>
           metric scores one position per row; a window of several, or a varying one, is
           refused at compile time.</p>
 
-          <h3>Which rows are scored</h3>
+          <h3 id="which-rows-are-scored">Which rows are scored <a class="anchor" href="#which-rows-are-scored" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/engine/steps.py:122-132 -->
           <p>Eligibility has two halves, and neither is authoritative alone.</p>
@@ -833,7 +833,7 @@ out/ops-das/ce.json</code></pre>
           number. The reasons a position resolved to nothing are on
           <a href="positions.html">Positions</a>.</p>
 
-          <h3>What comes out</h3>
+          <h3 id="what-comes-out">What comes out <a class="anchor" href="#what-comes-out" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/ops/metrics.py:84-88; causalab_mini/engine/steps.py:196-220 -->
           <p>In memory, one value per eligible row, in row order, with no mask — the
@@ -866,7 +866,7 @@ out/ops-das/ce.json</code></pre>
           does not already say. <code>produced_by</code> is the digest of the experiment:
           everything in the document except <code>header</code>.</p>
 
-          <h3>A metric, run</h3>
+          <h3 id="a-metric-run">A metric, run <a class="anchor" href="#a-metric-run" aria-label="Link to this section">#</a></h3>
 
           <p><code>documents/v2/logit_lens.json</code> is two metrics on one
           <code>view: "logits"</code> read, swept over two layers.</p>
@@ -970,7 +970,7 @@ out/ops-lens/layers=1/document.json
 out/ops-lens/layers=1/p_answer.json
 out/ops-lens/layers=1/top1.json</code></pre>
 
-          <h2><code>outputs</code> and <code>reduce</code></h2>
+          <h2 id="outputs-and-reduce"><code>outputs</code> and <code>reduce</code> <a class="anchor" href="#outputs-and-reduce" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/spec.py:325-340 -->
           <p>An <code>observe</code> step may publish a read for the steps after it.
@@ -1046,7 +1046,7 @@ out/ops-lens/layers=1/top1.json</code></pre>
         }
       },</code></pre>
 
-          <h2>Sweeps</h2>
+          <h2 id="sweeps">Sweeps <a class="anchor" href="#sweeps" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/sweep.py:1-14, 52-95 -->
           <p><code>{"sweep": [a, b, c]}</code> at <strong>any</strong> field means the
@@ -1063,7 +1063,7 @@ out/ops-lens/layers=1/top1.json</code></pre>
           Both front ends refuse a document that still has one: a document and a plan are
           each one point.</p>
 
-          <h3>The two spellings beyond a list</h3>
+          <h3 id="the-two-spellings-beyond-a-list">The two spellings beyond a list <a class="anchor" href="#the-two-spellings-beyond-a-list" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/sweep.py:106-126 -->
           <p><code>{"sweep": {"range": [0, 16]}}</code> is <code>0, 1, … 15</code>:
@@ -1105,7 +1105,7 @@ out/ops-lens/layers=1/top1.json</code></pre>
           paths. <a href="use-cases/layer-sweep.html">The layer sweep</a> runs this
           document end to end.</p>
 
-          <h3>How points are laid out</h3>
+          <h3 id="how-points-are-laid-out">How points are laid out <a class="anchor" href="#how-points-are-laid-out" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/sweep.py:87-95, 159-167 -->
           <p>Several independent wrappers are their cross product, one point per
@@ -1185,7 +1185,7 @@ out/ops-neuron/units=[8,9,10,11]/logit_diff.json</code></pre>
           read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
 …</code></pre>
 
-          <h2>What is refused</h2>
+          <h2 id="what-is-refused">What is refused <a class="anchor" href="#what-is-refused" aria-label="Link to this section">#</a></h2>
 
           <p>All of it at compile time, before a weight is loaded, and every message
           names the path it was at.</p>
@@ -1231,7 +1231,7 @@ out/ops-neuron/units=[8,9,10,11]/logit_diff.json</code></pre>
           </table>
 
           <div class="seealso">
-            <h2>See also</h2>
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
             <ul>
               <li><a href="locations.html">Locations</a> — what a <code>site</code> names, and how <code>heads</code> and <code>units</code> set the width a featurizer sees</li>
               <li><a href="positions.html">Positions</a> — the <code>pos</code> vocabulary, the continuation frame, and the reasons a row resolves to no window</li>

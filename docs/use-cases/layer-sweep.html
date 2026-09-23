@@ -94,7 +94,7 @@
           swapped was carrying the answer. The metric is <code>iia</code>: the fraction
           of rows whose top token after the patch is the counterfactual's answer.</p>
 
-          <h2>At a glance</h2>
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
 
           <figure>
             <svg viewBox="0 0 640 264" role="img" aria-labelledby="curve-t curve-d" width="640">
@@ -126,7 +126,7 @@
           layer 11, "today" is at the day token and the last token holds nothing;
           from layer 12 it is the other way round.</p>
 
-          <h2>The data</h2>
+          <h2 id="the-data">The data <a class="anchor" href="#the-data" aria-label="Link to this section">#</a></h2>
 
           <p>All 42 ordered pairs of weekdays. Every weekday name is a single token in
           this tokenizer, which is what makes the task scorable at one position.</p>
@@ -147,7 +147,7 @@ weekdays_full/data: 42 rows
 &#x27;Sunday&#x27;                 1 token(s)</code></pre>
 
 
-          <h2>The document</h2>
+          <h2 id="the-document">The document <a class="anchor" href="#the-document" aria-label="Link to this section">#</a></h2>
 
           <figure class="listing">
             <figcaption><code>documents/real/weekdays_layer_sweep.json</code> <span class="what">— the document this page runs, verbatim</span></figcaption>
@@ -305,7 +305,7 @@ weekdays_full/data: 42 rows
             its own. 16 layers × 2 positions = 32 experiments, one document.</p>
           </div>
 
-          <h2>What it compiles to</h2>
+          <h2 id="what-it-compiles-to">What it compiles to <a class="anchor" href="#what-it-compiles-to" aria-label="Link to this section">#</a></h2>
 
           <p>A sweep is lowered on the raw JSON before anything is compiled: each point
           becomes an ordinary document and is compiled on its own, with its own
@@ -345,7 +345,7 @@ weekdays_full/data: 42 rows
           tokens from the end — and <code>pos={index:-1}</code> is the token the
           prediction is read from.</p>
 
-          <h2>Running it</h2>
+          <h2 id="running-it">Running it <a class="anchor" href="#running-it" aria-label="Link to this section">#</a></h2>
 
           <pre><code class="language-bash">$ uv run causalab-mini validate documents/real/weekdays_layer_sweep.json
 ok: documents/real/weekdays_layer_sweep.json is a valid plan-shaped document</code></pre>
@@ -375,7 +375,7 @@ real	1m33.389s</code></pre>
             (<code>documents/real/README.md</code>).</p>
           </div>
 
-          <h3>What lands on disk</h3>
+          <h3 id="what-lands-on-disk">What lands on disk <a class="anchor" href="#what-lands-on-disk" aria-label="Link to this section">#</a></h3>
 
           <p>A swept document's root plan holds one child plan per point, and a plan's
           path in the tree is its path on disk — which is where
@@ -436,7 +436,7 @@ real	1m33.389s</code></pre>
           to be placed. <code>produced_by</code> is this <em>point</em>'s digest, so
           two points of one sweep are never confusable.</p>
 
-          <h2>The curve</h2>
+          <h2 id="the-curve">The curve <a class="anchor" href="#the-curve" aria-label="Link to this section">#</a></h2>
 
           <p>The mean over the 42 rows, per point. Both metrics, both positions:</p>
 
@@ -462,7 +462,7 @@ real	1m33.389s</code></pre>
             </tbody>
           </table>
 
-          <h2>What the numbers mean</h2>
+          <h2 id="what-the-numbers-mean">What the numbers mean <a class="anchor" href="#what-the-numbers-mean" aria-label="Link to this section">#</a></h2>
 
           <p>Three things are visible, and each of them is a claim about the model.</p>
 
@@ -497,7 +497,7 @@ real	1m33.389s</code></pre>
             dimensions carry it.</p>
           </div>
 
-          <h2>Recorded results for the same document</h2>
+          <h2 id="recorded-results-for-the-same-document">Recorded results for the same document <a class="anchor" href="#recorded-results-for-the-same-document" aria-label="Link to this section">#</a></h2>
 
           <p>The numbers above were produced by running the document on CPU while
           writing this page. <code>documents/real/README.md</code> records an earlier
@@ -538,7 +538,7 @@ real	1m33.389s</code></pre>
           numbers of a layer sweep.</p>
 
           <div class="seealso">
-            <h2>See also</h2>
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
             <ul>
               <li><a href="sweeps.html">Sweeps</a> — named axes, the range form, and what a sweep may not touch</li>
               <li><a href="../positions.html">Positions</a> — why <code>-4</code> is a fixed

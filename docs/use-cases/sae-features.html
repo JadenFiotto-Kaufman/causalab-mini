@@ -92,7 +92,7 @@
           from somewhere else — sae_lens, dictionary_learning, your own training run — and
           mini's job is to put it in the forward pass and check that it belongs there.</p>
 
-          <h2>At a glance</h2>
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
 
           <!-- ran 2026-09-23, CPU, fp32; 37 lines, the first point and the last -->
           <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/sae_feature_ablation.json
@@ -122,7 +122,7 @@
           the dictionary's space rather than the residual stream's, and <code>on its features
           [0]</code>, which says the write touches one coordinate of that space.</p>
 
-          <h2>The document</h2>
+          <h2 id="the-document">The document <a class="anchor" href="#the-document" aria-label="Link to this section">#</a></h2>
 
           <figure class="listing">
             <figcaption><code>documents/v2/sae_feature_ablation.json</code> <span class="what">— the document this page runs, verbatim</span></figcaption>
@@ -265,7 +265,7 @@
             step in the same plan. This document has one step, so nothing consumes it.</li>
           </ul>
 
-          <h2>What the bundle has to be</h2>
+          <h2 id="what-the-bundle-has-to-be">What the bundle has to be <a class="anchor" href="#what-the-bundle-has-to-be" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/ops/featurizer.py:151 — SAELens's names and orientations -->
           <p>The tensor names and orientations are sae_lens's. A missing <code>W_dec</code>
@@ -298,7 +298,7 @@
           millions of parameters fits in. The run turns the bytes back into tensors once, when
           the featurizers for a step are built.</p>
 
-          <h3>The header is checked against the document</h3>
+          <h3 id="the-header-is-checked-against-the-document">The header is checked against the document <a class="anchor" href="#the-header-is-checked-against-the-document" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/build.py:307 — _identity: the stamp a bundle carries and the
                expectation a load is checked against, one function so they cannot disagree -->
@@ -326,7 +326,7 @@ causalab_mini.plan.plan.PlanError: featurizer &#x27;dictionary&#x27;: &#x27;out/
             yours to get right.</p>
           </div>
 
-          <h2>Reading feature activations</h2>
+          <h2 id="reading-feature-activations">Reading feature activations <a class="anchor" href="#reading-feature-activations" aria-label="Link to this section">#</a></h2>
 
           <p>A read with a featurizer returns <code>featurize(x)</code>, the feature vector.
           The document publishes it as <code>active</code> but does not save it. With one save
@@ -344,7 +344,7 @@ row 0     0.0512  0.0000  0.0432  0.0587  0.0000     0.4411     0.1295</code></p
           sweeps are latents 0 to 3, so one of the four ablations is of a latent that was not
           on.</p>
 
-          <h2>Writing a feature</h2>
+          <h2 id="writing-a-feature">Writing a feature <a class="anchor" href="#writing-a-feature" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/ops/intervene.py:316 — features: the mechanism acts on those
                coordinates, f.clone(), f[..., index] = acted -->
@@ -358,7 +358,7 @@ row 0     0.0512  0.0000  0.0432  0.0587  0.0000     0.4411     0.1295</code></p
           is: set latent <em>j</em> to zero, keep the other thirty-one, decode, and add the
           error term back.</p>
 
-          <h2>The error term</h2>
+          <h2 id="the-error-term">The error term <a class="anchor" href="#the-error-term" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/ops/featurizer.py:142 -->
           <pre><code class="language-python">featurize(x)          = (f, x - decode(f))     f = act((x - b_dec) @ W_enc + b_enc)
@@ -388,7 +388,7 @@ inverse(f', err, x)   = decode(f') + err</code></pre>
           dictionary's error. A worthless dictionary and an exact no-op, which is the property
           the error term exists for.</p>
 
-          <h2>What the run produced</h2>
+          <h2 id="what-the-run-produced">What the run produced <a class="anchor" href="#what-the-run-produced" aria-label="Link to this section">#</a></h2>
 
           <!-- ran 2026-09-23, CPU, fp32, tiny-random-LlamaForCausalLM -->
           <pre><code class="language-bash">$ uv run causalab-mini run documents/v2/sae_feature_ablation.json --device-map cpu --out out/sae
@@ -442,7 +442,7 @@ out/b-sae/features=3/p_answer.json</code></pre>
             a fixture.</p>
           </div>
 
-          <h2>The <code>linear</code> kind</h2>
+          <h2 id="the-linear-kind">The <code>linear</code> kind <a class="anchor" href="#the-linear-kind" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/ops/featurizer.py:246 — "linear": Encoder(..., activation="none") -->
           <p><code>linear</code> is the same <code>Encoder</code> with no nonlinearity, so
@@ -457,7 +457,7 @@ out/b-sae/features=3/p_answer.json</code></pre>
           error term is the reconstruction residual, which is a different quantity and is not
           zero.</p>
 
-          <h2>What is refused</h2>
+          <h2 id="what-is-refused">What is refused <a class="anchor" href="#what-is-refused" aria-label="Link to this section">#</a></h2>
 
           <table>
             <thead><tr><th>document</th><th>message</th></tr></thead>
@@ -487,7 +487,7 @@ out/b-sae/features=3/p_answer.json</code></pre>
           them, and so does the compile at the top of a run.</p>
 
           <div class="seealso">
-            <h2>See also</h2>
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
             <ul>
               <li><a href="../ops.html">Reads, writes, metrics</a> — the write seam
                   <code>inverse(do(featurize(x)), err, x)</code> that every featurizer plugs

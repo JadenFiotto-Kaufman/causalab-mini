@@ -90,7 +90,7 @@
           own installed copy of causalab_mini, and only what fills the plan in comes
           home.</p>
 
-          <h2>At a glance</h2>
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
 
           <!-- ran 2026-09-23 on bippu (RTX A6000), against the local NDIF at
                localhost:8001 serving the tiny Llama in fp32 -->
@@ -123,7 +123,7 @@ out/entity-ndif/logit_diff.json</code></pre>
             a traceback are not.</p>
           </div>
 
-          <h2>What runs where</h2>
+          <h2 id="what-runs-where">What runs where <a class="anchor" href="#what-runs-where" aria-label="Link to this section">#</a></h2>
 
           <figure>
             <svg viewBox="0 0 640 180" role="img" aria-labelledby="rem-t rem-d" width="640">
@@ -192,7 +192,7 @@ out/entity-ndif/logit_diff.json</code></pre>
           own source and fails if any trace body loads the bare name
           <code>tokenizer</code>, <code>self</code>, or a client-side module.</p>
 
-          <h2>Pointing at a server</h2>
+          <h2 id="pointing-at-a-server">Pointing at a server <a class="anchor" href="#pointing-at-a-server" aria-label="Link to this section">#</a></h2>
 
           <!-- nnsight: src/nnsight/schema/config.py:16-20 and :118-130 -->
           <p>mini has no host setting of its own. The host and the key are nnsight's,
@@ -221,7 +221,7 @@ meta-llama/Llama-3.2-1B	float32	RUNNING</code></pre>
           match a record here, and its <code>dtype</code> is a request the server is
           free to ignore — see below.</p>
 
-          <h2>The server needs the same packages</h2>
+          <h2 id="the-server-needs-the-same-packages">The server needs the same packages <a class="anchor" href="#the-server-needs-the-same-packages" aria-label="Link to this section">#</a></h2>
 
           <p>A remote block is recompiled on the server and the modules it names are
           <em>imported there</em>. So the server must have causalab_mini and nnterp
@@ -254,7 +254,7 @@ MATCH True</code></pre>
           server's path, not the client's, which is what says the module was imported
           rather than rebuilt from the request.</p>
 
-          <h3>What a mismatch looks like</h3>
+          <h3 id="what-a-mismatch-looks-like">What a mismatch looks like <a class="anchor" href="#what-a-mismatch-looks-like" aria-label="Link to this section">#</a></h3>
 
           <p>Nothing checks the two sides against each other. A skew shows up as a
           missing name, at the moment the block reaches for it — here, a client
@@ -281,7 +281,7 @@ AttributeError: module 'causalab_mini.engine.steps' has no attribute 'a_function
             which is the client's; the server has 2.13.4.</p>
           </div>
 
-          <h3>What the request weighs</h3>
+          <h3 id="what-the-request-weighs">What the request weighs <a class="anchor" href="#what-the-request-weighs" aria-label="Link to this section">#</a></h3>
 
           <p>Measured with nnsight's own report (<code>NNSIGHT_DEBUG=1</code> prints
           the payload and the result blob, both after compression), and with
@@ -304,7 +304,7 @@ AttributeError: module 'causalab_mini.engine.steps' has no attribute 'a_function
           costs a handful of them, and the code that resolves it is on the server
           already.</p>
 
-          <h2>The dtype is the server's</h2>
+          <h2 id="the-dtype-is-the-server-s">The dtype is the server's <a class="anchor" href="#the-dtype-is-the-server-s" aria-label="Link to this section">#</a></h2>
 
           <!-- engine/engines/nnterp/engine.py:98-101 -->
           <p>A document's <code>model.dtype</code> is a request. The deployment
@@ -341,7 +341,7 @@ AttributeError: module 'causalab_mini.engine.steps' has no attribute 'a_function
           p(answer) differing by up to 0.018, L12 H28 at +0.051 against +0.054 — and
           the DAS rank curve identical.</p>
 
-          <h2>What came home</h2>
+          <h2 id="what-came-home">What came home <a class="anchor" href="#what-came-home" aria-label="Link to this section">#</a></h2>
 
           <p>The layer sweep, which is the largest document in the repository — 32
           experiments, 42 rows each, a read, a swap write and two metrics, all in one
@@ -402,7 +402,7 @@ $ diff out/sweep-local/run.json out/sweep-ndif/run.json
           position is <code>{"index": -1, "scope": {"variable": "entity"}}</code>,
           writes the same <code>positions</code> column locally and remotely.</p>
 
-          <h3>Timings</h3>
+          <h3 id="timings">Timings <a class="anchor" href="#timings" aria-label="Link to this section">#</a></h3>
 
           <!-- measured 2026-09-23 on bippu: one RTX A6000 shared between the local
                run and the container; each figure the lower of two runs -->
@@ -422,7 +422,7 @@ $ diff out/sweep-local/run.json out/sweep-ndif/run.json
           part. The model was already HOT for both figures; a cold deployment adds
           its load time to the first request.</p>
 
-          <h2>When the server refuses</h2>
+          <h2 id="when-the-server-refuses">When the server refuses <a class="anchor" href="#when-the-server-refuses" aria-label="Link to this section">#</a></h2>
 
           <p>A document whose write has nothing to write on some row is refused at run
           time, because whether a row's entity text is in that row's prompt is not
@@ -474,7 +474,7 @@ causalab_mini.plan.plan.PlanError: write 'patch' has nothing to write on row(s) 
           nnterp engine's. <code>--engine hooks</code> never sets it, so you meet this
           one only from Python.</p>
 
-          <h2><code>remote="local"</code></h2>
+          <h2 id="remote-local"><code>remote="local"</code> <a class="anchor" href="#remote-local" aria-label="Link to this section">#</a></h2>
 
           <!-- engine.py:82, remote: bool | str; tests/test_patching.py:171-179 -->
           <p><code>execute</code> takes <code>remote</code> as
@@ -509,7 +509,7 @@ causalab_mini.plan.plan.PlanError: write 'patch' has nothing to write on row(s) 
           never gave up, and that NDIF runs a request under autocast, which downcast
           half of a Cayley solve until featurizer math was pinned outside it.</p>
 
-          <h2>Running your own server</h2>
+          <h2 id="running-your-own-server">Running your own server <a class="anchor" href="#running-your-own-server" aria-label="Link to this section">#</a></h2>
 
           <p>Two stages: NDIF's own image, then the three checkouts on top of it, so
           the server can import what a block names. From a checkout of
@@ -564,7 +564,7 @@ docker exec ndif-mini ndif deploy meta-llama/Llama-3.2-1B \
           check in stage two is deliberate: without the C extension
           <code>.save()</code> fails on the server with an error that names neither.</p>
 
-          <h2>The public service</h2>
+          <h2 id="the-public-service">The public service <a class="anchor" href="#the-public-service" aria-label="Link to this section">#</a></h2>
 
           <p><code>https://api.ndif.us</code> is the default host, and the same
           <code>/env</code> call says what it has:</p>
@@ -586,7 +586,7 @@ transformers 5.8.0</code></pre>
           were measured against.</p>
 
           <div class="seealso">
-            <h2>See also</h2>
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
             <ul>
               <li><a href="engine.html">The engine</a> — the one session this page
                   passes <code>remote</code> to, and why a block may name only plan

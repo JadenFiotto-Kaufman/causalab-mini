@@ -93,7 +93,7 @@
           addresses, its own tokenization, its own digest — and nothing downstream of the
           compiler knows a sweep happened.</p>
 
-          <h2>At a glance</h2>
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
 
           <details class="listing">
             <summary><code>documents/pos_sweep_cpu.json</code> <span class="what">— the whole document</span></summary>
@@ -250,7 +250,7 @@ ok: documents/real/weekdays_layer_sweep.json is a valid plan-shaped document</co
           the write moves — and each point's <code>pos={index:-2}</code> is an ordinary fixed
           position by the time the compiler sees it.</p>
 
-          <h2>The wrapper</h2>
+          <h2 id="the-wrapper">The wrapper <a class="anchor" href="#the-wrapper" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/sweep.py:137 — a wrapper is a dict whose keys are a subset
                of {"sweep", "as"} -->
@@ -276,7 +276,7 @@ ok: documents/real/weekdays_layer_sweep.json is a valid plan-shaped document</co
           <code>range</code> means — half-open, so <code>[0, 16]</code> is a 16-layer model's
           every layer and not seventeen of them.</p>
 
-          <h2>Where a point lands, and what it is called</h2>
+          <h2 id="where-a-point-lands-and-what-it-is-called">Where a point lands, and what it is called <a class="anchor" href="#where-a-point-lands-and-what-it-is-called" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/sweep.py:159 — _label: the swept field's own name and the
                value it took -->
@@ -314,7 +314,7 @@ out/b-pos/pos=-3/logit_diff.json</code></pre>
           the document it became. Nothing on disk is named by position in a list, so adding a
           value to a sweep does not rename anyone else's results.</p>
 
-          <h3>A one-element list collapses in the name</h3>
+          <h3 id="a-one-element-list-collapses-in-the-name">A one-element list collapses in the name <a class="anchor" href="#a-one-element-list-collapses-in-the-name" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/sweep.py:163 — "a one-layer band sweeps as its layer" -->
           <p>Several of the things worth sweeping are lists that happen to hold one element: a
@@ -347,7 +347,7 @@ $ uv run causalab-mini explain documents/real/weekdays_layer_sweep.json | grep '
           point wants one of them. <code>units</code> sweeps lists of four and keeps the list.
           Only the name collapses — the document at each point holds the list it was given.</p>
 
-          <h2>Two axes</h2>
+          <h2 id="two-axes">Two axes <a class="anchor" href="#two-axes" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/sweep.py:16 — several swept fields are their cross product,
                labelled in the order the fields appear -->
@@ -385,7 +385,7 @@ Traceback (most recent call last):
   …
 causalab_mini.plan.sweep.SweepError: interventions.patching.writes.patch.pos: axis &#x27;pos&#x27; has 2 values at interventions.patching.reads.v_cf.pos and 3 here; fields that move together need a value each per point</code></pre>
 
-          <h3>What 32 points look like</h3>
+          <h3 id="what-32-points-look-like">What 32 points look like <a class="anchor" href="#what-32-points-look-like" aria-label="Link to this section">#</a></h3>
 
           <p>Mean over the 42 rows, one cell per point. Two metrics at two positions, 16
           layers deep:</p>
@@ -419,7 +419,7 @@ causalab_mini.plan.sweep.SweepError: interventions.patching.writes.patch.pos: ax
           What it says about sweeps is that a grid of experiments is a grid of directories, and
           the directory names are the coordinates.</p>
 
-          <h2>Asking a swept run for a result</h2>
+          <h2 id="asking-a-swept-run-for-a-result">Asking a swept run for a result <a class="anchor" href="#asking-a-swept-run-for-a-result" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/plan.py:333 — result(name): "An ambiguous lookup is an error
                rather than a first match, because the wrong number quietly is the worst
@@ -448,7 +448,7 @@ causalab_mini.plan.plan.PlanError: result &#x27;iia&#x27;: 3 in this plan. Resul
             are within ±0.2 of zero. It is a document about the plan tree, not about a model.</p>
           </div>
 
-          <h2>What is refused</h2>
+          <h2 id="what-is-refused">What is refused <a class="anchor" href="#what-is-refused" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/sweep.py:66, 73, 119, 80 — in that order -->
           <table>
@@ -484,7 +484,7 @@ causalab_mini.plan.plan.PlanError: result &#x27;iia&#x27;: 3 in this plan. Resul
           ignored.</p>
 
           <div class="seealso">
-            <h2>See also</h2>
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
             <ul>
               <li><a href="../ops.html">Reads, writes, metrics</a> — the fields a sweep is
                   usually put on, and what <code>features</code>, <code>heads</code> and

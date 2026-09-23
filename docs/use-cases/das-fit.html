@@ -90,7 +90,7 @@
           model answer the counterfactual's day. Score it on pairs the fit never saw.
           Sweep <code>k</code> and the document is a rank curve.</p>
 
-          <h2>At a glance</h2>
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
 
           <!-- measured here 2026-09-23, CPU, fp32, from out/das_real/k=*/iia.json -->
           <figure>
@@ -120,7 +120,7 @@
           it, and sixty-four carry no more. "Today" is a roughly 16-dimensional subspace
           of a 2048-wide stream.</p>
 
-          <h2>The document</h2>
+          <h2 id="the-document">The document <a class="anchor" href="#the-document" aria-label="Link to this section">#</a></h2>
 
           <figure class="listing">
             <figcaption><code>documents/real/weekdays_das.json</code> <span class="what">— the document this page runs, verbatim</span></figcaption>
@@ -316,7 +316,7 @@
             <code>weights</code> publishes the parameter so the save can write it.</li>
           </ul>
 
-          <h3>What the featurizer does</h3>
+          <h3 id="what-the-featurizer-does">What the featurizer does <a class="anchor" href="#what-the-featurizer-does" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/ops/featurizer.py:3-12 — featurize/inverse, and the error
                term being zero for a subspace -->
@@ -330,7 +330,7 @@ inverse(f, 0, x)  = Q f + (x − Q Qᵀ x)</code></pre>
           to reach the featurizer. Nothing is discarded that <code>inverse</code> could
           not recover, so the error term is zero.</p>
 
-          <h3><code>k</code>, <code>d</code>, and the Cayley parametrization</h3>
+          <h3 id="k-d-and-the-cayley-parametrization"><code>k</code>, <code>d</code>, and the Cayley parametrization <a class="anchor" href="#k-d-and-the-cayley-parametrization" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/ops/featurizer.py:49 cayley; :19-27 why parametrize -->
           <p><code>Q</code> is never stored. The stored parameter is <code>weight</code>,
@@ -372,7 +372,7 @@ Q = (I − A)⁻¹ (I + A) E  orthonormal by construction</code></pre>
           <code>block_output</code> on this model, 16 on the tiny fixture. The document
           says <code>k</code>; the model says <code>d</code>.</p>
 
-          <h3>What the fit block says</h3>
+          <h3 id="what-the-fit-block-says">What the fit block says <a class="anchor" href="#what-the-fit-block-says" aria-label="Link to this section">#</a></h3>
 
           <table>
             <thead><tr><th>field</th><th>in this document</th><th>what it is</th></tr></thead>
@@ -402,7 +402,7 @@ Q = (I − A)⁻¹ (I + A) E  orthonormal by construction</code></pre>
           an improvement to tolerate. Patience 20 with 20 epochs means the fit runs to
           the end and the field is there to be turned down.</p>
 
-          <h3>What <code>iia</code> means here</h3>
+          <h3 id="what-iia-means-here">What <code>iia</code> means here <a class="anchor" href="#what-iia-means-here" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/ops/metrics.py:23 match — 1.0 when the argmax is the
                expected token; :35 cross_entropy -->
@@ -426,7 +426,7 @@ Q = (I − A)⁻¹ (I + A) E  orthonormal by construction</code></pre>
             <code>iia/logit_diff</code>.</p>
           </div>
 
-          <h2>What it compiles to</h2>
+          <h2 id="what-it-compiles-to">What it compiles to <a class="anchor" href="#what-it-compiles-to" aria-label="Link to this section">#</a></h2>
 
           <!-- ran 2026-09-23; 96 lines, the first point shown -->
           <pre><code class="language-bash">$ uv run causalab-mini explain documents/real/weekdays_das.json
@@ -470,7 +470,7 @@ Q = (I − A)⁻¹ (I + A) E  orthonormal by construction</code></pre>
           context, 240 optimizer steps. That is what makes a swept fit a single
           document rather than a shell loop.</p>
 
-          <h2>Running it</h2>
+          <h2 id="running-it">Running it <a class="anchor" href="#running-it" aria-label="Link to this section">#</a></h2>
 
           <pre><code class="language-bash">$ uv run causalab-mini validate documents/real/weekdays_das.json
 ok: documents/real/weekdays_das.json is a valid plan-shaped document</code></pre>
@@ -508,7 +508,7 @@ real	11m36.546s</code></pre>
             two saves in one plan want two file names.</p>
           </div>
 
-          <h2>The rank curve</h2>
+          <h2 id="the-rank-curve">The rank curve <a class="anchor" href="#the-rank-curve" aria-label="Link to this section">#</a></h2>
 
           <p>The mean of <code>score</code>'s table over the 12 held-out pairs, per
           point:</p>
@@ -533,7 +533,7 @@ real	11m36.546s</code></pre>
           day beats the base's by 3.4 logits. At <code>k = 64</code> it is 3.48 — four
           times the rank buys 0.08. Whatever "today" is, sixteen directions hold it.</p>
 
-          <h2>The bundle</h2>
+          <h2 id="the-bundle">The bundle <a class="anchor" href="#the-bundle" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/build.py:312 _identity — the stamp's keys;
                :340 _load_featurizer checks them; :375 refuses naming the key -->
@@ -576,7 +576,7 @@ causalab_mini.plan.plan.PlanError: featurizer &#x27;rot&#x27;: &#x27;documents/a
           <code>fit</code> step and no <code>weights</code> step — a subspace scored,
           not trained.</p>
 
-          <h2>What the rank curve does not say</h2>
+          <h2 id="what-the-rank-curve-does-not-say">What the rank curve does not say <a class="anchor" href="#what-the-rank-curve-does-not-say" aria-label="Link to this section">#</a></h2>
 
           <div class="caution">
             <span class="label">read against a control</span>
@@ -607,7 +607,7 @@ causalab_mini.plan.plan.PlanError: featurizer &#x27;rot&#x27;: &#x27;documents/a
           </div>
 
           <div class="seealso">
-            <h2>See also</h2>
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
             <ul>
               <li><a href="../ops.html">Reads, writes, metrics</a> — the featurizer kinds,
                   the write mechanisms, and what each metric kind computes</li>

@@ -90,7 +90,7 @@
           lens; a <code>token_prob</code> metric on the answer is what to plot against
           depth. No second step, no saved activations, no separate script.</p>
 
-          <h2>At a glance</h2>
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
 
           <pre><code class="language-json">"reads": {
   "lens": {
@@ -114,7 +114,7 @@
           <code>logit_diff</code> — is the same code that scores a real
           <code>lm_head</code> read.</p>
 
-          <h2>The document</h2>
+          <h2 id="the-document">The document <a class="anchor" href="#the-document" aria-label="Link to this section">#</a></h2>
 
           <figure class="listing">
             <figcaption><code>documents/v2/logit_lens.json</code> <span class="what">— the document this page runs, verbatim</span></figcaption>
@@ -211,7 +211,7 @@
             <code>weekdays/train</code>, saving both tables.</li>
           </ul>
 
-          <h2>What it compiles to</h2>
+          <h2 id="what-it-compiles-to">What it compiles to <a class="anchor" href="#what-it-compiles-to" aria-label="Link to this section">#</a></h2>
 
           <!-- ran 2026-09-23, CPU, fp32 -->
           <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/logit_lens.json
@@ -229,7 +229,7 @@
           <code>as logits</code> — the view is part of the read's identity, not a
           post-processing step someone might forget to apply.</p>
 
-          <h2>Running it</h2>
+          <h2 id="running-it">Running it <a class="anchor" href="#running-it" aria-label="Link to this section">#</a></h2>
 
           <!-- run 2026-09-23 on CPU, fp32, 12-core Ryzen 9 5900X -->
           <pre><code class="language-bash">$ time uv run causalab-mini run documents/v2/logit_lens.json --out out/logit_lens
@@ -244,7 +244,7 @@ out/logit_lens/layers=1/top1.json
 
 real	0m8.434s</code></pre>
 
-          <h2>The curve</h2>
+          <h2 id="the-curve">The curve <a class="anchor" href="#the-curve" aria-label="Link to this section">#</a></h2>
 
           <p><code>p_answer.json</code> is one row per example, so the curve against
           depth is the point directory you read it out of. Both layers, all four
@@ -274,12 +274,12 @@ real	0m8.434s</code></pre>
             which it rises is the finding.</p>
           </div>
 
-          <!-- TODO(author): there is no documents/real/ logit-lens document, so this
-               page has no lens over a model that does the weekday task. One would be
+          <!-- The corpus has no documents/real/ logit-lens document, so this page
+               has no lens over a model that does the weekday task. One would be
                documents/real/weekdays_layer_sweep.json's site with `view: "logits"`,
                no writes, and `token_prob` on base_answer across the 16 layers. -->
 
-          <h2>Is the lens wired to the right head?</h2>
+          <h2 id="is-the-lens-wired-to-the-right-head">Is the lens wired to the right head? <a class="anchor" href="#is-the-lens-wired-to-the-right-head" aria-label="Link to this section">#</a></h2>
 
           <p>A logit lens is a wiring claim: <em>this</em> norm, <em>this</em>
           unembedding, applied in <em>this</em> order. A lens plugged into the wrong
@@ -339,13 +339,13 @@ lens 0.000034297   model 0.000034297   diff 0.00e+00</code></pre>
           Nothing larger than that is a rounding difference, and a lens that disagrees
           with its own model's last layer by more is wired wrong.</p>
 
-          <h2>Where a logits view is refused</h2>
+          <h2 id="where-a-logits-view-is-refused">Where a logits view is refused <a class="anchor" href="#where-a-logits-view-is-refused" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/spec.py:153 RESIDUAL_STREAM; :622-631 the two refusals -->
           <p>Two things the compiler will not let a <code>logits</code> view be, both
           refused before any weights load.</p>
 
-          <h3>It is not the residual stream</h3>
+          <h3 id="it-is-not-the-residual-stream">It is not the residual stream <a class="anchor" href="#it-is-not-the-residual-stream" aria-label="Link to this section">#</a></h3>
 
           <p>The final norm and the head expect a residual stream, so the view is
           allowed only at a component that is one: <code>embeddings</code>,
@@ -359,7 +359,7 @@ lens 0.000034297   model 0.000034297   diff 0.00e+00</code></pre>
 …
 Value error, interventions.lens: read &#x27;lens&#x27;: view &#x27;logits&#x27; projects the residual stream through the head, and &#x27;mlp_output&#x27; is not the residual stream (one of [&#x27;block_input&#x27;, &#x27;block_output&#x27;, &#x27;embeddings&#x27;, &#x27;ln_final&#x27;])</code></pre>
 
-          <h3>It is not featurized, and it is not written back</h3>
+          <h3 id="it-is-not-featurized-and-it-is-not-written-back">It is not featurized, and it is not written back <a class="anchor" href="#it-is-not-featurized-and-it-is-not-written-back" aria-label="Link to this section">#</a></h3>
 
           <!-- ran 2026-09-23; the same document with a subspace featurizer on the read -->
           <pre><code class="language-bash">$ uv run causalab-mini validate logit_lens_featurized.json
@@ -384,7 +384,7 @@ Value error, interventions.lens: read &#x27;lens&#x27;: a featurized read cannot
             that cannot arise here by accident.</p>
           </div>
 
-          <h2><code>logits</code> and <code>lm_head</code> are two components</h2>
+          <h2 id="logits-and-lm-head-are-two-components"><code>logits</code> and <code>lm_head</code> are two components <a class="anchor" href="#logits-and-lm-head-are-two-components" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/address.py:214-220 — lm_head is lm_head_output;
                logits is the model's own output, which is not always the head's -->
@@ -416,7 +416,7 @@ Value error, interventions.lens: read &#x27;lens&#x27;: a featurized read cannot
           tensor.</p>
 
           <div class="seealso">
-            <h2>See also</h2>
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
             <ul>
               <li><a href="../locations.html">Locations</a> — which components are the
                   residual stream, and the <code>lm_head</code> / <code>logits</code>

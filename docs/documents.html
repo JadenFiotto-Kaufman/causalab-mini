@@ -96,7 +96,7 @@
           <code>documents/</code>. A document is told apart by shape: it is
           plan-shaped if it has <code>steps</code>.</p>
 
-          <h2>At a glance</h2>
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
 
           <p>The smallest real experiment in the repository: read the residual stream
           at the last token of a counterfactual prompt, swap it into the same place on
@@ -231,7 +231,7 @@ ok: documents/v2/patching.json is a valid plan-shaped document</code></pre>
             digest.</p>
           </div>
 
-          <h2 id="model">model</h2>
+          <h2 id="model">model <a class="anchor" href="#model" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/spec.py:60-68 — class Model -->
           <table>
@@ -260,7 +260,7 @@ ok: documents/v2/patching.json is a valid plan-shaped document</code></pre>
           <code>device</code> field. Where the weights sit is a property of the run,
           and is a flag — see <a href="#not-fields">what is not a document field</a>.</p>
 
-          <h2 id="roles">roles, and the rows a step runs over</h2>
+          <h2 id="roles">roles, and the rows a step runs over <a class="anchor" href="#roles" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/spec.py:71-73 — class Role: field -->
           <p>A <strong>role</strong> is one side of a paired prompt. Its only field is
@@ -301,7 +301,7 @@ weekdays/data: 4 rows
   splits:  test, train
   sample:  {&quot;answer&quot;: &quot; Friday&quot;, &quot;base_answer&quot;: &quot; Friday&quot;, &quot;cf_answer&quot;: &quot; Saturday&quot;, &quot;counterfactual_inputs&quot;: [&quot;If today is Friday, tomorrow is&quot;], &quot;counterfactual_inputs_variables&quot;: [{&quot;entity&quot;: &quot;Friday&quot;}], &quot;entity&quot;: &quot;Thursday&quot;, &quot;input&quot;: &quot;If today is Thursday, tomorrow is&quot;, &quot;label&quot;: &quot; Saturday&quot;, &quot;split&quot;: &quot;train&quot;}</code></pre>
 
-          <h3><code>&lt;column&gt;_variables</code></h3>
+          <h3 id="column-variables"><code>&lt;column&gt;_variables</code> <a class="anchor" href="#column-variables" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/data/rows.py:69-95 — variable_text: the sibling column first, a top-level column otherwise -->
           <p>A position may anchor to a <em>variable</em> — "this row's entity" — and
@@ -318,7 +318,7 @@ weekdays/data: 4 rows
           page</a>; what matters here is that the anchor is a fact about the
           <em>row</em>, and so is resolved before anything runs.</p>
 
-          <h2 id="sites">sites</h2>
+          <h2 id="sites">sites <a class="anchor" href="#sites" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/spec.py:76-109 — class Site -->
           <table>
@@ -356,7 +356,7 @@ weekdays/data: 4 rows
           per-head, which are read-only and which need eager attention is
           <a href="locations.html">the locations page</a>.</p>
 
-          <h2 id="featurizers">featurizers</h2>
+          <h2 id="featurizers">featurizers <a class="anchor" href="#featurizers" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/spec.py:118-148 — class Featurizer -->
           <table>
@@ -410,7 +410,7 @@ weekdays/data: 4 rows
           widths. The kinds themselves, and what each does to a read or a write, are on
           <a href="ops.html">the ops page</a>.</p>
 
-          <h2 id="interventions">interventions</h2>
+          <h2 id="interventions">interventions <a class="anchor" href="#interventions" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/spec.py:306-317 — class Intervention -->
           <p>An intervention is the experiment, declared once. A step names the one it
@@ -429,7 +429,7 @@ weekdays/data: 4 rows
             </tbody>
           </table>
 
-          <h3 id="reads">reads</h3>
+          <h3 id="reads">reads <a class="anchor" href="#reads" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/spec.py:172-181 — class Read -->
           <table>
@@ -452,7 +452,7 @@ weekdays/data: 4 rows
           <code>token_prob</code> metric on a <code>logits</code> view is the logit
           lens, as one document.</p>
 
-          <h3 id="writes">writes</h3>
+          <h3 id="writes">writes <a class="anchor" href="#writes" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/spec.py:190-235 — class Write -->
           <table>
@@ -539,7 +539,7 @@ weekdays/data: 4 rows
           and last among them; first, or alone, it is the identity. What each mechanism
           does to the tensor is <a href="ops.html">the ops page</a>.</p>
 
-          <h3 id="models">models</h3>
+          <h3 id="models">models <a class="anchor" href="#models" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/spec.py:252-255 — class IntervenedModel -->
           <p>An intervened model has two fields: <code>input</code>, a declared role,
@@ -552,7 +552,7 @@ weekdays/data: 4 rows
           forwards are ordered by that dependency. The graph has to be acyclic; it
           <em>is</em> the schedule, and a cycle is refused by the compiler.</p>
 
-          <h3 id="metrics">metrics</h3>
+          <h3 id="metrics">metrics <a class="anchor" href="#metrics" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/spec.py:257-304 — the five metric classes, discriminated on `kind` -->
           <p>Every metric has <code>kind</code>, <code>of</code> (the name of a read)
@@ -628,7 +628,7 @@ weekdays/data: 4 rows
           <p><code>example_id</code> is the row's <code>example_id</code> column if the
           table has one, and the zero-based row index otherwise.</p>
 
-          <h3 id="decode">decode: generating after the prompt</h3>
+          <h3 id="decode">decode: generating after the prompt <a class="anchor" href="#decode" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/spec.py:314-317 — decode: int, ge=0 -->
           <p><code>decode</code> on an intervention generates that many tokens after
@@ -678,7 +678,7 @@ weekdays/data: 4 rows
           <code>{"all": true}</code> — and takes no scope, because every other cut of
           the continuation is only known once the decode has finished.</p>
 
-          <h2 id="steps">steps</h2>
+          <h2 id="steps">steps <a class="anchor" href="#steps" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/spec.py:430 — Step = Union[Observe, Fit, Weights], discriminated on `kind` -->
           <p>The steps run in the order written, and that order is checked. Three
@@ -699,7 +699,7 @@ weekdays/data: 4 rows
           needs one</strong>. <code>intervention</code> is optional when the document
           declares exactly one.</p>
 
-          <h3 id="saves">saves</h3>
+          <h3 id="saves">saves <a class="anchor" href="#saves" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/spec.py:343-354 — class Save; the field is `saves`, not `save` -->
           <p>A save is <code>{"value": …, "file_path": …}</code> and it sits on the
@@ -725,7 +725,7 @@ weekdays/data: 4 rows
             one, and a field called <code>save</code> would shadow it.</p>
           </div>
 
-          <h3 id="outputs">outputs, and <code>ref</code> across steps</h3>
+          <h3 id="outputs">outputs, and <code>ref</code> across steps <a class="anchor" href="#outputs" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/spec.py:325-340 — class Output -->
           <p>An <code>observe</code> step may publish values for the steps after it.
@@ -829,7 +829,7 @@ weekdays/data: 4 rows
           basis is refused as an operand outright — a basis is loaded as a featurizer,
           not written at a site.</p>
 
-          <h3 id="fit">fit</h3>
+          <h3 id="fit">fit <a class="anchor" href="#fit" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/spec.py:405-421 — class Fit -->
           <table>
@@ -877,7 +877,7 @@ weekdays/data: 4 rows
             fit names.</p>
           </div>
 
-          <h3 id="weights">weights</h3>
+          <h3 id="weights">weights <a class="anchor" href="#weights" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/spec.py:424-427 — class Weights; :596-607 its refusals -->
           <p>A <code>weights</code> step has <code>names</code> — declared featurizers
@@ -887,7 +887,7 @@ weekdays/data: 4 rows
           named: its tensors are the file it came from, and there is no fitted weight
           to publish.</p>
 
-          <h2 id="sweep">sweep</h2>
+          <h2 id="sweep">sweep <a class="anchor" href="#sweep" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/sweep.py:1-31 — the module docstring -->
           <p><code>{"sweep": [a, b, c]}</code> at any field means the document is three
@@ -986,7 +986,7 @@ weekdays/data: 4 rows
           else the protocol allows here — <code>at_once</code>, cohorts, swept bundles
           — is refused by name.</p>
 
-          <h2 id="digest">header, and the digest</h2>
+          <h2 id="digest">header, and the digest <a class="anchor" href="#digest" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/spec.py:56-57 — class Header: description only -->
           <p><code>header</code> has one field, <code>description</code>, and it is free
@@ -1020,7 +1020,7 @@ same: True</code></pre>
           a key that changes the experiment would load, do nothing, and be stamped as
           if it had.</p>
 
-          <h2 id="schema">The schema, and the vocabulary</h2>
+          <h2 id="schema">The schema, and the vocabulary <a class="anchor" href="#schema" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/cli.py:94-97 — schema() is Spec.model_json_schema() -->
           <p><code>causalab-mini schema</code> prints the JSON Schema of the
@@ -1067,7 +1067,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
           <p>Both verbs take <code>--json</code>, like every verb, so an agent parses
           instead of scraping.</p>
 
-          <h2 id="everything">The everything document</h2>
+          <h2 id="everything">The everything document <a class="anchor" href="#everything" aria-label="Link to this section">#</a></h2>
 
           <!-- measured 2026-09-23: 69 distinct field paths, the most of the 25
                documents in documents/v2 and documents/real -->
@@ -1255,7 +1255,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
 }</code></pre>
           </details>
 
-          <h2 id="refused">What the compiler refuses</h2>
+          <h2 id="refused">What the compiler refuses <a class="anchor" href="#refused" aria-label="Link to this section">#</a></h2>
 
           <p>Every message below is the real one, from running a deliberately broken
           document. Each is a copy of a corpus document with one thing changed, named
@@ -1390,7 +1390,7 @@ causalab_mini.plan.plan.PlanError: featurizer &#x27;rot&#x27;: k=999 is not a su
             offline, and why <code>explain</code> is the next thing to run.</p>
           </div>
 
-          <h2 id="protocol">The protocol format</h2>
+          <h2 id="protocol">The protocol format <a class="anchor" href="#protocol" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/document.py:1-18 — only the subset of protocol_version 3 this slice runs -->
           <p>The other reader accepts the protocol's own JSON, and only the subset of
@@ -1432,7 +1432,7 @@ ok: documents/minimal_cpu.json is a valid protocol document</code></pre>
           format; <code>documents/v2/</code> and <code>documents/real/</code> are
           plan-shaped. Write new documents in the plan-shaped one.</p>
 
-          <h2 id="not-fields">What is not a document field</h2>
+          <h2 id="not-fields">What is not a document field <a class="anchor" href="#not-fields" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/cli.py:66-78 — the flags on validate/explain/run -->
           <p>A document is the experiment. Where it runs, how much of it runs at once
@@ -1474,7 +1474,7 @@ ok: documents/minimal_cpu.json is a valid protocol document</code></pre>
 }</code></pre>
 
           <div class="seealso">
-            <h2>See also</h2>
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
             <ul>
               <li><a href="locations.html">Locations</a> — which components exist, which are per-head, and what <code>heads</code> and <code>units</code> slice</li>
               <li><a href="positions.html">Positions</a> — every form <code>pos</code> can take, the anchors, and what happens when one cannot be placed</li>

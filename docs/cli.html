@@ -91,7 +91,7 @@
           scraping. Every verb writes to stdout and nothing else; only <code>run</code>
           touches the disk.</p>
 
-          <h2>At a glance</h2>
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
 
           <p>The loop is check, read, run. All three commands below take the same
           document, the smallest interchange in the repository: four rows, one swap at
@@ -121,7 +121,7 @@ out/cli/patch/logit_diff.json</code></pre>
           included. <code>run</code> prints the paths it wrote, in the order it wrote
           them, and that is its entire output.</p>
 
-          <h2>The verbs</h2>
+          <h2 id="the-verbs">The verbs <a class="anchor" href="#the-verbs" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/cli.py:47-79 (the parsers) and :235-244 (the table) -->
           <table>
@@ -161,7 +161,7 @@ out/cli/patch/logit_diff.json</code></pre>
             the work.</p>
           </div>
 
-          <h2>Asking what exists</h2>
+          <h2 id="asking-what-exists">Asking what exists <a class="anchor" href="#asking-what-exists" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/cli.py:99-124 -->
           <p><code>vocab</code> is the vocabulary a document is written in: every
@@ -275,7 +275,7 @@ weekdays/train: 4 rows
   splits:  all
 …</code></pre>
 
-          <h2>Checking a document: two different questions</h2>
+          <h2 id="checking-a-document-two-different-questions">Checking a document: two different questions <a class="anchor" href="#checking-a-document-two-different-questions" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/cli.py:198-203 — validate calls Spec.model_validate or
                Document.from_json on each point and nothing else -->
@@ -312,7 +312,7 @@ Traceback (most recent call last):
 …
 causalab_mini.address.AddressError: component 'block_ouput' has no address here, and this model's internals have no accessor of that name either. Mini's are ['attention_input_norm', 'attention_key', 'attention_output', 'attention_premix', 'attention_probs', 'attention_query', 'attention_scores', 'attention_z', 'block_input', 'block_mid', 'block_output', 'embeddings', 'input_ids', 'lm_head', 'ln_final', 'logits', 'mlp_activation', 'mlp_input', 'mlp_input_norm', 'mlp_neuron_output', 'mlp_output']; add one to a model with RenameConfig(addresses={...})</code></pre>
 
-          <h2><code>run</code></h2>
+          <h2 id="run"><code>run</code> <a class="anchor" href="#run" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/cli.py:74-79, 222-228 -->
           <table>
@@ -333,7 +333,7 @@ causalab_mini.address.AddressError: component 'block_ouput' has no address here,
           the paths; and nothing is ever refused for already existing — see the
           caution under the output layout.</p>
 
-          <h3><code>--engine</code>: three runtimes, one plan</h3>
+          <h3 id="engine-three-runtimes-one-plan"><code>--engine</code>: three runtimes, one plan <a class="anchor" href="#engine-three-runtimes-one-plan" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/cli.py:34-38 -->
           <table>
@@ -413,7 +413,7 @@ hf-internal-testing/tiny-random-LlamaForCausalLM via hooks: 2 layers, padding_si
             rather than demonstrated.</p>
           </div>
 
-          <h3><code>--batch-size</code></h3>
+          <h3 id="batch-size"><code>--batch-size</code> <a class="anchor" href="#batch-size" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/engine/steps.py:56-60, 245-261 -->
           <p>A window of rows is a whole small pass: the same forwards in the same
@@ -457,7 +457,7 @@ hf-internal-testing/tiny-random-LlamaForCausalLM via hooks: 2 layers, padding_si
           backward; a fit's memory knob is its <code>pairs</code>. It does bound the
           held-out pass, which runs under <code>no_grad</code>.</p>
 
-          <h2>What lands on disk</h2>
+          <h2 id="what-lands-on-disk">What lands on disk <a class="anchor" href="#what-lands-on-disk" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/write.py:1-13 -->
           <p>The plan's save manifest, and nothing else. Every file that leaves a run
@@ -557,7 +557,7 @@ out/cli/das/rot.safetensors</code></pre>
             so. Give each run its own <code>--out</code>.</p>
           </div>
 
-          <h3><code>run.json</code>, annotated</h3>
+          <h3 id="run-json-annotated"><code>run.json</code>, annotated <a class="anchor" href="#run-json-annotated" aria-label="Link to this section">#</a></h3>
 
           <!-- the file out/cli/patch/run.json, ran 2026-09-23 -->
           <pre><code class="language-json">{
@@ -594,7 +594,7 @@ out/cli/das/rot.safetensors</code></pre>
           <p>Deliberately absent: no hostname, no timestamp, no absolute path. A record
           has to be byte-identical across machines to be worth comparing.</p>
 
-          <h3>A metric table row, annotated</h3>
+          <h3 id="a-metric-table-row-annotated">A metric table row, annotated <a class="anchor" href="#a-metric-table-row-annotated" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/write.py:65-96 -->
           <p>A metric table is a JSON array of row objects, one file per metric, with
@@ -662,7 +662,7 @@ out/cli/das/rot.safetensors</code></pre>
           resolved fine — it was the data that was missing, and the two halves are
           reported separately for that reason.</p>
 
-          <h2><code>--json</code>, for agents</h2>
+          <h2 id="json-for-agents"><code>--json</code>, for agents <a class="anchor" href="#json-for-agents" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/cli.py:81-85, 89-91 -->
           <p>Each verb returns one dictionary with a <code>text</code> key.
@@ -729,7 +729,7 @@ $ uv run causalab-mini --json vocab | jq -c '.metric_kinds, .units.match, .compo
  ]
 }</code></pre>
 
-          <h2>Exit codes, and what an error looks like</h2>
+          <h2 id="exit-codes-and-what-an-error-looks-like">Exit codes, and what an error looks like <a class="anchor" href="#exit-codes-and-what-an-error-looks-like" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/cli.py:80-86 — main returns 0 and catches nothing -->
           <table>
@@ -790,7 +790,7 @@ causalab_mini.plan.plan.PlanError: write 'patch' has nothing to write on row(s) 
           written there, not on the data.</p>
 
           <div class="seealso">
-            <h2>See also</h2>
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
             <ul>
               <li><a href="documents.html">Documents</a> — the format every verb takes,
                   field by field, and the schema <code>schema</code> prints</li>

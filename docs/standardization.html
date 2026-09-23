@@ -94,7 +94,7 @@
           sits in the value there, where it sits in the forward pass, and why a family
           has none. A family that differs differs by a row, not by a branch of code.</p>
 
-          <h2>At a glance</h2>
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
 
           <!-- FINDINGS.md:261-264 for the two raw block paths; the full
                standardized-to-raw map is tests/test_components.py RAW_PATHS -->
@@ -126,7 +126,7 @@ hf-internal-testing/tiny-random-gpt2             pre_norm   &#x27;ln_2&#x27; inp
           Mini has no family axis and no family column; the axis is absorbed by the
           dependency.</p>
 
-          <h2>Where the line is</h2>
+          <h2 id="where-the-line-is">Where the line is <a class="anchor" href="#where-the-line-is" aria-label="Link to this section">#</a></h2>
 
           <figure>
             <svg viewBox="0 0 380 470" role="img" aria-labelledby="chain-t chain-d" width="380">
@@ -229,7 +229,7 @@ hf-internal-testing/tiny-random-gpt2             pre_norm   &#x27;ln_2&#x27; inp
             family table beside nnterp's, which is the reason there is one.</p>
           </div>
 
-          <h2>What an Address row is</h2>
+          <h2 id="what-an-address-row-is">What an Address row is <a class="anchor" href="#what-an-address-row-is" aria-label="Link to this section">#</a></h2>
 
           <!-- nnterp/nnterp/rename_utils.py:502-575 -->
           <table>
@@ -294,7 +294,7 @@ hf-internal-testing/tiny-random-gpt2             pre_norm   &#x27;ln_2&#x27; inp
           component table and why <code>logits</code> and <code>lm_head</code> are
           not the same tensor on every family.</p>
 
-          <h2>A family that differs is one row</h2>
+          <h2 id="a-family-that-differs-is-one-row">A family that differs is one row <a class="anchor" href="#a-family-that-differs-is-one-row" aria-label="Link to this section">#</a></h2>
 
           <!-- nnterp/nnterp/rename_utils.py:1041-1120 -->
           <p><code>FAMILY_ADDRESSES</code> is a list of
@@ -339,7 +339,7 @@ hf-internal-testing/tiny-random-gpt2             pre_norm   &#x27;ln_2&#x27; inp
             </tbody>
           </table>
 
-          <h2>A place on a child nnterp does not rename</h2>
+          <h2 id="a-place-on-a-child-nnterp-does-not-rename">A place on a child nnterp does not rename <a class="anchor" href="#a-place-on-a-child-nnterp-does-not-rename" aria-label="Link to this section">#</a></h2>
 
           <!-- nnterp/nnterp/rename_utils.py:942-1006 -->
           <p>nnterp standardizes the block, the mixer and the MLP. It does not rename
@@ -385,7 +385,7 @@ hf-internal-testing/tiny-random-gpt2             pre_norm   &#x27;ln_2&#x27; inp
           module and differ by side: the mid-stream is what the pre-MLP norm reads, and
           the norm's output is what the MLP reads.</p>
 
-          <h2>Block structure, and why the tree alone is not enough</h2>
+          <h2 id="block-structure-and-why-the-tree-alone-is-not-enough">Block structure, and why the tree alone is not enough <a class="anchor" href="#block-structure-and-why-the-tree-alone-is-not-enough" aria-label="Link to this section">#</a></h2>
 
           <!-- nnterp/nnterp/rename_utils.py:1121-1139 -->
           <p><code>model.block_structure</code> is how a block combines its two
@@ -425,7 +425,7 @@ mlps_norm_output == mlps_input</code></pre>
           <code>layers_output == layers_input + attentions_output + mlps_output</code>.
           A row that resolved to a plausible neighbour satisfies none of them.</p>
 
-          <h2>Availability, before any trace</h2>
+          <h2 id="availability-before-any-trace">Availability, before any trace <a class="anchor" href="#availability-before-any-trace" aria-label="Link to this section">#</a></h2>
 
           <!-- nnterp/nnterp/internals.py:42-57 -->
           <p><code>model.internals.status()</code> answers, for every row,
@@ -506,7 +506,7 @@ mlps_output
           from <code>nnterp/tests/test_config.yaml</code> and the assertion in
           <code>test_block_invariants.py</code> rather than run here.</p>
 
-          <h2>Selection: where the tensor is inside the value</h2>
+          <h2 id="selection-where-the-tensor-is-inside-the-value">Selection: where the tensor is inside the value <a class="anchor" href="#selection-where-the-tensor-is-inside-the-value" aria-label="Link to this section">#</a></h2>
 
           <!-- nnterp/nnterp/rename_utils.py:448-500 -->
           <p>A place does not always hold the tensor directly. A module may return its
@@ -553,7 +553,7 @@ mlps_output
             what that module returns, untouched.</p>
           </div>
 
-          <h2>Forward order</h2>
+          <h2 id="forward-order">Forward order <a class="anchor" href="#forward-order" aria-label="Link to this section">#</a></h2>
 
           <!-- nnterp/nnterp/internals.py:59-70 -->
           <p>nnsight will not reach back to a value the model has already passed:
@@ -608,7 +608,7 @@ mlps_output
           (<code>attentions</code>, <code>attentions_input</code>,
           <code>mlps</code>) are still addressable; see below.</p>
 
-          <h2>How mini consumes it</h2>
+          <h2 id="how-mini-consumes-it">How mini consumes it <a class="anchor" href="#how-mini-consumes-it" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/address.py:417-468 -->
           <p><code>locate(model, component, layer)</code> is the whole of it. It asks
@@ -648,7 +648,7 @@ hf-internal-testing/tiny-random-GPTNeoXForCausalLM via nnterp: 5 layers, padding
   …
   logits             ok   width=1024</code></pre>
 
-          <h3>What is still mini's</h3>
+          <h3 id="what-is-still-mini-s">What is still mini's <a class="anchor" href="#what-is-still-mini-s" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/address.py:108-184 -->
           <p>Four interiors: <code>attention_query</code>, <code>attention_key</code>,
@@ -705,7 +705,7 @@ hf-internal-testing/tiny-random-GPTNeoXForCausalLM via nnterp: 5 layers, padding
           family and the first word on the other — one document addressing two
           different things, silently. See <a href="positions.html">Positions</a>.</p>
 
-          <h2>Adding an architecture, or a place</h2>
+          <h2 id="adding-an-architecture-or-a-place">Adding an architecture, or a place <a class="anchor" href="#adding-an-architecture-or-a-place" aria-label="Link to this section">#</a></h2>
 
           <!-- nnterp/nnterp/rename_utils.py:51-155 -->
           <p>An architecture nnterp has never seen is a <code>RenameConfig</code>: the
@@ -741,7 +741,7 @@ print(repr(model.internals["attentions_gate"]))</code></pre>
           about such a place: no width, so a featurizer there is refused rather than
           sized wrongly, it is not per head, and it is a module boundary.</p>
 
-          <h2>When transformers moves</h2>
+          <h2 id="when-transformers-moves">When transformers moves <a class="anchor" href="#when-transformers-moves" aria-label="Link to this section">#</a></h2>
 
           <!-- nnterp/nnterp/tests/test_source_ops.py:1-17 -->
           <p>A <code>.source</code> row names operations the way nnsight names them,
@@ -796,7 +796,7 @@ print(repr(model.internals["attentions_gate"]))</code></pre>
           <p>The fix is a one-row edit, and the name this one needs —
           <code>nn_functional_dropout_0</code> — is in the list the message printed.</p>
 
-          <h2>Remote</h2>
+          <h2 id="remote">Remote <a class="anchor" href="#remote" aria-label="Link to this section">#</a></h2>
 
           <!-- nnterp/nnterp/standardized_transformer.py:89-95 (the remote= contract)
                and :156-164 (what it sets) -->
@@ -816,7 +816,7 @@ print(repr(model.internals["attentions_gate"]))</code></pre>
           is nnterp. See <a href="remote.html">Remote &amp; NDIF</a>.</p>
 
           <div class="seealso">
-            <h2>See also</h2>
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
             <ul>
               <li><a href="locations.html">Locations</a> — the component vocabulary
                   itself: all 21 names, which are per-layer, which are read-only, and

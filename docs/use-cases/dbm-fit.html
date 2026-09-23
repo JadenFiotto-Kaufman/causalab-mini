@@ -90,7 +90,7 @@
           <code>documents/v2/dbm.json</code>, which sweeps the sparsity pressure, so the
           document is a sparsity curve.</p>
 
-          <h2>At a glance</h2>
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/ops/featurizer.py:212 — mask; :220 inverse -->
           <p>The gate featurizer, in three lines:</p>
@@ -117,7 +117,7 @@ m = [θ &gt; 0]    whenever the mask is scored      (hard, so the score is of a 
             everywhere. An unfitted gate is a write that does nothing.</p>
           </div>
 
-          <h2>The document</h2>
+          <h2 id="the-document">The document <a class="anchor" href="#the-document" aria-label="Link to this section">#</a></h2>
 
           <figure class="listing">
             <figcaption><code>documents/v2/dbm.json</code> <span class="what">— the document this page runs, verbatim</span></figcaption>
@@ -316,7 +316,7 @@ m = [θ &gt; 0]    whenever the mask is scored      (hard, so the score is of a 
             <code>steps.weights</code> publishes <code>θ</code> for the save.</li>
           </ul>
 
-          <h3>The three differences from a DAS fit</h3>
+          <h3 id="the-three-differences-from-a-das-fit">The three differences from a DAS fit <a class="anchor" href="#the-three-differences-from-a-das-fit" aria-label="Link to this section">#</a></h3>
 
           <p>The header says the only differences from <code>documents/v2/das.json</code>
           are the featurizer's kind, one objective term and the anneal. Renamings aside,
@@ -335,9 +335,9 @@ m = [θ &gt; 0]    whenever the mask is scored      (hard, so the score is of a 
             </tbody>
           </table>
 
-          <h2>The two new fields</h2>
+          <h2 id="the-two-new-fields">The two new fields <a class="anchor" href="#the-two-new-fields" aria-label="Link to this section">#</a></h2>
 
-          <h3><code>&lt;gate&gt;.mask</code> in the objective</h3>
+          <h3 id="gate-mask-in-the-objective"><code>&lt;gate&gt;.mask</code> in the objective <a class="anchor" href="#gate-mask-in-the-objective" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/engine/steps.py:528 — scored gains `<name>.mask` per gate;
                :569 objective() is Σ wᵢ · termᵢ.mean(), minimized -->
@@ -356,7 +356,7 @@ m = [θ &gt; 0]    whenever the mask is scored      (hard, so the score is of a 
           <code>0.0001, 0.002, 0.01, 0.05</code> is the trade-off, one point per
           weight.</p>
 
-          <h3><code>anneal</code></h3>
+          <h3 id="anneal"><code>anneal</code> <a class="anchor" href="#anneal" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/engine/steps.py:523 — temperature = first · (last/first)^(done/(total-1)) -->
           <p><code>{"start": 1.0, "end": 0.05}</code> sets <code>T</code> on the first
@@ -379,7 +379,7 @@ m = [θ &gt; 0]    whenever the mask is scored      (hard, so the score is of a 
           cleared, so every held-out number on this page is of a hard mask, whatever
           <code>T</code> was.</p>
 
-          <h2>Running it</h2>
+          <h2 id="running-it">Running it <a class="anchor" href="#running-it" aria-label="Link to this section">#</a></h2>
 
           <!-- ran 2026-09-23, CPU, fp32 -->
           <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/dbm.json
@@ -435,7 +435,7 @@ real	0m10.051s</code></pre>
           <p>Four fits, 80 updates and 80 eval passes, in ten seconds — because the
           model is 16 wide and the split is two rows.</p>
 
-          <h2>Reading the mask</h2>
+          <h2 id="reading-the-mask">Reading the mask <a class="anchor" href="#reading-the-mask" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/engine/steps.py:562 weights() publishes the parameter;
                causalab_mini/plan/write.py:63 saves it as a one-slot safetensors bundle -->
@@ -487,7 +487,7 @@ out/dbm/objective=0.05/mask.safetensors 0 of 16 kept</code></pre>
           <p>The bars are the fraction of the 16 units whose <code>θ</code> came out
           positive, measured from zero.</p>
 
-          <h2>How to read the result — and this one</h2>
+          <h2 id="how-to-read-the-result-and-this-one">How to read the result — and this one <a class="anchor" href="#how-to-read-the-result-and-this-one" aria-label="Link to this section">#</a></h2>
 
           <p>A mask fit has two numbers, and both are needed. The <strong>size</strong>
           of the mask is what the sweep moves. The <strong>held-out score</strong> is
@@ -527,11 +527,11 @@ out/dbm/objective=0.05/mask.safetensors 0 of 16 kept</code></pre>
             looks like as a document.</p>
           </div>
 
-          <!-- TODO(author): there is no documents/real/ DBM document, so this page has
-               no mask fit on a model that does the task. If one is added, the sparsity
+          <!-- The corpus has no documents/real/ DBM document, so this page has no
+               mask fit on a model that does the task. If one is added, the sparsity
                curve and the held-out score belong here side by side. -->
 
-          <h2>The bundle</h2>
+          <h2 id="the-bundle">The bundle <a class="anchor" href="#the-bundle" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/plan/build.py:312 _identity — the keys a stamp carries;
                :340 _load_featurizer checks them, :375 refuses naming the key -->
@@ -549,7 +549,7 @@ out/dbm/objective=0.05/mask.safetensors 0 of 16 kept</code></pre>
           no soft reading to fall into.</p>
 
           <div class="seealso">
-            <h2>See also</h2>
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
             <ul>
               <li><a href="das-fit.html">DAS fit</a> — the same document with a subspace
                   in place of the gate, and a fit that does separate, on a real model</li>

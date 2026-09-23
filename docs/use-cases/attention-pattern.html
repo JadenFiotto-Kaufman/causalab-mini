@@ -89,7 +89,7 @@
           "today" travels by the head's aim, the answer moves. This page runs that,
           per head of layer 12, on the real model.</p>
 
-          <h2>At a glance</h2>
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
 
           <!-- measured here 2026-09-23, CPU, fp32, out/pattern_real/heads=*/logit_diff.json -->
           <p>Nothing moves. All 32 heads of layer 12, mean logit difference over the 42
@@ -116,7 +116,7 @@
           layer is 0.013 logits, and the interchange accuracy is 0.00 on every head and
           every row. The mover head's pattern is not what makes it the mover head.</p>
 
-          <h2>The document</h2>
+          <h2 id="the-document">The document <a class="anchor" href="#the-document" aria-label="Link to this section">#</a></h2>
 
           <details class="listing">
             <summary><code>documents/real/weekdays_pattern_patching.json</code> <span class="what">— the document this page runs, verbatim</span></summary>
@@ -326,9 +326,9 @@
           site — read from the unmodified model on the counterfactual prompt, swap into
           the base run, score the head's logits against the two answers.</p>
 
-          <h2>Two things this document says that others do not</h2>
+          <h2 id="two-things-this-document-says-that-others-do-not">Two things this document says that others do not <a class="anchor" href="#two-things-this-document-says-that-others-do-not" aria-label="Link to this section">#</a></h2>
 
-          <h3><code>"attn_implementation": "eager"</code></h3>
+          <h3 id="attn-implementation-eager"><code>"attn_implementation": "eager"</code> <a class="anchor" href="#attn-implementation-eager" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/spec.py:68 attn_implementation; :65-67 "part of the
                experiment and not of the run" -->
@@ -369,7 +369,7 @@ meta-llama/Llama-3.2-1B via nnterp: 16 layers, padding_side=left
           <p>Every other component on the list resolves under the default. Two do not,
           and the refusal names the field to set.</p>
 
-          <h3>The pattern is over <em>keys</em></h3>
+          <h3 id="the-pattern-is-over-keys">The pattern is over <em>keys</em> <a class="anchor" href="#the-pattern-is-over-keys" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/address.py:156 attention_probs — seq_axis=2, keys=True, heads="q" -->
           <p><code>attention_probs</code> is
@@ -405,7 +405,7 @@ causalab_mini.plan.plan.PlanError: write &#x27;look_there&#x27; swaps in the att
           every weekday name is one token, so the whole 42-pair corpus is aligned and
           the real document needs no subset.</p>
 
-          <h2>What it compiles to</h2>
+          <h2 id="what-it-compiles-to">What it compiles to <a class="anchor" href="#what-it-compiles-to" aria-label="Link to this section">#</a></h2>
 
           <!-- ran 2026-09-23; 96 lines, the first point shown -->
           <pre><code class="language-bash">$ uv run causalab-mini explain documents/real/weekdays_pattern_patching.json
@@ -425,7 +425,7 @@ causalab_mini.plan.plan.PlanError: write &#x27;look_there&#x27; swaps in the att
           and it is the same field whether the component is a pattern, a query or a
           head's pre-projection result.</p>
 
-          <h2>Running it</h2>
+          <h2 id="running-it">Running it <a class="anchor" href="#running-it" aria-label="Link to this section">#</a></h2>
 
           <!-- run 2026-09-23 on CPU, fp32, 12-core Ryzen 9 5900X, weights from the
                local HF cache -->
@@ -445,7 +445,7 @@ real	1m50.005s</code></pre>
           The recorded A100 run of the neighbouring head-patching document — three times
           the points — took 33 seconds (<code>documents/real/README.md</code>).</p>
 
-          <h2>The result</h2>
+          <h2 id="the-result">The result <a class="anchor" href="#the-result" aria-label="Link to this section">#</a></h2>
 
           <p>Mean over the 42 pairs, per head. Every one of the 32:</p>
 
@@ -476,7 +476,7 @@ real	1m50.005s</code></pre>
           the number by about a quarter of one percent of the distance between
           them.</p>
 
-          <h2>What the head does instead</h2>
+          <h2 id="what-the-head-does-instead">What the head does instead <a class="anchor" href="#what-the-head-does-instead" aria-label="Link to this section">#</a></h2>
 
           <p>The contrast is the point. The same head, the same position, the same
           corpus, with the swap moved from its pattern to its result:</p>
@@ -523,7 +523,7 @@ real	1m50.005s</code></pre>
             <code>"operand": 0.0</code> in place of a read.</p>
           </div>
 
-          <h2>The tiny version</h2>
+          <h2 id="the-tiny-version">The tiny version <a class="anchor" href="#the-tiny-version" aria-label="Link to this section">#</a></h2>
 
           <p>The same experiment at a size that runs anywhere, for checking a change to
           the library rather than learning about a model:</p>
@@ -663,7 +663,7 @@ real	0m6.481s</code></pre>
           same code.</p>
 
           <div class="seealso">
-            <h2>See also</h2>
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
             <ul>
               <li><a href="../locations.html">Locations</a> — the whole component
                   vocabulary, which components need eager attention, and what

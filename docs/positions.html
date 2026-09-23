@@ -100,7 +100,7 @@
           library, <code>torch</code> and <code>shapes.py</code> for exactly that
           reason.</p>
 
-          <h2>At a glance</h2>
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
 
           <!-- ran 2026-09-23, CPU; causalab_mini/shapes.py:91-108 derives these lines off the dataclass -->
           <pre><code class="language-bash">$ uv run causalab-mini vocab
@@ -148,7 +148,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
       },</code></pre>
           </figure>
 
-          <h2>The three questions</h2>
+          <h2 id="the-three-questions">The three questions <a class="anchor" href="#the-three-questions" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/shapes.py:70-89 — the fields and __post_init__'s checks -->
           <table>
@@ -168,7 +168,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
           <code>{"index": -1, "scope": {"variable": "entity"}}</code> cost the same
           code.</p>
 
-          <h3>The cut</h3>
+          <h3 id="the-cut">The cut <a class="anchor" href="#the-cut" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/ops/locate.py:269-286 (_cut); causalab_mini/shapes.py:130-144 (width) -->
           <table>
@@ -193,7 +193,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
           is the prompt's. A span may mix signs, and then its width is not knowable
           before the row is (<code>shapes.py:142-143</code>).</p>
 
-          <h2>What you can ask for</h2>
+          <h2 id="what-you-can-ask-for">What you can ask for <a class="anchor" href="#what-you-can-ask-for" aria-label="Link to this section">#</a></h2>
 
           <table>
             <thead><tr><th>you want</th><th>you write</th></tr></thead>
@@ -225,7 +225,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
             generated frame.</p>
           </div>
 
-          <h2>Anchors: which text, on which row</h2>
+          <h2 id="anchors-which-text-on-which-row">Anchors: which text, on which row <a class="anchor" href="#anchors-which-text-on-which-row" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/data/rows.py:69-94 (variable_text) — the sibling first, then a top-level column -->
           <p>A <code>variable</code> anchor names a column, and the text it binds to is
@@ -255,7 +255,7 @@ weekdays/train: 4 rows
           spec and the per-row text travel together as
           <code>Selection.where</code> and <code>Selection.anchors</code>.</p>
 
-          <h3>When the value is in the prompt twice, or not at all</h3>
+          <h3 id="when-the-value-is-in-the-prompt-twice-or-not-at-all">When the value is in the prompt twice, or not at all <a class="anchor" href="#when-the-value-is-in-the-prompt-twice-or-not-at-all" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/ops/locate.py:36-39 (REASONS); :224, :234, :236 for the first two; :269-286 for out_of_range -->
           <table>
@@ -277,7 +277,7 @@ weekdays/train: 4 rows
           <code>today</code> and in <code>Thursday</code> both — the last line of the
           block below.</p>
 
-          <h2>The character map, and why the last token of Thursday is <code>day</code></h2>
+          <h2 id="the-character-map-and-why-the-last-token-of-thursday-is-day">The character map, and why the last token of Thursday is <code>day</code> <a class="anchor" href="#the-character-map-and-why-the-last-token-of-thursday-is-day" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/ops/locate.py:21-25, :169-189 (_chars) — offsets[k] = len(decode(ids[:k])), parked where a prefix is not one -->
           <p>The map from characters to tokens is built from the ids, by decoding
@@ -338,7 +338,7 @@ print(locate.locate(frame, Where(index=-1, scope=Anchor(variable=&quot;e&quot;))
             word fragment.</p>
           </div>
 
-          <h2>Position 0, and BOS</h2>
+          <h2 id="position-0-and-bos">Position 0, and BOS <a class="anchor" href="#position-0-and-bos" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/ops/locate.py:70-91 (frame_of), :159-166 (_special_prefix) — asked rather than guessed -->
           <p>A row's run starts after whatever the tokenizer puts before every prompt,
@@ -378,7 +378,7 @@ gpt2   prefix=()    ids[:4]=(41, 70, 227, 68) starts=(0,) index 0 -&gt; (0,) 'I'
           like <code>eos</code> in the continuation — <code>{"scope": {"segment":
           "bos"}}</code> — and no document has asked.</p>
 
-          <h2>Left padding: the same index, a different token</h2>
+          <h2 id="left-padding-the-same-index-a-different-token">Left padding: the same index, a different token <a class="anchor" href="#left-padding-the-same-index-a-different-token" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/ops/locate.py:46-58 — starts/ends are "what makes resolution independent of the padding side" -->
           <p>Resolution works from each row's half-open content span inside the padded
@@ -417,7 +417,7 @@ print([locate.tokens_of(frame, one, row) for row, one in enumerate(windows)])</c
           patch doing something per row; an assertion that the integers differ needs a
           corpus where they do.</p>
 
-          <h2>Eligibility: a read may skip a row, a write may not</h2>
+          <h2 id="eligibility-a-read-may-skip-a-row-a-write-may-not">Eligibility: a read may skip a row, a write may not <a class="anchor" href="#eligibility-a-read-may-skip-a-row-a-write-may-not" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/engine/steps.py:456-467 (_writes_land) — "The ragged write policy, and it is `refuse`" -->
           <p>A row whose anchor text is not in its prompt gets an empty window. For a
@@ -452,7 +452,7 @@ in the prompt more than once, and scoping the anchor is what makes it one</code>
           halves is refused: <em>a metric of nothing has no mean</em>
           (<code>steps.py:207-212</code>).</p>
 
-          <h2 id="prov">Provenance</h2>
+          <h2 id="prov">Provenance <a class="anchor" href="#prov" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/engine/steps.py:41-45 (Record), :141-148 — positions and eligible land in the results -->
           <p>A pass with a position the document does not already fix records where it
@@ -544,7 +544,7 @@ eligible {'iia': (True, True, True, True), 'logit_diff': (True, True, True, True
           <code>"value": null</code> and <code>"eligible": false</code>, so it can
           never be read as a zero or silently shorten a denominator.</p>
 
-          <h2>The generated frame</h2>
+          <h2 id="the-generated-frame">The generated frame <a class="anchor" href="#the-generated-frame" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/ops/locate.py:123-137 (continuation) — the decode ran to the bound; the frame stops at the first stop token -->
           <p><code>{"frame": "generated"}</code> addresses what the decode produced.
@@ -653,7 +653,7 @@ eligible {'p_answer': (True, True, False, False)}</code></pre>
           reason. The positive case is reachable only over hand-made ids, which is
           where it is tested (<code>tests/test_locate.py:149-164</code>).</p>
 
-          <h2>Width and ragged</h2>
+          <h2 id="width-and-ragged">Width and ragged <a class="anchor" href="#width-and-ragged" aria-label="Link to this section">#</a></h2>
 
           <!-- causalab_mini/shapes.py:130-163 — "The two are different questions, which is why width answers the first and this the second" -->
           <p>Two properties of a spec, both knowable without a row, answering different
@@ -689,7 +689,7 @@ eligible {'p_answer': (True, True, False, False)}</code></pre>
           step processes one position, and the cut happens afterwards over the stack of
           steps.</p>
 
-          <h2>What is refused, and where</h2>
+          <h2 id="what-is-refused-and-where">What is refused, and where <a class="anchor" href="#what-is-refused-and-where" aria-label="Link to this section">#</a></h2>
 
           <table>
             <thead><tr><th>refusal</th><th>where</th></tr></thead>
@@ -722,7 +722,7 @@ eligible {'p_answer': (True, True, False, False)}</code></pre>
           is a sample, so a skew that first shows on row 7 passes.</p>
 
           <div class="seealso">
-            <h2>See also</h2>
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
             <ul>
               <li><a href="ops.html">Reads, writes, metrics</a> — what a read and a write actually do with the window a position resolves to, and why a ragged read comes back flat</li>
               <li><a href="locations.html">Locations</a> — the other half of an address: which component and which layer, and how heads and units cut the feature axis</li>
