@@ -46,8 +46,10 @@ An output directory carries `document.json` (the experiment, verbatim) and
 longer: it declares a `train` block, so the run fits a rotation before it scores
 anything, and writes `rot.safetensors` beside the two metric tables. The fit
 happens inside the same single session as the run — see `causalab_mini/engine/` —
-so `--remote local` exercises the loop, the optimizer and the backward pass over
-the serialization path, exactly as `--remote true` would.
+so one session carries the loop, the optimizer and the backward pass. The
+remote path is `--engine ndif`, which is that same session with the weights on
+a server; `remote="local"` is the same again with the serialization exercised
+in this process, and it is reached from the tests rather than from a flag.
 
 Read `NOTES.md` before changing what a document means — it is the ground-truth
 reading of the protocol — and add to `FINDINGS.md` every model fact you had to

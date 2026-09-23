@@ -71,7 +71,10 @@ change to `steps.py`, `ops/`, `plan/` or `address.py`. What it had to supply by
 hand — and what turned out to be free — is FINDINGS §6. It is not wired into
 the CLI: `--engine` is a flag nobody has needed yet.
 
-Documents in `documents/`: nine. Ported from causalab's own corpus:
+Documents: **nine** in `documents/` (the protocol format), **21** in
+`documents/v2/` (the plan-shaped one) and **five** in `documents/real/`,
+which pin real checkpoints and are compiled but not run by the suite. The
+nine, ported from causalab's own corpus:
 `multi_position_patch_cpu.json` (three disjoint absolute writes in one
 intervened model), `hydra_effect_cpu.json` (five intervened models, and a
 read taken inside one that is the operand of a write in another — the only

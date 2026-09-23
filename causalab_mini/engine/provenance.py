@@ -8,7 +8,7 @@ that produced it. Now a run carries two things home:
   the compiler, so it is there whether or not the run happened;
 * **this record**, on the root plan as `provenance` — set by the engine at
   the top of `execute`: which engine, remote or not, the versions of the
-  packages whose code decides what a block does, and a digest of this
+  five packages whose code decides what a block does, and a digest of this
   package's own source. nnsight and nnterp are editable checkouts that move
   underneath this project, and two engines exist that are known to differ by
   an ulp on some documents; without this the files cannot say which code
