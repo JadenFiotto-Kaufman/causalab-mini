@@ -22,7 +22,7 @@ from typing import Any
 import torch
 
 from ..address import Address
-from ..data import encoding, rows as rows_module
+from ..data import rows as rows_module, tokens
 from ..ops import featurizer as featurizer_module
 from ..ops import intervene as intervene_module
 from ..ops import metrics as metrics_module
@@ -88,9 +88,9 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
     # `widths` below is the featurizers'; this is the sites' own, and only
     # for the ones a continuation read buffers at
     stack_widths = {name: engine.width(addresses[name]) for name in sorted(stacking)}
-    fits = [one for one in spec.steps.values() if type(one).__name__ == "Fit"]
+    fit_steps = [one for one in spec.steps.values() if type(one).__name__ == "Fit"]
     featurizers = tuple(
-        _spec_featurizer(name, one, spec, addresses, engine, fits)
+        _spec_featurizer(name, one, spec, addresses, engine, fit_steps)
         for name, one in spec.featurizers.items()
     )
     widths = {one.name: one.d for one in featurizers}
@@ -615,7 +615,7 @@ def _pass(
     training update, an eval pass and the scored run are all this step, over
     different rows."""
     batches = {
-        role: encoding.encode(
+        role: tokens.encode(
             tokenizer,
             [rows_module.field_text(row, experiment.fields[role]) for row in table],
         )
@@ -664,7 +664,7 @@ def _eligible(base_rows: list[rows_module.Row], metric: Any) -> tuple[bool, ...]
 def _ids(spec: Any, base_rows: list[rows_module.Row], keep: tuple[bool, ...], tokenizer: Any) -> tuple[Any, ...]:
     return tuple(
         tuple(
-            encoding.token_id(tokenizer, value, spec.token_form)
+            tokens.token_id(tokenizer, value, spec.token_form)
             for value, kept in zip(rows_module.column(base_rows, column), keep)
             if kept and value is not None
         )
@@ -833,17 +833,20 @@ def _check_keys(write: Any, forward: Forward, source: Forward | None) -> None:
     token would land on a pad, or on a different word, with every shape
     correct. Both masks are in hand before any forward, so this is refused
     here rather than discovered — or not discovered — later.
+
+    The arithmetic is `data/tokens.same_layout`; the refusal is this
+    document's, and stays here.
     """
     if source is None:
         raise PlanError(
             f"write {write.name!r}: an attention pattern from an earlier step cannot be checked "
             "against these prompts' layout; swap one read in the same pass"
         )
-    if source.attention_mask == forward.attention_mask:
+    rows = tokens.same_layout(source.attention_mask, forward.attention_mask)
+    if rows is None:
         return
     ours = [sum(row) for row in forward.attention_mask]
     theirs = [sum(row) for row in source.attention_mask]
-    rows = [row for row, (a, b) in enumerate(zip(ours, theirs)) if a != b]
     raise PlanError(
         f"write {write.name!r} swaps in the attention pattern {write.operand!r}, read from "
         f"prompts laid out differently: " + (

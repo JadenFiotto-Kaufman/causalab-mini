@@ -1,26 +1,44 @@
 """A structural tripwire over the package's own source.
 
-nnsight ships a traced block as source plus every name the block loads, each
-pickled whole. An attribute is not a name — `self.document.model` ships `self` —
-so the rule that keeps a remote run small and a local run honest is about the
-`ast.Name` nodes of the block, and it is checkable without running anything.
+nnsight recompiles a traced block from its source and ships every name the
+block loads. An attribute is not a name — `self.document.model` ships `self` —
+so what a block may mention is checkable without running anything, and it is
+checked here on the `ast.Name` nodes.
 
-Two properties are pinned here:
+Two properties are pinned:
 
-1. a trace body loads only its own function's data: parameters, names the block
-   binds, and module-level names of the file it lives in;
-2. a trace body never reaches the client side of the project — no document, no
-   dataset, no bare `tokenizer`, no `self`. The block gets the plan and the
-   model.
+1. a trace body loads only its own function's data: parameters, names the
+   block binds, and module-level names of the file it lives in;
+2. a trace body never reaches the client side of the project — no document,
+   no dataset, no bare `tokenizer`, no `self`. The block gets the plan and
+   the model.
 
-The `tokenizer` name is the one that changed meaning. A block *does* resolve
-positions against a tokenizer now, and it must be **the model's**:
-`model.tokenizer` is a persistent object, which nnsight writes as an id and
-a server resolves to the served checkpoint's own. A bare local named
-`tokenizer` and closed over would be pickled by value instead — a few
-megabytes, and a *different object* from the one that will run the model.
-So the ban on the name stands, and what it forbids is reaching one any way
-but through the model.
+**Rule 2 is an architectural rule, not a size one.** The payload argument —
+"a module the block names ships whole" — is true of *instances* (`self`, a
+`Document`, a tokenizer object: cloudpickle carries those by value whatever
+a registry says) and about to stop being true of modules, which resolve by
+import on a server that has the package installed. What the module blocklist
+protects either way is HANDOFF rules 5 and 9: the block never tokenizes off
+the client's tokenizer, never reads a row, and decides nothing from a
+document. Those are properties of the design, and they would be worth
+keeping if the payload were zero.
+
+The name `tokenizer` is the case worth spelling out, because a block *does*
+resolve positions against one. It must be **the model's**: `model.tokenizer`
+is one of nnsight's persistent objects, written as an id and resolved on a
+server to the served checkpoint's own tokenizer. Reaching it that way is an
+attribute and not a name, which is exactly the exception this rule already
+makes; a bare local named `tokenizer`, closed over, would be a different
+object from the one that runs the model.
+
+**Rule 1 is weak, and kept for what is left of it.** `allowed` includes every
+module-level import of the file the block lives in, which covers nearly
+everything a block legitimately says — so what it still catches is a name
+from an *enclosing* scope that is neither a parameter, a local, nor one of
+those imports. That is a real mistake (a closure over an outer function's
+variable is shipped, and is invisible at the call site) and the test costs
+nothing, so it stays; it is not protecting the payload and should not be
+read as if it were.
 
 `cls` is allowed where `self` is not: an engine is a stateless class, and a
 class pickles by reference out of a registered package, where an instance
@@ -38,7 +56,8 @@ PACKAGE = pathlib.Path(causalab_mini.__file__).parent
 RUN_METHODS = {"trace", "session", "generate"}
 
 # The client side: the modules that turn documents into plans and plans into
-# files. A block that loads one of them has a client-side object in it.
+# files. A block that loads one of them is doing client-side work in the
+# block, whatever that costs to ship.
 # `plan` is deliberately absent — the plan is pure data and is the one thing a
 # block is meant to carry; `address`, `intervene` and `metrics` are block-side
 # code.
@@ -48,7 +67,7 @@ RUN_METHODS = {"trace", "session", "generate"}
 # `write(model, address, tensor)`, which is block-side and must stay allowed.
 # A blocklist of bare names cannot tell those two apart, so the client one is
 # named unambiguously at its import site.
-CLIENT_SIDE = {"document", "build", "rows", "encoding", "sweep", "write_module", "cli"}
+CLIENT_SIDE = {"document", "build", "rows", "tokens", "sweep", "write_module", "cli"}
 
 
 def _is_block(node):

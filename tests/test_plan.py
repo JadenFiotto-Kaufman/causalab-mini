@@ -6,7 +6,7 @@ import pickle
 import pytest
 
 from causalab_mini import plan
-from causalab_mini.data import encoding
+from causalab_mini.data import tokens
 from causalab_mini.plan import document
 
 
@@ -120,7 +120,7 @@ def test_the_batch_a_plan_carries_is_padded_to_one_width(model):
     # Two prompts of different length: the second is two tokens shorter, and
     # this tokenizer pads on the left. The plan carries the ids; where along
     # them a read acts is resolved where the model is (tests/test_locate.py).
-    ids, mask, sample = encoding.encode(
+    ids, mask, sample = tokens.encode(
         model.tokenizer,
         ["If today is Thursday, tomorrow is", "If today is Friday, tomorrow is"],
     )
@@ -143,8 +143,8 @@ def test_the_metric_columns_resolved_to_the_token_ids_notes_measured(minimal_pla
 
 
 def test_a_multi_token_answer_is_refused(model):
-    with pytest.raises(encoding.EncodingError, match="exactly one token"):
-        encoding.token_id(model.tokenizer, "Thursday afternoon", "space_prefixed")
+    with pytest.raises(tokens.TokenError, match="exactly one token"):
+        tokens.token_id(model.tokenizer, "Thursday afternoon", "space_prefixed")
 
 
 def test_a_layer_the_model_does_not_have_is_a_load_error(minimal_raw, data_root, model_engine):

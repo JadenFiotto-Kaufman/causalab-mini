@@ -12,7 +12,7 @@ from dataclasses import replace
 
 import pytest
 
-from causalab_mini.data import encoding
+from causalab_mini.data import tokens
 from causalab_mini.ops import locate
 from causalab_mini.shapes import Anchor, Where
 
@@ -139,7 +139,7 @@ def test_the_frame_is_the_batch_the_plan_carries(frames, model):
     from those same ids, where the run is. The two constructors are one
     function, which is what makes that true."""
     ids, mask, frame = frames["pair"]
-    assert encoding.encode(model.tokenizer, PAIR) == (ids, mask, frame.texts[0])
+    assert tokens.encode(model.tokenizer, PAIR) == (ids, mask, frame.texts[0])
     assert locate.frame_of(model.tokenizer, ids, mask) == frame
     # the content run starts after the BOS this tokenizer puts on everything
     assert (frame.starts, frame.ends) == ((1, 3), (11, 11))
@@ -259,7 +259,7 @@ def test_a_multibyte_prompt_compiles(model, gpt2_tokenizer, which):
     """And it compiles at all: reading one row's ids back is a property both
     tokenizers have, where re-encoding what they decode to is not."""
     tokenizer = model.tokenizer if which == "llama" else gpt2_tokenizer
-    ids, mask, sample = encoding.encode(tokenizer, ["Alice 🙂 lives in Paris", "東京 is large"])
+    ids, mask, sample = tokens.encode(tokenizer, ["Alice 🙂 lives in Paris", "東京 is large"])
     assert len(ids) == 2 and sample.endswith("lives in Paris")
     assert locate.frame_of(tokenizer, ids, mask).texts[0] == sample
 

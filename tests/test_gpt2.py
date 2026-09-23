@@ -14,7 +14,7 @@ import pytest
 import torch
 
 from causalab_mini import ops, plan
-from causalab_mini.data import encoding
+from causalab_mini.data import tokens
 
 from causalab_mini.address import Address
 from causalab_mini.engine import steps
@@ -177,7 +177,7 @@ def test_the_shipped_weekdays_answers_are_not_single_tokens_here(gpt2_engine, gp
     everything on this model, and the *metric* still cannot run on the shipped
     rows."""
     assert gpt2.tokenizer.encode(" Friday", add_special_tokens=False) == [304, 82, 271, 288]
-    with pytest.raises(encoding.EncodingError, match="is 4 tokens"):
+    with pytest.raises(tokens.TokenError, match="is 4 tokens"):
         plan.build(document.Document.from_json(minimal_raw), data_root, gpt2_engine)
 
 
@@ -187,8 +187,8 @@ def test_token_form_is_load_bearing_on_this_tokenizer_and_inert_on_the_llamas(gp
     they differ, and the document's `token_form` decides which token a metric
     scores."""
     bare = gpt2.tokenizer.encode("two", add_special_tokens=False)
-    assert encoding.token_id(gpt2.tokenizer, " two", "space_prefixed") not in bare
-    assert encoding.token_id(model.tokenizer, " Friday", "space_prefixed") == model.tokenizer.encode(
+    assert tokens.token_id(gpt2.tokenizer, " two", "space_prefixed") not in bare
+    assert tokens.token_id(model.tokenizer, " Friday", "space_prefixed") == model.tokenizer.encode(
         "Friday", add_special_tokens=False
     )[0]
 

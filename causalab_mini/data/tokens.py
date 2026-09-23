@@ -1,4 +1,4 @@
-"""Text -> tokens, on the client, before anything runs.
+"""Text -> tokens, and the padding arithmetic over them.
 
 Tokenization stays here and only tokenization does. A plan carries the padded
 ids because everything downstream of them is a client-side decision — the
@@ -6,6 +6,11 @@ padded width, a fit's minibatching, `plan.window`, the attention-pattern
 layout check, a metric's token ids and cross-engine bit-identity all hang off
 one batch. *Where along that batch* a read or a write acts does not: that is a
 spec, and `ops/locate.py` resolves it where the model is.
+
+Three jobs, all of them about a batch of ids and none about a model:
+`encode` makes one, `token_id` says what a single answer string is in it, and
+`same_layout` compares two of them. Who needs those answers, and what they
+refuse when the answer is no, is their business.
 """
 
 from __future__ import annotations
@@ -16,7 +21,7 @@ from ..ops import locate
 from ..shapes import TokenRows
 
 
-class EncodingError(ValueError):
+class TokenError(ValueError):
     pass
 
 
@@ -35,6 +40,23 @@ def encode(tokenizer: Any, texts: list[str]) -> tuple[TokenRows, TokenRows, str]
     return ids, mask, tokenizer.decode(ids[0][frame.starts[0] : frame.ends[0]])
 
 
+def same_layout(one: TokenRows, other: TokenRows) -> list[int] | None:
+    """Whether two padded batches are laid out the same way, and where they
+    differ if they are not.
+
+    `None` when they are identical. Otherwise the rows whose real-token
+    counts differ — empty when the counts all agree and only the padded
+    width does not. It is arithmetic over two attention masks, which is
+    what this module is: who needs the answer, and what they refuse when it
+    is no, is their business.
+    """
+    if one == other:
+        return None
+    ours = [sum(row) for row in one]
+    theirs = [sum(row) for row in other]
+    return [row for row, (a, b) in enumerate(zip(ours, theirs)) if a != b]
+
+
 def token_id(tokenizer: Any, text: str, token_form: str) -> int:
     """One vocabulary id for an authored answer string.
 
@@ -44,11 +66,11 @@ def token_id(tokenizer: Any, text: str, token_form: str) -> int:
     piece.
     """
     if token_form != "space_prefixed":
-        raise EncodingError(f"token_form {token_form!r} is not implemented")
+        raise TokenError(f"token_form {token_form!r} is not implemented")
     surface = " " + text.lstrip()
     ids = tokenizer.encode(surface, add_special_tokens=False)
     if len(ids) != 1:
-        raise EncodingError(
+        raise TokenError(
             f"answer {text!r} is {len(ids)} tokens as {surface!r}; a metric column "
             "must resolve to exactly one token"
         )
