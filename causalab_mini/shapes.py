@@ -8,6 +8,7 @@ checker attached; nothing here has a runtime effect.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 #: A window of absolute indices into the padded sequence, per row of a batch.
 #: `((10,), (10,))` is one position per row — the unit window, which is what a
@@ -16,6 +17,106 @@ from dataclasses import dataclass
 #: rule dropped, which is why the type is already per row.
 Positions = tuple[tuple[int, ...], ...]
 
+
+@dataclass(frozen=True)
+class Anchor:
+    """A run of tokens located in this row by its *text*.
+
+    `variable` is the row's own value for a name: the `<column>_variables`
+    sibling of the role's own field first, a top-level column of that name
+    otherwise. That rule is why a pair-native document writes one spec and
+    each role resolves its own text. `segment` is a run the *frame* located:
+    a chat turn in the prompt frame, `eos` in the generated one.
+
+    Both keys together is the composition — the variable's run searched
+    *inside* the segment's — which is also how a value occurring twice
+    becomes unique, and why there is no `occurrence` field.
+    """
+
+    #: pydantic validates this dataclass where a document names one, and
+    #: reads its config off this attribute. A plain dict, so `shapes.py`
+    #: stays a file the block can carry with nothing but the standard
+    #: library behind it.
+    __pydantic_config__ = {"extra": "forbid"}
+
+    variable: str | None = None
+    segment: Literal["system", "user", "assistant", "eos"] | None = None
+
+    def __post_init__(self) -> None:
+        if self.variable is None and self.segment is None:
+            raise ValueError("an anchor names a variable, a segment, or both")
+
+
+@dataclass(frozen=True)
+class Where:
+    """Where along the sequence, per row — a spec, never an integer.
+
+    Three independent questions, one field each:
+
+        frame                 which sequence: the prompt, or what was generated
+        scope                 which run of it: the row's content, or an anchor's
+        index/span/last/all   how much of that run
+
+    Exactly one of index/span/last/all; negatives count from the end of the
+    run. Resolution happens where the model is, per row, against its
+    tokenizer, so `{"index": -1, "scope": {"variable": "entity"}}` is the
+    last token of *this row's* entity — whatever text that is, and however
+    many tokens it takes. That is the whole point: the spec is the same for
+    every row and the integer is not.
+    """
+
+    __pydantic_config__ = {"extra": "forbid"}
+
+    index: int | None = None
+    span: tuple[int, int] | None = None
+    last: int | None = None
+    all: bool = False
+    scope: Anchor | None = None
+    frame: Literal["prompt", "generated"] = "prompt"
+
+    def __post_init__(self) -> None:
+        named = [key for key in ("index", "span", "last") if getattr(self, key) is not None]
+        named += ["all"] if self.all else []
+        if len(named) != 1:
+            raise ValueError(f"a position names exactly one of index/span/last/all, got {named}")
+        if self.last is not None and self.last <= 0:
+            raise ValueError(f"last {self.last} is not a positive number of tokens")
+        if self.span is not None:
+            a, b = self.span
+            if (a >= 0) == (b >= 0) and b <= a:
+                raise ValueError(f"span {list(self.span)} is not a forward window")
+        if self.frame == "prompt" and self.scope is not None and self.scope.segment == "eos":
+            raise ValueError("segment 'eos' is a run of the generated frame, not the prompt")
+
+    @property
+    def width(self) -> int | None:
+        """How many positions this names, knowable without a row — which is
+        what lets the compiler check a write against its operand — or None
+        when only the row can say. `None` is exactly the ragged case, so
+        `Selection.flat` is `width is None` and is decided by the form
+        rather than by the data."""
+        if self.index is not None:
+            return 1
+        if self.last is not None:
+            return self.last
+        if self.span is not None:
+            a, b = self.span
+            return b - a if (a >= 0) == (b >= 0) else None
+        return None  # `all`
+
+    @property
+    def ragged(self) -> bool:
+        """Whether a row may come back with a window the others do not have,
+        so the gather is flat.
+
+        A cut of varying width is one. So is any anchored run, *however
+        narrow the cut*: a row whose anchor is not in its prompt has no
+        window at all, and `{"index": -1, "scope": …}` is therefore one
+        position on the rows that have it and none on the rows that do not.
+        The two are different questions, which is why `width` answers the
+        first and this the second.
+        """
+        return self.width is None or self.scope is not None
 
 
 @dataclass(frozen=True)
