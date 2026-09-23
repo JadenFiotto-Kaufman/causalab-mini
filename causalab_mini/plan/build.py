@@ -435,7 +435,11 @@ def _spec_saves(
                 SaveFile(
                     file_path=save.file_path,
                     value=save.value,
-                    identity=_identity(spec, save.value, sites[save.value], widths[save.value]),
+                    produced_by=spec.digest,
+                    identity={
+                        "produced_by": spec.digest,
+                        **_identity(spec, save.value, sites[save.value], widths[save.value]),
+                    },
                 )
             )
             continue
@@ -453,6 +457,7 @@ def _spec_saves(
                 of=metric.of,
                 unit=metrics_module.UNITS[metric.kind][0],
                 estimand_version=metrics_module.UNITS[metric.kind][1],
+                produced_by=spec.digest,
             )
         )
     return tuple(built)

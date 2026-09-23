@@ -25,6 +25,7 @@ from .ops import featurizer, intervene, metrics
 from .plan import document, sweep
 from .plan.explain import explain
 from .plan.spec import METRIC_COLUMNS, Spec
+from .shapes import Where
 
 #: What `--engine` means: the class, how it is loaded to *run*, and where it
 #: runs. `ndif` is the nnterp engine with no local weights — a meta shell —
@@ -101,7 +102,7 @@ def vocab(args: argparse.Namespace) -> dict[str, Any]:
         "mechanisms": sorted(intervene.MECHANISMS),
         "featurizer_kinds": sorted(featurizer.KINDS),
         "metric_kinds": {kind: list(columns) for kind, columns in METRIC_COLUMNS.items()},
-        "position_forms": ["an integer (negative counts from the end)", "{\"index\": i}"],
+        "position_forms": Where.forms(),
         "units": {kind: {"unit": unit, "estimand_version": version} for kind, (unit, version) in metrics.UNITS.items()},
     }
     lines = ["components:"]
@@ -115,7 +116,11 @@ def vocab(args: argparse.Namespace) -> dict[str, Any]:
     lines.append(f"mechanisms:       {', '.join(payload['mechanisms'])}")
     lines.append(f"featurizer kinds: {', '.join(payload['featurizer_kinds'])} (plus 'identity', never declared)")
     lines.append("metric kinds:     " + ", ".join(f"{k}({', '.join(v)})" for k, v in payload["metric_kinds"].items()))
-    lines.append("position forms:   " + "; ".join(payload["position_forms"]))
+    forms = payload["position_forms"]
+    lines.append("position forms:   exactly one cut: "
+                 + ", ".join(f"{k}={v}" for k, v in forms["cut"].items()))
+    lines.append("                  scope: " + ", ".join(f"{k}={v}" for k, v in forms["scope"].items()))
+    lines.append(f"                  frame: {forms['frame']}; {forms['sugar']}")
     return {"text": "\n".join(lines), **payload}
 
 

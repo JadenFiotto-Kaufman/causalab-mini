@@ -30,6 +30,8 @@ model dump is a JSON Schema — which the protocol itself does not have.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
@@ -447,6 +449,17 @@ class Spec(Node):
     interventions: dict[str, Intervention]
     steps: dict[str, Step]
     featurizers: dict[str, Featurizer] = Field(default_factory=dict)
+
+    @property
+    def digest(self) -> str:
+        """Identity of the experiment, the same rule the protocol format
+        uses: everything but `header`, which is authoring metadata. It is
+        what a metric row is `produced_by` and what a saved featurizer is
+        stamped with."""
+        body = {key: value for key, value in self.model_dump(mode="json").items() if key != "header"}
+        return hashlib.sha256(
+            json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
 
     def intervention_of(self, step: Any) -> Intervention:
         """The experiment a step runs, resolved."""

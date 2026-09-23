@@ -7,8 +7,8 @@ checker attached; nothing here has a runtime effect.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, fields as dataclass_fields
+from typing import Any, Literal
 
 #: A window of absolute indices into the padded sequence, per row of a batch.
 #: `((10,), (10,))` is one position per row — the unit window, which is what a
@@ -87,6 +87,25 @@ class Where:
                 raise ValueError(f"span {list(self.span)} is not a forward window")
         if self.frame == "prompt" and self.scope is not None and self.scope.segment == "eos":
             raise ValueError("segment 'eos' is a run of the generated frame, not the prompt")
+
+    @classmethod
+    def forms(cls) -> dict[str, Any]:
+        """Every form a position may take, read off this class.
+
+        The `vocab` verb is what an agent asks before it writes a document,
+        so this is derived rather than written out: a hand-kept list of the
+        forms went five of them out of date, which is the one kind of wrong
+        answer a discovery surface must not give.
+        """
+        fields = {one.name: str(one.type).replace(" | None", "") for one in dataclass_fields(cls)}
+        return {
+            "cut": {name: fields[name] for name in ("index", "span", "last", "all")},
+            "scope": {
+                one.name: str(one.type).replace(" | None", "") for one in dataclass_fields(Anchor)
+            },
+            "frame": fields["frame"],
+            "sugar": 'a bare integer is {"index": i}; -1 is the last token',
+        }
 
     def spelling(self) -> str:
         """This position as a document writes it, for a message or a listing.

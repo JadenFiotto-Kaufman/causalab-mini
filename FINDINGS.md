@@ -598,7 +598,7 @@ and comments — and, the result that matters, it runs the same documents to
 
 Nothing outside the new directory changed. `engine/steps.py`, `ops/`, `plan/`
 and `address.py` are untouched; `engine/__init__.py` gained an export. So the
-seven-member contract held for a runtime that shares no execution code with the
+eight-member contract held for a runtime that shares no execution code with the
 first, which is the claim HANDOFF §3.6 wanted tested.
 
 ### 6.1 The translation is one function with three statements
@@ -722,7 +722,7 @@ envoy assignment and a hook's return value are two spellings of one write, and
 
 ### 6.5 What the contract did not give the engine, and did not need to
 
-Nothing. The seven members were enough, and the two halves split the way HANDOFF
+Nothing. The eight members were enough, and the two halves split the way HANDOFF
 §3.6 claims: `load`/`tokenizer`/`num_layers`/`locate`/`width` are answered from
 the loaded objects on the client, `execute`/`forward` are the run. Two smaller
 observations:
@@ -1669,7 +1669,7 @@ finished — `{"index": -1}`, `{"scope": {"segment": "eos"}}` — needs every
 step's value. Rather than teach both engines to buffer, the compiler emits
 one ordinary read per decode step, each carrying the same spec and the name
 of the stack it belongs to, and the shared walk stacks them and cuts them
-against the continuation afterwards. The seven-member engine contract is
+against the continuation afterwards. The eight-member engine contract is
 untouched and `test_engine.py`'s assertion did not move. The cost is stated
 where it is paid: `rows x decode x width` numbers, refused above a limit.
 

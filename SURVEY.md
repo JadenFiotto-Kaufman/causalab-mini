@@ -58,7 +58,7 @@ interning, cohorts, and CUDA-graph capture.
 
 This is what the exercise was for.
 
-**The seven-member engine contract survives.** The large majority of
+**The eight-member engine contract survives.** The large majority of
 causalab's execution machinery is a new body for `forward`/`locate`/`load` or
 a new row in `address.py` — no eighth member. **Generation is the one genuine
 eighth-member candidate**: `forward(forward, values, featurizers)` cannot

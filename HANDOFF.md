@@ -120,9 +120,11 @@ These are load-bearing. Several tests enforce them.
    `Address`). Interiors and the four layerless modules are still mini's
    rows. Reaching there is the engine's (`engine/engines/nnterp/engine.py`'s
    `read`/`write`). `ops/` knows nothing about models at all.
-7. **An engine is seven members and no more**: `load`, then `tokenizer`,
-   `num_layers`, `locate` and `width` — what the compiler asks of a runtime —
-   then `execute` and `forward`, what the run asks.
+7. **An engine is eight members and no more**: `load`, then `tokenizer`,
+   `num_layers`, `locate`, `width` and `heads` — what the compiler asks of a
+   runtime — then `execute` and `forward`, what the run asks. (`heads` joined
+   when a site could name them: like `width`, it is a question about the
+   checkpoint that only its holder can answer.)
    Everything else lives in `engine/steps.py` and is shared.
    `tests/test_engine.py` pins this: it asserts the override set is exactly
    the contract, and runs a real compiled plan on an engine that has no model
