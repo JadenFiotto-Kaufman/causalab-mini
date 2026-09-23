@@ -75,24 +75,329 @@
           <header>
             <p class="eyebrow">Use case</p>
             <h1>Batching &amp; remote</h1>
-            <p class="lede">Making a big document fit: batching rows, and moving the weights off the client.</p>
+            <p class="lede">One document, three ways to run it: every row at once, eight rows
+            at a time, and on a server that holds the weights.</p>
           </header>
 
-          <div class="stub">
-            <span class="label">in progress</span>
-            <p>This page has not been written yet. It is one page of a set being
-            filled in; the rest of the site is live.</p>
-            <p>What it will cover:</p>
+          <p>Two flags change how a document runs without changing what it is.
+          <code>--batch-size N</code> bounds how many rows one model call holds.
+          <code>--engine ndif</code> moves the weights off this machine. Neither is part of
+          the experiment, and the page below runs one document all three ways and compares the
+          numbers value by value.</p>
+
+          <!-- documents/real/weekdays_layer_sweep.json: 32 points, 42 rows, 2 metrics -->
+          <p>The document is <code>documents/real/weekdays_layer_sweep.json</code> —
+          Llama-3.2-1B, fp32, 32 swept points of 42 rows with two metrics each, so 2688 numbers
+          per run. <a href="layer-sweep.html">Layer sweep</a> is that document end to end; here
+          it is here because it is big enough to run three times and compare.</p>
+
+          <h2>At a glance</h2>
+
+          <!-- ran 2026-09-23 on bippu: RTX A6000 48 GB, driver 555.42.02, fp32. Run from a
+               python-3.12 / torch-cu126 venv, because this box's driver is older than the
+               project venv's torch build and cannot see the GPU from it — which is why the
+               versions in run.json below differ from layer-sweep.html's. The listing is 98
+               lines; the first three and the last point shown. -->
+          <pre><code class="language-bash">$ time causalab-mini run documents/real/weekdays_layer_sweep.json \
+      --device-map cuda --out out/local
+out/b-local/document.json
+out/b-local/run.json
+out/b-local/layers=0,pos=-4/document.json
+out/b-local/layers=0,pos=-4/iia.json
+…
+out/b-local/layers=15,pos=-1/document.json
+out/b-local/layers=15,pos=-1/iia.json
+out/b-local/layers=15,pos=-1/logit_diff.json
+
+real	0m16.210s</code></pre>
+
+          <pre><code class="language-bash">$ time causalab-mini run documents/real/weekdays_layer_sweep.json \
+      --device-map cuda --batch-size 8 --out out/batch8
+out/b-batch8/document.json
+out/b-batch8/run.json
+out/b-batch8/layers=0,pos=-4/document.json
+out/b-batch8/layers=0,pos=-4/iia.json
+…
+out/b-batch8/layers=15,pos=-1/document.json
+out/b-batch8/layers=15,pos=-1/iia.json
+out/b-batch8/layers=15,pos=-1/logit_diff.json
+
+real	0m16.172s</code></pre>
+
+          <!-- ran 2026-09-23 against a self-hosted NDIF in a container on the same box, one
+               pinned fp32 replica of Llama-3.2-1B, auth off. nnsight's status line is
+               rewritten in place; its last frame is kept. -->
+          <pre><code class="language-bash">$ time NDIF_HOST=http://localhost:8001 causalab-mini run \
+      documents/real/weekdays_layer_sweep.json --engine ndif --out out/ndif
+✓ [5f3fa4433d264f09a122f27d83e1199e] COMPLETED    (4.0s) Your job has been completed.
+out/b-ndif3/document.json
+out/b-ndif3/run.json
+out/b-ndif3/layers=0,pos=-4/document.json
+…
+out/b-ndif3/layers=15,pos=-1/document.json
+out/b-ndif3/layers=15,pos=-1/iia.json
+out/b-ndif3/layers=15,pos=-1/logit_diff.json
+
+real	0m9.472s</code></pre>
+
+          <h2>The numbers</h2>
+
+          <!-- measured 2026-09-23: every value of all 64 metric tables of each run, compared
+               with Python `==` on the floats as written; and the files compared byte for byte -->
+          <table>
+            <thead><tr><th>comparison</th><th class="num">values</th><th class="num">bit-identical</th><th class="num">max |diff|</th><th class="num">files byte-identical</th></tr></thead>
+            <tbody>
+              <tr><td>local vs <code>--engine ndif</code></td><td class="num">2688</td><td class="num">2688</td><td class="num">0</td><td class="num">97 / 97</td></tr>
+              <tr><td>local vs <code>--batch-size 8</code></td><td class="num">2688</td><td class="num">1427</td><td class="num">5.9e-05</td><td class="num">65 / 97</td></tr>
+            </tbody>
+          </table>
+
+          <p><strong>Remote changed nothing.</strong> All 2688 values match to the bit, and
+          every file the run wrote — 33 <code>document.json</code> and 64 metric tables — is
+          byte for byte the same file. The serialization round trip, the block executing in
+          another process, the plan being filled in from what came home: none of it perturbs
+          the arithmetic.</p>
+
+          <p><strong>Batching moved the last bits, and only of one metric.</strong> All 1344
+          <code>iia</code> values are identical — a <code>match</code> metric is an argmax, and
+          the argmax does not move. 83 of 1344 <code>logit_diff</code> values are identical and
+          the rest differ by at most 5.9e-05 on numbers around 2.4. Every point's mean is the
+          same to four decimals, and the 65 byte-identical files are exactly the 33
+          <code>document.json</code> plus the 32 <code>iia.json</code>.</p>
+
+          <!-- causalab_mini/engine/steps.py:258 — "What a smaller batch does change is the
+               last bit: a GEMM over fewer rows rounds differently" -->
+          <div class="note">
+            <span class="label">why a batch size changes anything at all</span>
+            <p>A matrix multiply over fewer rows reduces in a different order, and floating
+            point addition is not associative. That is the whole mechanism. It is also why
+            <code>run.json</code> records <code>batch_size</code> beside the library
+            versions: it is not part of the experiment, and it moves the last bit of every
+            number, so a result with no record of it cannot be compared with another.</p>
+          </div>
+
+          <h2><code>--batch-size</code>: what it bounds</h2>
+
+          <!-- causalab_mini/engine/steps.py:245 — `passes`: every forward of a pass, over
+               every row, batch_size rows at a time -->
+          <p>A window of rows is a whole small pass: the same forwards in the same order over a
+          slice of the rows, with the values published before it sliced the same way, so a
+          write still meets the operand of its own row. What the windows read is concatenated
+          back in row order, and everything downstream sees one pass.</p>
+
+          <!-- causalab_mini/plan/plan.py:126 — `window`: an engine "cannot tell it from a
+               forward compiled that small" -->
+          <p>The windowing is in the shared walk, not in an engine. An engine is handed a
+          forward that is merely shorter and cannot tell the difference — every per-row thing a
+          forward holds is a tuple with one entry per row, so a window is a slice of each.
+          Positions are absolute indices into the padded width the client fixed once for all
+          rows, so they survive the slice unchanged.</p>
+
+          <p>With no <code>--batch-size</code> there is one window, which is the pass exactly
+          as compiled: every row in one model call. On this document that is 42 rows of 8
+          tokens, and what it costs against the weights is small:</p>
+
+          <!-- measured 2026-09-23: the CLI's main() called from a four-line script that then
+               prints torch.cuda.max_memory_allocated(). Llama-3.2-1B fp32 is about 4.6 GiB of
+               that in both runs. -->
+          <table>
+            <thead><tr><th>run</th><th class="num">peak CUDA allocated</th></tr></thead>
+            <tbody>
+              <tr><td>every row at once (42)</td><td class="num">4954 MiB</td></tr>
+              <tr><td><code>--batch-size 8</code></td><td class="num">4783 MiB</td></tr>
+            </tbody>
+          </table>
+
+          <p>171 MiB, on a document whose weights are about 4.6 GiB. Batching is not free —
+          the two wall times above are the same to a tenth of a second and the arithmetic moves
+          — so it is worth reaching for when the rows are what does not fit, and not before.
+          The recorded run of <code>weekdays_head_patching</code>, 96 points over the same 42
+          rows, used <code>--batch-size 16</code>
+          (<code>documents/real/README.md</code>).</p>
+
+          <h2><code>--engine ndif</code>: what moves</h2>
+
+          <!-- causalab_mini/cli.py:34 — ENGINES: "ndif" is (NNterpEngine, {"dispatch": False}, True) -->
+          <p><code>--engine ndif</code> is not a different engine. It is the same
+          <code>NNterpEngine</code>, built with <code>dispatch=False</code> so no weights are
+          loaded on this machine, and executed with <code>remote=True</code>. The client holds
+          a meta shell: enough of the model to resolve a component to a module path, to know a
+          site's width, and to tokenize.</p>
+
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:89 — the one session -->
+          <p>The whole plan runs inside <strong>one</strong>
+          <code>model.session(remote=True)</code>. A 32-point sweep is one job on the server,
+          not 32 — the server log for the run above records one request, 4032 ms of execution
+          inside the model actor, in a 9.5 s wall. The client's remaining time is building the
+          meta shell, compiling 32 documents and tokenizing.</p>
+
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:93 — what comes home is plain:
+               strings and tensors, via nnsight.save({}) and plan_module.results_of -->
+          <p>What comes home is plain: strings and tensors. The client already has the plan, so
+          only what fills it in makes the trip, and the plan is filled in on arrival. That is
+          why the output directory is identical rather than merely equivalent — the same
+          writer writes it from the same plan either way.</p>
+
+          <!-- nnsight, src/nnsight/schema/config.py:128 — NDIF_HOST overrides the configured host -->
+          <p>Where the server is is nnsight's business, not mini's: <code>NDIF_HOST</code>
+          overrides the configured base URL, and <code>NDIF_API_KEY</code> the key. There is no
+          mini flag for either.</p>
+
+          <h2>What <code>run.json</code> records</h2>
+
+          <p>Every output directory's root carries one. The three runs above, side by side:</p>
+
+          <figure class="listing">
+            <figcaption><code>out/local/run.json</code></figcaption>
+            <pre><code class="language-json">{
+ &quot;engine&quot;: &quot;NNterpEngine&quot;,
+ &quot;remote&quot;: false,
+ &quot;batch_size&quot;: null,
+ &quot;versions&quot;: {
+  &quot;torch&quot;: &quot;2.14.0+cu126&quot;,
+  &quot;transformers&quot;: &quot;5.17.0&quot;,
+  &quot;nnsight&quot;: &quot;0.8.1.dev125+g524c33fc&quot;,
+  &quot;nnterp&quot;: &quot;0.5.0.dev0+internalsaccessors&quot;,
+  &quot;pydantic&quot;: &quot;2.13.5&quot;
+ },
+ &quot;causalab_mini&quot;: &quot;76c8c9d0c0d1f3e0b8e2eaeb09564107d1c0a70cb9e8b7d6cecab09fdc92d8a1&quot;,
+ &quot;served_dtype&quot;: &quot;torch.float32&quot;
+}</code></pre>
+          </figure>
+
+          <figure class="listing">
+            <figcaption><code>out/batch8/run.json</code></figcaption>
+            <pre><code class="language-json">{
+ &quot;engine&quot;: &quot;NNterpEngine&quot;,
+ &quot;remote&quot;: false,
+ &quot;batch_size&quot;: 8,
+ &quot;versions&quot;: {
+  &quot;torch&quot;: &quot;2.14.0+cu126&quot;,
+  &quot;transformers&quot;: &quot;5.17.0&quot;,
+  &quot;nnsight&quot;: &quot;0.8.1.dev125+g524c33fc&quot;,
+  &quot;nnterp&quot;: &quot;0.5.0.dev0+internalsaccessors&quot;,
+  &quot;pydantic&quot;: &quot;2.13.5&quot;
+ },
+ &quot;causalab_mini&quot;: &quot;76c8c9d0c0d1f3e0b8e2eaeb09564107d1c0a70cb9e8b7d6cecab09fdc92d8a1&quot;,
+ &quot;served_dtype&quot;: &quot;torch.float32&quot;
+}</code></pre>
+          </figure>
+
+          <figure class="listing">
+            <figcaption><code>out/ndif/run.json</code></figcaption>
+            <pre><code class="language-json">{
+ &quot;engine&quot;: &quot;NNterpEngine&quot;,
+ &quot;remote&quot;: true,
+ &quot;batch_size&quot;: null,
+ &quot;versions&quot;: {
+  &quot;torch&quot;: &quot;2.14.0+cu126&quot;,
+  &quot;transformers&quot;: &quot;5.17.0&quot;,
+  &quot;nnsight&quot;: &quot;0.8.1.dev125+g524c33fc&quot;,
+  &quot;nnterp&quot;: &quot;0.5.0.dev0+internalsaccessors&quot;,
+  &quot;pydantic&quot;: &quot;2.13.5&quot;
+ },
+ &quot;causalab_mini&quot;: &quot;76c8c9d0c0d1f3e0b8e2eaeb09564107d1c0a70cb9e8b7d6cecab09fdc92d8a1&quot;,
+ &quot;served_dtype&quot;: &quot;torch.float32&quot;
+}</code></pre>
+          </figure>
+
+          <!-- causalab_mini/engine/provenance.py:33 — record(engine, remote, batch_size) -->
+          <p>Three fields differ, and the rest is the same because the same code ran:</p>
+
+          <table>
+            <thead><tr><th>field</th><th>what it says</th></tr></thead>
+            <tbody>
+              <tr><td><code>engine</code></td><td>the class. <code>NNterpEngine</code> for
+                  both local runs <em>and</em> for the remote one — <code>ndif</code> is a way
+                  of running that class, not another class</td></tr>
+              <tr><td><code>remote</code></td><td><code>false</code> locally,
+                  <code>true</code> through NDIF. This is the field that says where it ran</td></tr>
+              <tr><td><code>batch_size</code></td><td><code>null</code> for every row at once,
+                  <code>8</code> otherwise</td></tr>
+              <tr><td><code>versions</code></td><td>torch, transformers, nnsight, nnterp,
+                  pydantic — the packages whose code decides what a block does</td></tr>
+              <tr><td><code>causalab_mini</code></td><td>a sha256 over this package's own
+                  <code>.py</code> files. Two runs with the same digest ran the same code,
+                  whatever git says</td></tr>
+              <tr><td><code>served_dtype</code></td><td>what the model's <code>lm_head</code>
+                  weight actually was, read inside the session</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:100 —
+               home["served_dtype"] = str(model.lm_head.weight.dtype) -->
+          <div class="note">
+            <span class="label"><code>served_dtype</code> is the answer to a question the
+            document cannot ask</span>
+            <p>A document's <code>model.dtype</code> is a request. Locally it is honoured.
+            On a server the deployment chose the dtype when it was deployed, dtype is not part
+            of the model key, and a client cannot ask for one — so mini reads
+            <code>model.lm_head.weight.dtype</code> inside the session and records what it
+            got. The server used here serves fp32, which is why the numbers above are
+            bit-identical rather than merely close.</p>
+          </div>
+
+          <!-- documents/real/README.md: "The server serves bf16 whatever the document asks
+               (run.json records served_dtype), so the numbers are close, not equal" -->
+          <div class="caution">
+            <span class="label">a different deployment gives different numbers</span>
+            <p>The recorded run in <code>documents/real/README.md</code> went through an NDIF
+            serving <strong>bf16</strong> for the same fp32 document: the last-token sweep
+            reads 0.86 there where fp32 reads 0.88, <code>p_answer</code> differs by up to
+            0.018, and L12 H28's logit difference is +0.051 against +0.054. Nothing about
+            remote execution did that — the dtype did, and <code>served_dtype</code> is where
+            the output directory says so.</p>
+          </div>
+
+          <!-- causalab_mini/engine/provenance.py:55 — _version reads importlib.metadata in
+               this process, so the strings are the client's -->
+          <div class="caution">
+            <span class="label">the versions are the client's</span>
+            <p><code>provenance.record</code> reads <code>importlib.metadata</code> where the
+            CLI runs. On a remote run the block executes against the <em>server's</em>
+            installed nnsight, nnterp and causalab_mini, and <code>run.json</code> has no
+            evidence about those. It is a true record of what was asked for and an assumption
+            about what ran it.</p>
+          </div>
+
+          <h2>Wall times</h2>
+
+          <!-- measured 2026-09-23 on bippu: RTX A6000, driver 555.42.02, python 3.12, torch
+               2.14.0+cu126; NDIF in a container on the same box with a pinned fp32 replica -->
+          <table>
+            <thead><tr><th>run</th><th class="num">wall</th><th>what is in it</th></tr></thead>
+            <tbody>
+              <tr><td><code>--device-map cuda</code></td><td class="num">16.2 s</td><td>model load, compile, 64 forwards</td></tr>
+              <tr><td><code>--device-map cuda --batch-size 8</code></td><td class="num">16.2 s</td><td>the same, in 6 windows per pass</td></tr>
+              <tr><td><code>--engine ndif</code></td><td class="num">9.5 s</td><td>no model load; 4.0 s of it server-side</td></tr>
+            </tbody>
+          </table>
+
+          <p>The remote run is faster here because the replica is already hot and the client
+          never loads 4.6 GiB of weights. That is the comparison NDIF is for, and it is the
+          one the recorded numbers show too — <code>documents/real/README.md</code> records 8 /
+          12 / 33 / 61 s locally on an A100 for its four documents against 7 / 8 / 19 / 36 s
+          through NDIF, each document one job.</p>
+
+          <div class="caution">
+            <span class="label">what is not on this page</span>
+            <p>The server used here is a self-hosted NDIF on the same machine, with auth off
+            and the document's own checkpoint pinned. A public server adds a queue, an API key,
+            a network, and a deployment set you do not control — including its dtype.</p>
+          </div>
+
+          <div class="seealso">
+            <h2>See also</h2>
             <ul>
-            <li><code>--batch-size</code>: rows per model call, what it bounds and what it moves (only the last bit).</li>
-            <li>The default — every row at once — and when that is wrong.</li>
-            <li>The shared walk does the windowing; an engine only passes the size on.</li>
-            <li><code>--engine ndif</code> on a real document, with the command and its output.</li>
-            <li>Wall times, recorded: 8 s / 12 s / 33 s / 61 s locally on an A100 against 7 s / 8 s / 19 s / 36 s through NDIF (<code>documents/real/README.md</code>).</li>
-            <li><code>served_dtype</code>, and why remote numbers can differ in the last digits.</li>
+              <li><a href="../remote.html">Remote &amp; NDIF</a> — what a server has to have
+                  installed, what crosses the wire, and how a refusal comes back</li>
+              <li><a href="../cli.html">The CLI</a> — the rest of <code>run</code>'s flags,
+                  and the verbs that need no model at all</li>
+              <li><a href="layer-sweep.html">Layer sweep</a> — this document as an experiment,
+                  with what its numbers mean</li>
+              <li><a href="../engine.html">The engine</a> — the shared walk that does the
+                  windowing, and the seam an engine actually implements</li>
             </ul>
-            <p>Writing it? Read <code>docs/STYLE.md</code> first — it has the page
-            template, the citation rule and the nav snippet to paste.</p>
           </div>
 
         </article>
