@@ -78,21 +78,360 @@
             <p class="lede">The logit lens as one document: <code>view: logits</code> over a layer sweep.</p>
           </header>
 
-          <div class="stub">
-            <span class="label">in progress</span>
-            <p>This page has not been written yet. It is one page of a set being
-            filled in; the rest of the site is live.</p>
-            <p>What it will cover:</p>
-            <ul>
-            <li><code>documents/v2/logit_lens.json</code>, verbatim, run end to end.</li>
-            <li><code>view: "logits"</code>: the residual stream pushed through the model's own final norm and head.</li>
-            <li>Why it is refused anywhere but the residual stream, and why a featurized read cannot also be a logits view. <code>causalab_mini/plan/spec.py:153</code>.</li>
-            <li>A layer sweep plus a <code>token_prob</code> metric: the whole lens in one document.</li>
-            <li>Reading the per-layer curve out of the saved tables.</li>
-            </ul>
-            <p>Writing it? Read <code>docs/STYLE.md</code> first — it has the page
-            template, the citation rule and the nav snippet to paste.</p>
+          <p>A transformer's last layer is not the only one whose residual stream the
+          unembedding can read. Push layer 3's residual through the model's own final
+          norm and head and you get a distribution over the vocabulary: what the model
+          would say if layer 3 were its last. Do that at every layer and you can watch
+          an answer appear.</p>
+
+          <!-- causalab_mini/plan/spec.py:178-181 — `view: "logits"` on a Read -->
+          <p>That is the logit lens, and in this format it is one field.
+          <code>"view": "logits"</code> on a read projects it; a layer sweep is the
+          lens; a <code>token_prob</code> metric on the answer is what to plot against
+          depth. No second step, no saved activations, no separate script.</p>
+
+          <h2>At a glance</h2>
+
+          <pre><code class="language-json">"reads": {
+  "lens": {
+    "site": "resid",
+    "pos": -1,
+    "input": "base",
+    "view": "logits"
+  }
+},
+"metrics": {
+  "p_answer": { "kind": "token_prob", "of": "lens", "token": "base_answer" },
+  "top1":     { "kind": "match", "of": "lens", "expected": "base_answer" }
+}</code></pre>
+
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:182-190 — the projection,
+               inside the trace: softcap(lm_head(ln_final(gathered))) -->
+          <p>The read gathers the residual window and pushes it through
+          <code>ln_final</code> and <code>lm_head</code> inside the trace, so what the
+          metric scores is a vector over the vocabulary rather than a hidden state.
+          Everything downstream — <code>token_prob</code>, <code>match</code>,
+          <code>logit_diff</code> — is the same code that scores a real
+          <code>lm_head</code> read.</p>
+
+          <h2>The document</h2>
+
+          <figure class="listing">
+            <figcaption><code>documents/v2/logit_lens.json</code> <span class="what">— the document this page runs, verbatim</span></figcaption>
+            <pre><code class="language-json">{
+  &quot;header&quot;: {
+    &quot;description&quot;: &quot;The logit lens as one document: at every layer, push the residual stream at the answer position through the model&#x27;s final norm and head and read what it would say if that were its last layer. `view: logits` is the projection; the layer sweep is the lens; `token_prob` on the answer is what to plot against depth. Two layers here, so two points.&quot;
+  },
+  &quot;model&quot;: {
+    &quot;key&quot;: &quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;,
+    &quot;revision&quot;: &quot;9fb191250dd56d0ba7ec9785a025ed29c03d5998&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;
+  },
+  &quot;roles&quot;: {
+    &quot;base&quot;: {
+      &quot;field&quot;: &quot;input&quot;
+    }
+  },
+  &quot;sites&quot;: {
+    &quot;resid&quot;: {
+      &quot;component&quot;: &quot;block_output&quot;,
+      &quot;layers&quot;: {
+        &quot;sweep&quot;: [
+          [
+            0
+          ],
+          [
+            1
+          ]
+        ]
+      }
+    }
+  },
+  &quot;interventions&quot;: {
+    &quot;lens&quot;: {
+      &quot;reads&quot;: {
+        &quot;lens&quot;: {
+          &quot;site&quot;: &quot;resid&quot;,
+          &quot;pos&quot;: -1,
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;view&quot;: &quot;logits&quot;
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;p_answer&quot;: {
+          &quot;kind&quot;: &quot;token_prob&quot;,
+          &quot;of&quot;: &quot;lens&quot;,
+          &quot;token&quot;: &quot;base_answer&quot;
+        },
+        &quot;top1&quot;: {
+          &quot;kind&quot;: &quot;match&quot;,
+          &quot;of&quot;: &quot;lens&quot;,
+          &quot;expected&quot;: &quot;base_answer&quot;
+        }
+      }
+    }
+  },
+  &quot;steps&quot;: {
+    &quot;lens&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;p_answer&quot;,
+          &quot;file_path&quot;: &quot;p_answer.json&quot;
+        },
+        {
+          &quot;value&quot;: &quot;top1&quot;,
+          &quot;file_path&quot;: &quot;top1.json&quot;
+        }
+      ]
+    }
+  }
+}</code></pre>
+          </figure>
+
+          <p>Reading it in the order the compiler does:</p>
+
+          <ul>
+            <li><code>model</code> is the tiny random-weight Llama. It has two layers,
+            so the sweep has two points.</li>
+            <li><code>roles</code> has only <code>base</code>. There is no
+            counterfactual: a lens is an observation, not an intervention, and the
+            document has no <code>writes</code> and no second model.</li>
+            <li><code>sites.resid</code> is <code>block_output</code> with a
+            <code>layers</code> sweep. One site, one read, one metric pair — the sweep
+            is what makes it a curve.</li>
+            <li><code>interventions.lens</code> has the one read, with
+            <code>view: "logits"</code>, and two metrics on it:
+            <code>p_answer</code>, the probability of the row's own answer, and
+            <code>top1</code>, whether that answer is the argmax.</li>
+            <li><code>steps.lens</code> is one observation pass over
+            <code>weekdays/train</code>, saving both tables.</li>
+          </ul>
+
+          <h2>What it compiles to</h2>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/logit_lens.json
+&lt;root&gt;: Plan
+  layers=0: Plan
+    lens: Observe  metrics=[&#x27;p_answer/token_prob&#x27;, &#x27;top1/match&#x27;]  saves=[&#x27;p_answer.json&#x27;, &#x27;top1.json&#x27;]
+        forward &#x27;original&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+          read  &#x27;lens&#x27; at block_output[0] pos={index:-1} via &#x27;identity&#x27; as logits
+  layers=1: Plan
+    lens: Observe  metrics=[&#x27;p_answer/token_prob&#x27;, &#x27;top1/match&#x27;]  saves=[&#x27;p_answer.json&#x27;, &#x27;top1.json&#x27;]
+        forward &#x27;original&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+          read  &#x27;lens&#x27; at block_output[1] pos={index:-1} via &#x27;identity&#x27; as logits</code></pre>
+
+          <p>One forward per point, no patched model, and the read is printed
+          <code>as logits</code> — the view is part of the read's identity, not a
+          post-processing step someone might forget to apply.</p>
+
+          <h2>Running it</h2>
+
+          <!-- run 2026-09-23 on CPU, fp32, 12-core Ryzen 9 5900X -->
+          <pre><code class="language-bash">$ time uv run causalab-mini run documents/v2/logit_lens.json --out out/logit_lens
+out/logit_lens/document.json
+out/logit_lens/run.json
+out/logit_lens/layers=0/document.json
+out/logit_lens/layers=0/p_answer.json
+out/logit_lens/layers=0/top1.json
+out/logit_lens/layers=1/document.json
+out/logit_lens/layers=1/p_answer.json
+out/logit_lens/layers=1/top1.json
+
+real	0m8.434s</code></pre>
+
+          <h2>The curve</h2>
+
+          <p><code>p_answer.json</code> is one row per example, so the curve against
+          depth is the point directory you read it out of. Both layers, all four
+          rows:</p>
+
+          <table>
+            <thead><tr><th class="num">layer</th><th>row 0 · Thursday</th><th>row 1 · Friday</th><th>row 2 · Saturday</th><th>row 3 · Sunday</th><th class="num">top1</th></tr></thead>
+            <tbody>
+              <tr><td class="num">0</td><td class="num">2.785e-05</td><td class="num">2.823e-05</td><td class="num">2.794e-05</td><td class="num">3.395e-05</td><td class="num">0 / 4</td></tr>
+              <tr><td class="num">1</td><td class="num">2.809e-05</td><td class="num">2.838e-05</td><td class="num">2.743e-05</td><td class="num">3.430e-05</td><td class="num">0 / 4</td></tr>
+            </tbody>
+          </table>
+
+          <p>Four rows of <code>p_answer.json</code>, per point, and the mean of
+          <code>top1.json</code>. On a two-layer model with random weights there is no
+          curve: the answer's probability is about <code>1/32000</code> at both depths,
+          which is what a uniform distribution over this vocabulary gives, and the
+          argmax is never the answer.</p>
+
+          <div class="caution">
+            <span class="label">this is the mechanism, not a result</span>
+            <p><code>hf-internal-testing/tiny-random-LlamaForCausalLM</code> has random
+            weights. It has no answer to emerge and nothing to watch emerge, so these
+            numbers say only that the projection ran. A lens is worth plotting on a
+            model that does the task: the shape you are looking for is a probability
+            near zero for the first half of the stack and then a rise, and the depth at
+            which it rises is the finding.</p>
           </div>
+
+          <!-- TODO(author): there is no documents/real/ logit-lens document, so this
+               page has no lens over a model that does the weekday task. One would be
+               documents/real/weekdays_layer_sweep.json's site with `view: "logits"`,
+               no writes, and `token_prob` on base_answer across the 16 layers. -->
+
+          <h2>Is the lens wired to the right head?</h2>
+
+          <p>A logit lens is a wiring claim: <em>this</em> norm, <em>this</em>
+          unembedding, applied in <em>this</em> order. A lens plugged into the wrong
+          normalization still produces a plausible-looking curve, so it is worth one
+          check before anything is read off it — at the <strong>last</strong> layer the
+          lens must reproduce the model's own output, because there is nothing between
+          them.</p>
+
+          <p>This model's last block output is layer 1, so the
+          <code>layers=1</code> point is that check:</p>
+
+          <figure class="listing">
+            <figcaption><code>lens_check.py</code> <span class="what">— the saved table against the model's own forward</span></figcaption>
+            <pre><code class="language-python">import json
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+KEY = &quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;
+REV = &quot;9fb191250dd56d0ba7ec9785a025ed29c03d5998&quot;
+
+rows = json.load(open(&quot;documents/data/weekdays/train.json&quot;))
+tok = AutoTokenizer.from_pretrained(KEY, revision=REV)
+tok.padding_side = &quot;left&quot;
+if tok.pad_token is None:
+    tok.pad_token = tok.eos_token
+model = AutoModelForCausalLM.from_pretrained(KEY, revision=REV, dtype=torch.float32)
+model.eval()
+
+batch = tok([r[&quot;input&quot;] for r in rows], return_tensors=&quot;pt&quot;, padding=True)
+with torch.no_grad():
+    logits = model(**batch).logits[:, -1, :]
+probs = logits.softmax(dim=-1)
+ids = [tok.encode(r[&quot;base_answer&quot;], add_special_tokens=False)[0] for r in rows]
+mine = [float(probs[i, t]) for i, t in enumerate(ids)]
+
+lens = [r[&quot;value&quot;] for r in json.load(open(&quot;out/logit_lens/layers=1/p_answer.json&quot;))]
+for a, b in zip(lens, mine):
+    print(f&quot;lens {a:.9f}   model {b:.9f}   diff {abs(a - b):.2e}&quot;)</code></pre>
+          </figure>
+
+          <!-- ran 2026-09-23 against the out/logit_lens above -->
+          <pre><code class="language-bash">$ python lens_check.py
+lens 0.000028089   model 0.000028089   diff 0.00e+00
+lens 0.000028376   model 0.000028376   diff 0.00e+00
+lens 0.000027431   model 0.000027431   diff 0.00e+00
+lens 0.000034297   model 0.000034297   diff 0.00e+00</code></pre>
+
+          <!-- also measured 2026-09-23: the lens read at block_output[1] against an
+               lm_head read in the same pass, max |diff| over 4 x 32000 logits = 0.0,
+               argmax identical. FINDINGS.md §10 records up to 5.96e-08 for the same
+               comparison, from the GEMM's M differing (rows·w against rows·seq). -->
+          <p>Compared as raw logits rather than probabilities the two agree to the bit
+          across the whole vocabulary, and the argmax is identical. They can differ:
+          the lens projects one position per row where the model projects the whole
+          sequence, and a GEMM at a different <code>M</code> may accumulate in a
+          different order, which <code>FINDINGS.md</code> §10 records as up to one ulp.
+          Nothing larger than that is a rounding difference, and a lens that disagrees
+          with its own model's last layer by more is wired wrong.</p>
+
+          <h2>Where a logits view is refused</h2>
+
+          <!-- causalab_mini/plan/spec.py:153 RESIDUAL_STREAM; :622-631 the two refusals -->
+          <p>Two things the compiler will not let a <code>logits</code> view be, both
+          refused before any weights load.</p>
+
+          <h3>It is not the residual stream</h3>
+
+          <p>The final norm and the head expect a residual stream, so the view is
+          allowed only at a component that is one: <code>embeddings</code>,
+          <code>block_input</code>, <code>block_output</code>, <code>ln_final</code>.
+          An MLP output is a summand of the stream, not the stream, and projecting it
+          would be projecting a difference:</p>
+
+          <!-- ran 2026-09-23; documents/v2/logit_lens.json copied aside with
+               sites.resid.component changed from block_output to mlp_output -->
+          <pre><code class="language-bash">$ uv run causalab-mini validate logit_lens_on_mlp.json
+…
+Value error, interventions.lens: read &#x27;lens&#x27;: view &#x27;logits&#x27; projects the residual stream through the head, and &#x27;mlp_output&#x27; is not the residual stream (one of [&#x27;block_input&#x27;, &#x27;block_output&#x27;, &#x27;embeddings&#x27;, &#x27;ln_final&#x27;])</code></pre>
+
+          <h3>It is not featurized, and it is not written back</h3>
+
+          <!-- ran 2026-09-23; the same document with a subspace featurizer on the read -->
+          <pre><code class="language-bash">$ uv run causalab-mini validate logit_lens_featurized.json
+…
+Value error, interventions.lens: read &#x27;lens&#x27;: a featurized read cannot also be viewed as logits</code></pre>
+
+          <p>A featurizer is defined at the site's width; a logits view is
+          vocabulary-wide, and the two cannot both be true of one read. For the same
+          reason a write may not take a logits view as its operand — refused naming the
+          read, with "which is vocabulary-wide and cannot be written back at a
+          site".</p>
+
+          <!-- causalab_mini/plan/spec.py:655 — the operand refusal -->
+          <div class="note">
+            <span class="label">why those two refusals matter</span>
+            <p>They keep the view a <em>reading</em> device. A lens that could be
+            differentiated through or written back would put the elided head on the
+            backward path, where projecting one position per row instead of the whole
+            sequence is no longer a rounding question — <code>FINDINGS.md</code> §10
+            records a backward GEMM at reduced <code>M</code> flipping an early stop
+            where the head was elided on a training read. Refusing both cases means
+            that cannot arise here by accident.</p>
+          </div>
+
+          <h2><code>logits</code> and <code>lm_head</code> are two components</h2>
+
+          <!-- causalab_mini/address.py:214-220 — lm_head is lm_head_output;
+               logits is the model's own output, which is not always the head's -->
+          <p>Both are in the component vocabulary and on most families they are the
+          same tensor. They are not the same thing:</p>
+
+          <table>
+            <thead><tr><th>component</th><th>what it reads</th></tr></thead>
+            <tbody>
+              <tr><td><code>lm_head</code></td><td>the unembedding's output, <code>lm_head_output</code></td></tr>
+              <tr><td><code>logits</code></td><td>the model's own output, which is what it predicts from</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/ops/intervene.py:332 softcap; nnterp/engine.py:195
+               softcapping(model) reads config.final_logit_softcapping -->
+          <p>Gemma-2 is the family where they differ: it caps its logits with
+          <code>final_logit_softcapping</code>,
+          <code>tanh(f / cap) · cap</code>, after the head. A metric scored on
+          <code>lm_head</code> there is scored on numbers the model does not predict
+          from, and on a long tail the cap changes which token is on top.</p>
+
+          <p>The lens takes the cap into account. The projection is
+          <code>softcap(lm_head(ln_final(x)), cap)</code>, with <code>cap</code> read
+          off the model's config and <code>None</code> on every family that has none —
+          so on Gemma-2 a <code>view: "logits"</code> read is comparable with the
+          model's own output rather than with its head's, which is what a lens is for.
+          On a family with no cap the softcap is the identity and the two are the same
+          tensor.</p>
+
+          <div class="seealso">
+            <h2>See also</h2>
+            <ul>
+              <li><a href="../locations.html">Locations</a> — which components are the
+                  residual stream, and the <code>lm_head</code> / <code>logits</code>
+                  pair in the full vocabulary</li>
+              <li><a href="../ops.html">Reads, writes, metrics</a> —
+                  <code>token_prob</code>, <code>match</code> and the other metric
+                  kinds a lens read can be scored with</li>
+              <li><a href="sweeps.html">Sweeps</a> — the layer sweep that turns one read
+                  into a curve</li>
+              <li><a href="layer-sweep.html">Layer sweep</a> — the same 16 layers on a
+                  model that does the task, read by intervention rather than by
+                  projection</li>
+            </ul>
+          </div>
+
 
         </article>
       </main>
