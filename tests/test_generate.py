@@ -237,9 +237,13 @@ def test_a_row_that_never_stopped_says_so_rather_than_ending_the_run(data_root, 
 
 
 def test_the_continuation_frame_prints_as_itself(data_root, model_engine):
+    """And a read the run cuts out of the continuation prints as the one
+    read the document wrote, not as the six ops the plan carries."""
     text = explain(plan.build_request(json.loads(ANSWER.read_text()), data_root, model_engine))
+    assert "read  'at_said' at lm_head over 6 steps" in text
     assert "pos={generated index:-1 scope:{variable:said}}" in text
     assert "pos={generated index:-1 scope:{segment:eos}}" in text
+    assert "at_said@" not in text
 
 
 def test_a_tap_in_the_continuation_frame_reports_where_it_was(

@@ -26,22 +26,7 @@ def _pos(at: Any) -> str:
     what `explain` can honestly say is what was asked for, and what the
     *run* reports is what was found (`results["positions"]`).
     """
-    where = at.where
-    if where is None:
-        return "-"
-    cut = (
-        f"index:{where.index}" if where.index is not None
-        else f"last:{where.last}" if where.last is not None
-        else f"span:{list(where.span)}" if where.span is not None
-        else "all"
-    )
-    scope = "" if where.scope is None else " scope:{%s}" % ", ".join(
-        f"{key}:{value}"
-        for key, value in (("segment", where.scope.segment), ("variable", where.scope.variable))
-        if value is not None
-    )
-    frame = "" if where.frame == "prompt" else f"{where.frame} "
-    return "{%s%s%s}" % (frame, cut, scope)
+    return "-" if at.where is None else at.where.spelling()
 
 
 def explain(step: Step, name: str = "<root>") -> str:
@@ -102,9 +87,17 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
                         f"{'' if write.features is None else f' on its features {list(write.features)}'}"
                     )
                 for read in tap.reads:
+                    # a read the run cuts out of the continuation is one op
+                    # per decode step in the plan and one read in the
+                    # document; print the document's
+                    if read.stack and tap.step != 0:
+                        continue
+                    name = read.stack or read.name
+                    at = where.split(" @step")[0] if read.stack else where
+                    steps = f" over {forward.decode} steps" if read.stack else ""
                     view = "" if read.view == "raw" else f" as {read.view}"
                     out.append(
-                        f"{pad}      read  {read.name!r} at {where} pos={_pos(read.at)}{_features(read.at)} via {read.featurizer!r}{view}"
+                        f"{pad}      read  {name!r} at {at}{steps} pos={_pos(read.at)}{_features(read.at)} via {read.featurizer!r}{view}"
                     )
     elif isinstance(step, Weights):
         out.append(f"{pad}{name}: Weights  names={list(step.names)}{tail}")

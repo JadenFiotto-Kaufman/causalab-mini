@@ -695,13 +695,13 @@ class Spec(Node):
                     write.pos.all or (write.pos.index is not None and write.pos.index >= 0),
                     f"{where}: write {name!r}: a write in the continuation frame is at a step "
                     "the decode has reached — {'index': k} with k >= 0, or {'all': true}. "
-                    f"{_form(write.pos)} names a cut of the finished continuation, which is "
+                    f"{write.pos.spelling()} names a cut of the finished continuation, which is "
                     "something to read and not something to write into",
                 )
                 _refuse(
                     write.pos.scope is None,
                     f"{where}: write {name!r}: a write in the continuation frame takes no scope; "
-                    f"{_form(write.pos)} is only known once the decode has finished",
+                    f"{write.pos.spelling()} is only known once the decode has finished",
                 )
                 _refuse(
                     write.pos.index is None or write.pos.index < one.decode,
@@ -770,23 +770,6 @@ def _swept(node: Any) -> bool:
     if isinstance(node, list):
         return any(_swept(value) for value in node)
     return False
-
-
-def _form(pos: Where) -> str:
-    """A position, spelled the way a document would write it, for a refusal."""
-    cut = (
-        {"index": pos.index} if pos.index is not None
-        else {"last": pos.last} if pos.last is not None
-        else {"span": list(pos.span)} if pos.span is not None
-        else {"all": True}
-    )
-    if pos.scope is not None:
-        cut["scope"] = {  # type: ignore[assignment]
-            key: value
-            for key, value in (("segment", pos.scope.segment), ("variable", pos.scope.variable))
-            if value is not None
-        }
-    return str(cut)
 
 
 def _refuse(condition: object, message: str) -> None:

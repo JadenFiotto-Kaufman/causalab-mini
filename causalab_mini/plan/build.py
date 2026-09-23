@@ -914,15 +914,6 @@ def _schedule(experiment: _Experiment) -> list[tuple[str, str]]:
     return ordered
 
 
-def _firing(pos: Where) -> int | str | None:
-    """Which decode step a tap acts at, derived from its frame. `None` is the
-    prompt frame — the prefill, and the whole of a forward that does not
-    decode. An integer is that decode step; `"all"` is every one of them."""
-    if pos.frame == "prompt":
-        return None
-    return "all" if pos.all else pos.index
-
-
 def _selection(pos: Where, anchors: tuple[str, ...], features: Any) -> Selection:
     """Where an op is: the spec, the per-row text it anchors to, and which
     part of the feature axis. Whether it gathers flat is decided *by the
@@ -960,7 +951,7 @@ def _stacks(pos: Where) -> bool:
     token, where the model said the row's answer — is of text that does not
     exist until the decode has run, so the read fires at every step and is
     selected out of the stack afterwards."""
-    return pos.frame == "generated" and pos.dynamic
+    return pos.frame == "generated" and not (pos.index is not None and pos.index >= 0)
 
 
 def _fits(name: str, site: str, experiment: _Experiment, rows: int) -> None:
@@ -1006,7 +997,10 @@ def _forward(
     if name in experiment.models:
         for write_name in experiment.models[name].writes:
             spec = experiment.writes[write_name]
-            writes.setdefault((addresses[spec.site], _firing(spec.pos)), []).append(
+            # which decode step the tap acts at: none in the prompt frame,
+            # every one of them for a steering write, else the step it names
+            step = None if spec.pos.frame == "prompt" else ("all" if spec.pos.all else spec.pos.index)
+            writes.setdefault((addresses[spec.site], step), []).append(
                 WriteOp(
                     name=write_name,
                     at=_selection(spec.pos, anchors(spec.pos), experiment.features.get(spec.site)),
@@ -1023,7 +1017,8 @@ def _forward(
             continue
         at = _selection(spec.pos, anchors(spec.pos), experiment.features.get(spec.site))
         if not _stacks(spec.pos):
-            reads.setdefault((addresses[spec.site], _firing(spec.pos)), []).append(
+            step = None if spec.pos.frame == "prompt" else ("all" if spec.pos.all else spec.pos.index)
+            reads.setdefault((addresses[spec.site], step), []).append(
                 ReadOp(
                     name=read_name,
                     at=at,

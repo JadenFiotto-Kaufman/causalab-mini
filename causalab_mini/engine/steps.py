@@ -220,25 +220,23 @@ def _measured(
     return value[[found[row] for row in keep]], ids
 
 
-def _read(step: Observe, name: str) -> Any:
-    """The op that produced the value called `name` — or, for a read the run
-    cut out of the continuation, any one of the per-step ops that made it."""
-    return next(
-        op
-        for forward in step.forwards
-        for tap in forward.taps
-        for op in tap.reads
-        if name in (op.name, op.stack)
-    )
-
-
 def _gathered_flat(step: Observe, name: str) -> bool:
     """Whether the value called `name` came back flat — one row per row that
-    resolved — rather than as a rectangle. For a read of the prompt that is
-    the selection's own answer; for one cut out of the continuation it is
-    the spec's, because the cut happened over the steps and not at the tap.
+    resolved — rather than as a rectangle.
+
+    The op that produced it is the read of that name, or, for a read the run
+    cut out of the continuation, any one of the per-step ops that made it.
+    For a read of the prompt the selection answers; for one cut out of the
+    continuation the spec does, because the cut happened over the steps and
+    not at the tap.
     """
-    op = _read(step, name)
+    op = next(
+        one
+        for forward in step.forwards
+        for tap in forward.taps
+        for one in tap.reads
+        if name in (one.name, one.stack)
+    )
     if not op.stack:
         return op.at.flat
     return op.at.where is not None and op.at.where.ragged

@@ -125,21 +125,6 @@ class Where:
         return None  # `all`
 
     @property
-    def dynamic(self) -> bool:
-        """Whether only the run can say where this is.
-
-        A fixed cut of the prompt — `-1`, `{"last": 3}` — resolves to the
-        same integers on every row and every run, and the document already
-        says so. A text anchor does not, and neither does any cut of the
-        continuation but a named step, because the continuation is what the
-        decode turned out to produce. That is the line between a position a
-        plan may as well have carried and one a run has to report.
-        """
-        return self.scope is not None or (
-            self.frame == "generated" and not (self.index is not None and self.index >= 0)
-        )
-
-    @property
     def ragged(self) -> bool:
         """Whether a row may come back with a window the others do not have,
         so the gather is flat.
