@@ -34,7 +34,7 @@ GPT2 = REPO / "documents" / "gpt2_cpu.json"
 
 #: Every module boundary. The interiors are covered by `test_interior.py`.
 BOUNDARIES = [name for name, entry in _COMPONENTS.items() if entry.op is None]
-LAYERED = [name for name in BOUNDARIES if _COMPONENTS[name].band == 1]
+LAYERED = [name for name in BOUNDARIES if _COMPONENTS[name].per_layer]
 
 
 @pytest.fixture(scope="session")
@@ -94,7 +94,7 @@ def test_one_address_serves_both_families(component, eager_engine, eager_gpt2_en
     is *equal* on tiny Llama and tiny GPT-2, whose module trees share no path,
     because nnterp absorbs the family axis and the interior's operation is
     resolved per checkpoint rather than tabulated."""
-    layer = 0 if _COMPONENTS[component].band == 1 else None
+    layer = 0 if _COMPONENTS[component].per_layer else None
     assert eager_engine.locate(component, layer).where == eager_gpt2_engine.locate(component, layer).where
 
 
@@ -154,24 +154,29 @@ def test_the_hooks_engine_translates_every_name_to_the_right_raw_module(family, 
     table — and this is the translation, stated rather than assumed."""
     engine = hooks_engines[family]
     for component, expected in RAW_PATHS[family].items():
-        layer = 0 if _COMPONENTS[component].band == 1 else None
+        layer = 0 if _COMPONENTS[component].per_layer else None
         module = hooks.resolve(engine.locate(component, layer), engine._names)
         assert _qualified(engine.model, module) == expected, component
 
 
-def test_the_addresses_sort_into_forward_order():
+def test_the_addresses_sort_into_forward_order(eager_engine):
     """The sort key is what keeps a read at the head from being issued before
-    a read at layer 0 — nnsight refuses that outright. Bands first: the
-    embeddings are the one tap upstream of the whole stack."""
-    layered = [Address(name, 0) for name in LAYERED]
+    a read at layer 0 — nnsight refuses that outright. It is nnterp's
+    `internals.rank`, stamped by `locate`, with mini's own numbering only for
+    the interiors it addresses and nnterp does not."""
+    model_engine = eager_engine  # eager, so the pattern is among them
+    layered = [model_engine.locate(name, 0) for name in LAYERED]
     order = [one.component for one in sorted(layered, key=lambda one: one.key)]
     assert order == [
-        "block_input", "attention_input_norm", "attention_premix", "attention_output",
-        "block_mid", "mlp_input_norm", "mlp_input", "mlp_activation", "mlp_neuron_output",
-        "mlp_output", "block_output",
+        "block_input", "attention_input_norm", "attention_probs", "attention_premix",
+        "attention_output", "block_mid", "mlp_input_norm", "mlp_input", "mlp_activation",
+        "mlp_neuron_output", "mlp_output", "block_output",
     ]
 
-    everything = [Address(name, 0 if _COMPONENTS[name].band == 1 else None) for name in BOUNDARIES]
+    everything = [
+        model_engine.locate(name, 0 if _COMPONENTS[name].per_layer else None)
+        for name in BOUNDARIES
+    ]
     ordered = [one.component for one in sorted(everything, key=lambda one: one.key)]
     assert ordered[:2] == ["input_ids", "embeddings"]
     # the head's output, then the model's own — which is not the same tensor
@@ -188,7 +193,7 @@ def test_every_component_can_be_read_in_one_forward(eager_engine):
     model = model_engine.model
     addresses = sorted(
         (
-            model_engine.locate(name, 0 if entry.band == 1 else None)
+            model_engine.locate(name, 0 if entry.per_layer else None)
             for name, entry in _COMPONENTS.items()
         ),
         key=lambda one: one.key,
@@ -282,8 +287,14 @@ LAYER_UNDER_TEST = {"block_input": 1, "attention_input_norm": 1}
     "component",
     # `lm_head` and `logits` are where the metric reads, so a write there is
     # the read; `embeddings`/`input_ids` are upstream of everything and are
-    # covered by the no-op test below
-    [name for name in BOUNDARIES if name not in ("lm_head", "logits", "embeddings", "input_ids")],
+    # covered by the no-op test below; a place that needs eager attention is
+    # not in this sdpa document and has its own tests above
+    [
+        name
+        for name in BOUNDARIES
+        if name not in ("lm_head", "logits", "embeddings", "input_ids")
+        and _COMPONENTS[name].needs is None
+    ],
 )
 def test_a_swap_at_every_component_lands_and_moves_the_logits(
     component, minimal_raw, data_root, model_engine
@@ -292,7 +303,7 @@ def test_a_swap_at_every_component_lands_and_moves_the_logits(
     moved. A write that landed nowhere would leave the logits equal to the
     un-intervened run's, and a write at the wrong tensor would still move
     them — so the test is both: it moves, and an identity write does not."""
-    layer = LAYER_UNDER_TEST.get(component, 0) if _COMPONENTS[component].band == 1 else None
+    layer = LAYER_UNDER_TEST.get(component, 0) if _COMPONENTS[component].per_layer else None
     raw = _at(minimal_raw, component, layer)
 
     swapped = model_engine.execute(plan.build_request(raw, data_root, model_engine))
@@ -322,7 +333,7 @@ def test_an_interchange_at_the_embeddings_of_a_shared_last_token_is_a_no_op(
     and at layer 0 the declared position has attended to nothing yet. The
     same swap moves the logits one layer up (see the test above, which takes
     `block_input` at layer 1)."""
-    raw = _at(minimal_raw, component, 0 if _COMPONENTS[component].band == 1 else None)
+    raw = _at(minimal_raw, component, 0 if _COMPONENTS[component].per_layer else None)
     swapped = model_engine.execute(plan.build_request(raw, data_root, model_engine))
 
     clean = copy.deepcopy(raw)
@@ -342,7 +353,7 @@ def test_the_two_engines_agree_at_the_new_components(
 ):
     """Bit-identical across a traced engine and a hooked one, including at an
     input-side boundary, which the hooks engine reaches with a pre-hook."""
-    layer = LAYER_UNDER_TEST.get(component, 0) if _COMPONENTS[component].band == 1 else None
+    layer = LAYER_UNDER_TEST.get(component, 0) if _COMPONENTS[component].per_layer else None
     raw = _at(minimal_raw, component, layer)
 
     traced = model_engine.execute(plan.build_request(raw, data_root, model_engine))
@@ -381,7 +392,7 @@ def test_a_childs_spelling_is_nnterps_to_know(model_engine, gpt2_engine):
     assert model_engine.locate("attention_input_norm", 0).module == "input_layernorm"
     assert gpt2_engine.locate("attention_input_norm", 0).module == "ln_1"
     assert model_engine.locate("attention_premix", 0) == Address(
-        "attention_premix", 0, module="self_attn.o_proj", io="input"
+        "attention_premix", 0, module="self_attn.o_proj", io="input", rank=(0, 25)
     )
 
 

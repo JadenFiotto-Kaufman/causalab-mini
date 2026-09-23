@@ -1035,7 +1035,7 @@ def _forward(
 
     taps = []
     # forward order within a step; the prompt frame (None) before any step
-    def order(place: tuple[Address, Any]) -> tuple[int, int, tuple[int, int, int]]:
+    def order(place: tuple[Address, Any]) -> tuple[int, int, tuple[int, int]]:
         address, step = place
         return (0 if step is None else 1, -1 if step == "all" else (step if step is not None else -1), address.key)
 

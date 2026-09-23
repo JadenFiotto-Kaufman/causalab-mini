@@ -61,7 +61,7 @@ def test_the_interior_is_addressed_by_the_interface_call(model_engine):
     assert located.op == "attention_interface_1"
     assert located.seq_axis == 2
     # It is still pure data, and it is still what the document said.
-    assert located == Address("attention_query", 0, "attention_interface_1")
+    assert located == Address("attention_query", 0, "attention_interface_1", rank=(0, 11))
 
 
 def test_a_binding_and_a_call_share_one_namespace_so_the_name_alone_is_ambiguous(model):

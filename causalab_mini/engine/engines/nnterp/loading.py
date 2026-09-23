@@ -37,6 +37,11 @@ def load(spec: Any, **options: Any) -> StandardizedTransformer:
         # the document's, because it decides which tensors exist (the
         # attention pattern is only ever materialized under "eager")
         options.setdefault("attn_implementation", spec.attn_implementation)
+    if options.get("attn_implementation") == "eager":
+        # nnterp disables its attention-pattern row unless asked, and a
+        # document says "eager" for exactly one reason: that tensor. Asking
+        # also puts nnterp's own shape/sum/causality check behind it.
+        options.setdefault("enable_attention_probs", True)
     model = StandardizedTransformer(
         spec.key, revision=spec.revision, dtype=DTYPES[spec.dtype], **options
     )

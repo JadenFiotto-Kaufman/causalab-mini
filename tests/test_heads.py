@@ -242,7 +242,15 @@ def test_the_pattern_is_at_the_same_address_on_gpt2(data_root):
     spec = document.Document.load(REPO / "documents" / "gpt2_cpu.json").model
     engine = NNterpEngine.load(spec, device_map="cpu", attn_implementation="eager")
     located = engine.locate("attention_probs", 0)
-    assert (located.op, located.inner) == ("attention_interface_1", "nn_functional_softmax_0")
+    # nnterp's row, which is one name over five per-family overrides, a sink
+    # tag and a validator — where mini had one hardcoded operation
+    assert located.accessor == "attention_probabilities"
+    assert located.interior, "it is an operation inside the attention, not a module boundary"
+    llama = NNterpEngine.load(
+        document.Document.load(REPO / "documents" / "minimal_cpu.json").model,
+        device_map="cpu", attn_implementation="eager",
+    )
+    assert located.where == llama.locate("attention_probs", 0).where
 
 
 # --------------------------------------------------------------------- #
