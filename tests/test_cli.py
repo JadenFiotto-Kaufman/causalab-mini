@@ -48,18 +48,39 @@ def test_model_answers_without_weights(capsys):
     out = _json(capsys, ["model", TINY, "--revision", REVISION])
     assert out["num_layers"] == 2
     assert out["padding_side"] == "left"
-    assert out["components"]["block_output"] == {"resolves": True, "width": 16, "op": None}
-    assert out["components"]["lm_head"]["width"] == 32000
-    assert out["components"]["attention_query"]["op"] == "attention_interface_1"
+    # one band per run of layers that answer alike, so a model whose layers
+    # are all the same says so in one entry
+    assert out["components"]["block_output"] == [
+        {"layers": "0-1", "resolves": True, "width": 16, "op": None}
+    ]
+    assert out["components"]["lm_head"] == [
+        {"layers": None, "resolves": True, "width": 32000, "op": None}
+    ]
+    assert out["components"]["attention_query"][0]["op"] == "attention_interface_1"
+
+
+def test_model_takes_the_model_blocks_own_fields(capsys):
+    """Two components exist only under eager attention, and a document says
+    which implementation it runs in its `model` block — so this verb takes
+    the same field, validated by the same model."""
+    plain = _json(capsys, ["model", TINY, "--revision", REVISION])
+    assert plain["attn_implementation"] == "sdpa"
+    assert plain["components"]["attention_probs"][0]["resolves"] is False
+    assert "eager" in plain["components"]["attention_probs"][0]["why"]
+
+    eager = _json(capsys, ["model", TINY, "--revision", REVISION, "--attn-implementation", "eager"])
+    assert eager["attn_implementation"] == "eager"
+    assert eager["components"]["attention_probs"][0]["resolves"] is True
 
 
 def test_model_reports_what_an_engine_refuses(capsys):
     """The hooks engine cannot reach an interior, and `model --engine hooks`
     says so per component rather than failing whole."""
     out = _json(capsys, ["model", TINY, "--revision", REVISION, "--engine", "hooks"])
-    assert out["components"]["block_output"]["resolves"] is True
-    assert out["components"]["attention_query"]["resolves"] is False
-    assert "interior" in out["components"]["attention_query"]["why"]
+    assert out["components"]["block_output"][0]["resolves"] is True
+    assert out["components"]["attention_query"][0]["resolves"] is False
+    assert "interior" in out["components"]["attention_query"][0]["why"]
+    assert out["components"]["logits"][0]["resolves"] is True, "it reaches this one now"
 
 
 def test_tokens_catches_the_multi_token_answer(capsys):
