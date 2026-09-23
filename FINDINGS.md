@@ -1586,3 +1586,95 @@ Checked through mini after the port: Gemma-2 `block_input + attention_output
 compile time, citing the parallel block; Qwen3's premix width equals the
 tensor's; BLOOM's boundaries are right and only its interiors refuse. Mini's
 own suite: 435 (the `select` tests went with the mechanism, to nnterp).
+
+
+## 24. By reference: what registration was actually buying, and what it cost
+
+Measured on bippu against a self-hosted NDIF built from `~/wd/ndif` with
+`nnsight` (524c33fc), `nnterp` and `causalab_mini` installed into the image, so
+client and server ran the same three checkouts. The question was whether
+`nnsight.register("causalab_mini")` could go. It can, and two of the things it
+was believed to be doing turn out not to be true.
+
+**nnterp's own registration never fired under mini.** `StandardizedTransformer`
+calls `nnsight.ndif.register("nnterp")` in the `remote=True` branch of its
+constructor. `--engine ndif` never takes that branch: it builds the shell with
+`dispatch=False` and passes `remote=True` to `model.session(...)` instead, which
+is a different argument in a different place. Read straight out of cloudpickle's
+registry:
+
+```
+before:                                                []
+after StandardizedTransformer(dispatch=False):         []          <- what --engine ndif does
+after StandardizedTransformer(remote=True):            ['nnterp']
+```
+
+So every remote run mini has ever done already resolved nnterp by import on the
+server. Only `causalab_mini` was ever shipped.
+
+**Shipping nnterp by value does not work anyway.** Register it and let a traced
+block name the module, and the payload cannot be built at all:
+
+```
+TypeError: cannot pickle '_thread.RLock' object
+```
+
+— nnterp's module-level `logger`. A by-value module is rebuilt from its
+contents, and a logger's lock is in them. This is not reachable from mini (the
+block names no nnterp module), but it means the registration nnterp performs on
+its own `remote=True` path is one referenced global away from failing, and that
+"ship it by value" was never a usable fallback for a server without nnterp.
+
+**What deletion is worth, measured on `weekdays_layer_sweep`.** The serialized
+request payload, before compression:
+
+| | bytes |
+|---|---|
+| by reference | **12 392** |
+| `register("causalab_mini")` | 59 993 |
+
+4.8x, on a document whose block calls into `steps`, `intervene` and `ops`. Both
+paths returned the same numbers, so this was pure weight.
+
+**The server is now provably the source of the code.** A block that reads its
+own globals' `__file__` reports, from inside the model actor (pid matching the
+actor that ran the document):
+
+```
+causalab_mini.__file__  /usr/local/lib/python3.12/site-packages/causalab_mini/__init__.py
+nnterp.__file__         /usr/local/lib/python3.12/site-packages/nnterp/__init__.py
+```
+
+against the client's `/home/.../causalab-mini/causalab_mini/__init__.py`. With
+registration on, the server reports the *client's* path — the module was rebuilt
+from the shipped source. That is the discriminator, and it is the only one: a
+by-value run and a by-reference run are otherwise indistinguishable from the
+client.
+
+**Two entries of §19 are consequences of shipping, not of remote execution.**
+§19.5 (client and server Python minors must match, because a 3.13 dataclass
+carries a `__replace__` 3.12 does not have) is a property of pickling *our*
+classes by value; by reference the classes are the server's and the minors need
+not match — 3.12.13 client against a 3.12.14 server ran clean, and the traced
+block itself has always shipped as source rather than bytecode
+(`nnsight.schema.request.RequestModel.serialize`). §19.6 (a filled-in plan
+cannot come home, because the server cannot pickle back a class it only has by
+value) also stops being true: the server has the classes. `execute` still brings
+home `{step path: {name: tensor}}` and should keep doing so — the client already
+holds the plan and nothing of ours needs the return trip — but the reason is now
+design, not a limit.
+
+**The price.** A stock ndif.us can no longer run a mini document at all. That
+was the one thing registration bought, and it is the trade the owner took: one
+codebase across both sides, loudly, instead of two that look alike.
+
+**Verified end to end.** `documents/real/weekdays_layer_sweep.json` — 32
+experiments, 42 rows, a read, a swap write and two metrics — run against a
+self-hosted NDIF by reference and against the same checkpoint locally on one
+A6000. At the deployment's default dtype the server serves bf16 and the numbers
+differ as §19 already recorded (mean 0.051 on `logit_diff`, three of 1344 `iia`
+rows flipping at the layer-12/13 crossover). Deploy it `--dtype float32` — dtype
+is not part of the model key, so the deployment decides and the client changes
+nothing — and all **2688 values are bit-identical** to the local run. Remote
+execution, the serialization round-trip and the by-reference switch perturb the
+arithmetic not at all; the whole of the difference §19 saw was served dtype.
