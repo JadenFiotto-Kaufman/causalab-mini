@@ -35,7 +35,7 @@ import torch
 from ..ops import featurizer as featurizer_module, intervene, locate, metrics
 from ..plan import Featurizers, Fit, Forward, Observe, Plan, PlanError, Step, Weights
 from ..plan import plan as plan_module
-from ..shapes import Positions
+from ..shapes import Positions, Selection
 
 #: What a run reports about where it read and wrote: per op, each row's
 #: window, why it is empty when it is (`locate.REASONS`), and what the
@@ -171,17 +171,18 @@ def _reports(step: Observe, positions: Record) -> bool:
     A pass whose positions are all fixed forms resolves the same integers on
     every row and every run, and the document already says so — so it reports
     nothing, and a plan compiled before any of this existed still writes the
-    table it used to. A pass that anchored to text, or that could not place a
-    row, reports both halves: the window per row and why it is empty.
+    table it used to. A pass with a position only the run could settle, or
+    one that could not place a row, reports both halves: the window per row
+    and why it is empty.
     """
-    anchored = any(
-        op.at.where is not None and op.at.where.scope is not None
+    dynamic = any(
+        op.at.where is not None and op.at.where.dynamic
         for forward in step.forwards
         for tap in forward.taps
         for op in (*tap.reads, *tap.writes)
     )
     return bool(positions) and (
-        anchored or any(one for record in positions.values() for one in record["reason"])
+        dynamic or any(one for record in positions.values() for one in record["reason"])
     )
 
 
@@ -214,16 +215,34 @@ def _measured(
     scored = metric.rows if metric.rows is not None else range(rows)
     place = {row: index for index, row in enumerate(scored)}
     ids = tuple(tuple(one[place[row]] for row in keep) for one in metric.ids)
-    if not _read(step, metric.of).at.flat:
+    if not _gathered_flat(step, metric.of):
         return value[keep, 0], ids
     found = {row: index for index, row in enumerate(row for row, one in enumerate(located) if one)}
     return value[[found[row] for row in keep]], ids
 
 
 def _read(step: Observe, name: str) -> Any:
+    """The op that produced the value called `name` — or, for a read the run
+    cut out of the continuation, any one of the per-step ops that made it."""
     return next(
-        op for forward in step.forwards for tap in forward.taps for op in tap.reads if op.name == name
+        op
+        for forward in step.forwards
+        for tap in forward.taps
+        for op in tap.reads
+        if name in (op.name, op.stack)
     )
+
+
+def _gathered_flat(step: Observe, name: str) -> bool:
+    """Whether the value called `name` came back flat — one row per row that
+    resolved — rather than as a rectangle. For a read of the prompt that is
+    the selection's own answer; for one cut out of the continuation it is
+    the spec's, because the cut happened over the steps and not at the tap.
+    """
+    op = _read(step, name)
+    if not op.stack:
+        return op.at.flat
+    return op.at.where is not None and op.at.where.ragged
 
 
 def passes(engine: Any, step: Observe, state: State) -> tuple[dict[str, Any], Record]:
@@ -258,6 +277,7 @@ def passes(engine: Any, step: Observe, state: State) -> tuple[dict[str, Any], Re
             found.update(resolved)
             _writes_land(ready, found, start)
             engine.forward(ready, values, state.featurizers)
+            found.update(_continuation(engine, ready, values))
         parts.append({name: value for name, value in values.items() if name not in published})
         windows.append(found)
     merged = dict(state.outputs)
@@ -302,11 +322,14 @@ def located(engine: Any, forward: Forward) -> tuple[Forward, Record]:
             reasons: tuple[str, ...] = ("",) * rows
         else:
             windows, reasons = locate.locate(frame, where, op.at.anchors)
-        found[op.name] = {
-            "rows": windows,
-            "reason": reasons,
-            "tokens": tuple(locate.tokens_of(frame, one, row) for row, one in enumerate(windows)),
-        }
+        if not getattr(op, "stack", ""):
+            # one decode step of a continuation read has nothing to report on
+            # its own: what it read is reported once, for the whole stack
+            found[op.name] = {
+                "rows": windows,
+                "reason": reasons,
+                "tokens": tuple(locate.tokens_of(frame, one, row) for row, one in enumerate(windows)),
+            }
         return replace(op, at=replace(op.at, positions=windows))
 
     return (
@@ -323,6 +346,81 @@ def located(engine: Any, forward: Forward) -> tuple[Forward, Record]:
         ),
         found,
     )
+
+
+#: How much a continuation-frame read may buffer before it is refused, in
+#: bytes. A read that cannot say which step it wants until the decode has
+#: finished keeps every step: `rows x decode x width` numbers. That is
+#: nothing at `decode = 8` and a gigabyte at `decode = 256` over a wide
+#: site, so there is a line, and it is drawn here rather than discovered as
+#: an allocation failure inside someone else's process.
+STACK_LIMIT = 256 * 1024 * 1024
+
+
+def _continuation(engine: Any, forward: Forward, values: dict[str, Any]) -> Record:
+    """Cut every stacked read against the continuation the decode produced.
+
+    A read whose position only the finished text can settle fired at every
+    decode step and left one value per step. Here they become one tensor,
+    the ids the run generated become a `Frame` cut at each row's first stop
+    token, and the spec is resolved against *that* — so `{"index": -1}` is
+    the last token this row generated, `{"scope": {"segment": "eos"}}` is
+    where it stopped, and a row that never stopped says so rather than
+    ending the run.
+    """
+    stacked = [
+        (op.stack, tap.step, op)
+        for tap in forward.taps
+        for op in tap.reads
+        if op.stack and isinstance(tap.step, int)
+    ]
+    if not stacked:
+        return {}
+    frame = locate.continuation(
+        engine.tokenizer,
+        tuple(tuple(int(one) for one in row) for row in values[f"{forward.name}.generated"]),
+        _eos_ids(engine.tokenizer),
+    )
+    found: Record = {}
+    for name in dict.fromkeys(base for base, _, _ in stacked):
+        parts = [op for base, _, op in sorted(stacked, key=lambda one: one[1]) if base == name]
+        steps = [values.pop(op.name) for op in parts]
+        _fits(name, steps)
+        # (rows, steps, width): each step read the one position it processed
+        whole = torch.stack(steps, dim=1).squeeze(2)
+        where = parts[0].at.where
+        assert where is not None
+        windows, reasons = locate.locate(frame, where, parts[0].at.anchors)
+        values[name] = intervene.gather(
+            whole, Selection(positions=windows, flat=where.ragged), seq_axis=1
+        )
+        found[name] = {
+            "rows": windows,
+            "reason": reasons,
+            "tokens": tuple(locate.tokens_of(frame, one, row) for row, one in enumerate(windows)),
+        }
+    return found
+
+
+def _fits(name: str, steps: list[Any]) -> None:
+    held = len(steps) * steps[0].nelement() * steps[0].element_size()
+    if held > STACK_LIMIT:
+        rows, _, width = steps[0].shape
+        raise PlanError(
+            f"read {name!r} keeps every decode step to cut against the continuation: "
+            f"{len(steps)} steps x {rows} rows x {width} wide is {held / 2**20:.0f} MiB, over "
+            f"the {STACK_LIMIT / 2**20:.0f} MiB a read may hold. Name the step "
+            "({'frame': 'generated', 'index': k}), decode fewer tokens, or run fewer rows "
+            "at a time with --batch-size"
+        )
+
+
+def _eos_ids(tokenizer: Any) -> tuple[int, ...]:
+    """Which ids stop a row. A tokenizer may name one or several."""
+    found = getattr(tokenizer, "eos_token_id", None)
+    if found is None:
+        return ()
+    return tuple(int(one) for one in found) if isinstance(found, (list, tuple)) else (int(found),)
 
 
 def _writes_land(forward: Forward, record: Record, start: int) -> None:

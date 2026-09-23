@@ -105,6 +105,21 @@ class Where:
         return None  # `all`
 
     @property
+    def dynamic(self) -> bool:
+        """Whether only the run can say where this is.
+
+        A fixed cut of the prompt — `-1`, `{"last": 3}` — resolves to the
+        same integers on every row and every run, and the document already
+        says so. A text anchor does not, and neither does any cut of the
+        continuation but a named step, because the continuation is what the
+        decode turned out to produce. That is the line between a position a
+        plan may as well have carried and one a run has to report.
+        """
+        return self.scope is not None or (
+            self.frame == "generated" and not (self.index is not None and self.index >= 0)
+        )
+
+    @property
     def ragged(self) -> bool:
         """Whether a row may come back with a window the others do not have,
         so the gather is flat.
@@ -116,11 +131,12 @@ class Where:
         The two are different questions, which is why `width` answers the
         first and this the second.
 
-        A continuation-frame spec is never ragged *at the address*: whatever
-        it names, a decode step processes one position, and how much of the
-        continuation the spec keeps is decided afterwards, over the steps.
+        In the continuation frame this is about the *steps* a row keeps, not
+        about the positions a tap acts at: whatever the spec names, a decode
+        step processes one position, and the cut happens afterwards over the
+        stack of steps.
         """
-        return self.frame == "prompt" and (self.width is None or self.scope is not None)
+        return self.width is None or self.scope is not None
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,6 @@
 {
   "header": {
-    "description": "Generation: the interchange at layer 0 of the prompt, then three greedy tokens, with the head read at each decode step \u2014 {'step': k} is the continuation frame, swept here so each step is a point. Does the patch, made once at the prefill, still move what the model says two tokens later? It reaches the continuation only through the cache. The generated ids come home as a result too."
+    "description": "Generation: the interchange at layer 0 of the prompt, then three greedy tokens, with the head read at each decode step \u2014 {'frame': 'generated', 'index': k} is the continuation frame, swept here so each step is a point. Does the patch, made once at the prefill, still move what the model says two tokens later? It reaches the continuation only through the cache. The generated ids come home as a result too."
   },
   "model": {
     "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
@@ -38,7 +38,8 @@
         "logits": {
           "site": "head",
           "pos": {
-            "step": {
+            "frame": "generated",
+            "index": {
               "sweep": [
                 0,
                 1,

@@ -150,22 +150,14 @@ RESIDUAL_STREAM = frozenset({"embeddings", "block_input", "block_output", "ln_fi
 
 
 def _spelling(raw: Any) -> Any:
-    """The spellings a document may use for a `Where`.
+    """The one sugar a document may use: `-1` is `{"index": -1}`.
 
-    `-1` is `{"index": -1}`: every shipped document is written that way and
-    the meaning is unambiguous. `{"step": k}` is the continuation frame in
-    the spelling that predates it, `k` being a decode step.
+    Every shipped document is written that way and the meaning is
+    unambiguous. There is no other spelling — a decode step is
+    `{"frame": "generated", "index": k}`, in the same vocabulary as
+    everything else.
     """
-    if isinstance(raw, int) and not isinstance(raw, bool):
-        return {"index": raw}
-    if isinstance(raw, dict) and set(raw) == {"step"}:
-        step = raw["step"]
-        if step == "all":
-            return {"frame": "generated", "all": True}
-        if not (isinstance(step, int) and not isinstance(step, bool) and step >= 0):
-            raise ValueError(f"position {raw!r}: a step is a non-negative integer, or 'all'")
-        return {"frame": "generated", "index": step}
-    return raw
+    return {"index": raw} if isinstance(raw, int) and not isinstance(raw, bool) else raw
 
 
 #: A position, as a document may write it: a `Where`, or one of its two
@@ -334,7 +326,7 @@ class Intervention(Node):
     metrics: dict[str, Metric] = Field(default_factory=dict)
     #: Generate this many tokens after the prompt, greedily, on every
     #: forward of this intervention. 0 is one forward pass. With it, a
-    #: position may be `{"step": k}` — the continuation frame.
+    #: position may name the continuation frame, `{"frame": "generated"}`.
     decode: int = Field(default=0, ge=0)
 
 
@@ -685,19 +677,35 @@ class Spec(Node):
                 _refuse(write in one.writes, f"{where}: model {name!r}: undeclared write {write!r}")
         for name, read in one.reads.items():
             if read.pos.frame == "generated":
-                _refuse(not read.pos.all, f"{where}: read {name!r}: a read is at one step; 'all' is for writes")
-                _refuse(one.decode > 0, f"{where}: read {name!r}: a step position needs `decode` > 0")
+                _refuse(one.decode > 0, f"{where}: read {name!r}: a generated position needs `decode` > 0")
                 _refuse(
-                    read.pos.index is not None and read.pos.index < one.decode,
+                    read.pos.index is None or read.pos.index < one.decode,
                     f"{where}: read {name!r}: step {read.pos.index} of a {one.decode}-token decode",
                 )
         for name, write in one.writes.items():
             if write.pos.frame == "generated":
-                _refuse(one.decode > 0, f"{where}: write {name!r}: a step position needs `decode` > 0")
+                _refuse(one.decode > 0, f"{where}: write {name!r}: a generated position needs `decode` > 0")
+                # A write happens *during* the decode, so it may only name a
+                # step the run has already reached. Every other form of the
+                # continuation frame is a cut of the finished text — the last
+                # real token, the row's stop token, where it said the answer
+                # — and there is nothing to write into a step that has not
+                # happened yet.
                 _refuse(
-                    write.pos.all or (write.pos.index is not None and write.pos.index < one.decode),
-                    f"{where}: write {name!r}: step "
-                    f"{'all' if write.pos.all else write.pos.index} of a {one.decode}-token decode",
+                    write.pos.all or (write.pos.index is not None and write.pos.index >= 0),
+                    f"{where}: write {name!r}: a write in the continuation frame is at a step "
+                    "the decode has reached — {'index': k} with k >= 0, or {'all': true}. "
+                    f"{_form(write.pos)} names a cut of the finished continuation, which is "
+                    "something to read and not something to write into",
+                )
+                _refuse(
+                    write.pos.scope is None,
+                    f"{where}: write {name!r}: a write in the continuation frame takes no scope; "
+                    f"{_form(write.pos)} is only known once the decode has finished",
+                )
+                _refuse(
+                    write.pos.index is None or write.pos.index < one.decode,
+                    f"{where}: write {name!r}: step {write.pos.index} of a {one.decode}-token decode",
                 )
         for name, metric in one.metrics.items():
             _refuse(
@@ -762,6 +770,23 @@ def _swept(node: Any) -> bool:
     if isinstance(node, list):
         return any(_swept(value) for value in node)
     return False
+
+
+def _form(pos: Where) -> str:
+    """A position, spelled the way a document would write it, for a refusal."""
+    cut = (
+        {"index": pos.index} if pos.index is not None
+        else {"last": pos.last} if pos.last is not None
+        else {"span": list(pos.span)} if pos.span is not None
+        else {"all": True}
+    )
+    if pos.scope is not None:
+        cut["scope"] = {  # type: ignore[assignment]
+            key: value
+            for key, value in (("segment", pos.scope.segment), ("variable", pos.scope.variable))
+            if value is not None
+        }
+    return str(cut)
 
 
 def _refuse(condition: object, message: str) -> None:

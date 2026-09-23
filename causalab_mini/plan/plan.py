@@ -61,6 +61,12 @@ class ReadOp:
     #: through the model's final norm and head — the logit lens: what the
     #: model would say if this layer were its last.
     view: str = "raw"
+    #: When this read is one decode step of a continuation-frame read, the
+    #: name the whole stack is selected into. An engine sees an ordinary
+    #: read at one step and needs to know nothing; `engine/steps.py` puts
+    #: the steps back together and cuts them against the continuation,
+    #: which does not exist until the decode has run.
+    stack: str = ""
 
 
 @dataclass(frozen=True)
@@ -82,11 +88,16 @@ class WriteOp:
 
 @dataclass(frozen=True)
 class Tap:
-    """One place in one forward: an address, and — when the forward decodes —
-    which step. `None` is the prompt frame: the prefill, with positions
+    """One place in one forward: an address, and — when the forward decodes
+    — which step. `None` is the prompt frame: the prefill, with positions
     resolved against the prompt. An integer is that decode step, at the one
-    position it processes. `"all"` is every step, and only a write may say
-    it: steering is a write at every step."""
+    position it processes. `"all"` is every step: steering is a write at
+    every step.
+
+    The step is *derived* from the position's frame, never authored. A read
+    whose cut only the finished continuation can settle becomes one of these
+    per step, each carrying the same spec and a `stack` name, and the run
+    puts them back together."""
 
     address: Address
     writes: tuple[WriteOp, ...]

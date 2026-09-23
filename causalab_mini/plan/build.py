@@ -914,9 +914,30 @@ def _selection(pos: Where, anchors: tuple[str, ...], features: Any) -> Selection
     """Where an op is: the spec, the per-row text it anchors to, and which
     part of the feature axis. Whether it gathers flat is decided *by the
     form*, over every row of the pass, so a window of those rows cannot
-    decide differently."""
+    decide differently.
+
+    A continuation-frame tap never gathers flat: a decode step processes one
+    position whatever the spec names, and the cut over the steps happens
+    afterwards, in `engine/steps.py`.
+    """
     groups, take = features or (None, None)
-    return Selection(groups=groups, take=take, flat=pos.ragged, where=pos, anchors=anchors)
+    return Selection(
+        groups=groups,
+        take=take,
+        flat=pos.frame == "prompt" and pos.ragged,
+        where=pos,
+        anchors=anchors,
+    )
+
+
+def _stacks(pos: Where) -> bool:
+    """Whether a read has to see the whole continuation before it can say
+    which of it it wants. `{"index": 2}` is step 2 and the tap fires there;
+    every other cut of the continuation — the last real token, the stop
+    token, where the model said the row's answer — is of text that does not
+    exist until the decode has run, so the read fires at every step and is
+    selected out of the stack afterwards."""
+    return pos.frame == "generated" and pos.dynamic
 
 
 def _forward(
@@ -960,14 +981,28 @@ def _forward(
     for read_name, spec in experiment.reads.items():
         if (spec.model, spec.input) != (name, role):
             continue
-        reads.setdefault((addresses[spec.site], _firing(spec.pos)), []).append(
-            ReadOp(
-                name=read_name,
-                at=_selection(spec.pos, anchors(spec.pos), experiment.features.get(spec.site)),
-                featurizer=spec.featurizer,
-                view=getattr(spec, "view", "raw"),
+        at = _selection(spec.pos, anchors(spec.pos), experiment.features.get(spec.site))
+        if not _stacks(spec.pos):
+            reads.setdefault((addresses[spec.site], _firing(spec.pos)), []).append(
+                ReadOp(
+                    name=read_name,
+                    at=at,
+                    featurizer=spec.featurizer,
+                    view=getattr(spec, "view", "raw"),
+                )
             )
-        )
+            continue
+        # one ordinary read per decode step, which the run stacks and cuts
+        for step in range(experiment.decode):
+            reads.setdefault((addresses[spec.site], step), []).append(
+                ReadOp(
+                    name=f"{read_name}@{step}",
+                    at=at,
+                    featurizer=spec.featurizer,
+                    view=getattr(spec, "view", "raw"),
+                    stack=read_name,
+                )
+            )
 
     taps = []
     # forward order within a step; the prompt frame (None) before any step
