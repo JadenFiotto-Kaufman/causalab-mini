@@ -1770,6 +1770,14 @@ too (`ops.intervene.softcap`). nnterp has nothing about softcapping outside
 that one row's comment, so this is not a gap to push upstream — it is one
 line of arithmetic per consumer, and the consumer has to know it exists.
 
+Both engines reach the row. The tensor is a *field of the model's output
+object* rather than the output itself, and nnterp says so the same way it
+says "the first element of a tuple": a `Selection` on the row, with
+`get`/`put`. The hooks engine had that rule hardcoded as an `isinstance`
+check on a tuple, which is one `Selection` out of the set; asking the row
+for its own is both smaller and general, and `logits` fell out with no case
+of its own.
+
 ### 25.3 `pos: 0` meant two different tokens on two families
 
 Llama's sentencepiece prepends a BOS to every prompt and GPT-2's BPE

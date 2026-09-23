@@ -401,6 +401,9 @@ def test_a_childs_spelling_is_nnterps_to_know(model_engine, gpt2_engine):
 # --------------------------------------------------------------------- #
 
 
+from causalab_mini.engine import NNterpEngine  # noqa: E402
+from causalab_mini.plan.spec import Model  # noqa: E402
+
 GEMMA2 = {"key": "trl-internal-testing/tiny-Gemma2ForCausalLM", "revision": "main", "dtype": "fp32"}
 TINY_LLAMA = {
     "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
@@ -439,9 +442,6 @@ def test_a_metric_at_the_head_and_at_the_logits_differ_where_the_family_caps(dat
     output is not what the model predicts from. They are two places and two
     components, and a metric scored on the wrong one is scored on numbers the
     model never used."""
-    from causalab_mini.engine import NNterpEngine
-    from causalab_mini.plan.spec import Model
-
     raw = _both_heads(GEMMA2)
     engine = NNterpEngine.load(Model.model_validate(GEMMA2), device_map="cpu")
     cap = engine.model.config.final_logit_softcapping
@@ -467,3 +467,27 @@ def test_the_two_are_the_same_tensor_where_it_does_not(data_root, model_engine):
     )
     assert getattr(model_engine.model.config, "final_logit_softcapping", None) is None
     assert torch.equal(scored.result("at_head"), scored.result("at_logits"))
+
+
+def test_the_hooks_engine_reaches_the_logits_too(data_root, model_engine):
+    """`logits` is the model's own output with the tensor one field inside
+    it, and a forward hook sees exactly that value — so the row is reachable
+    by asking nnterp where the tensor is, which is what unwrapping a tuple
+    was already doing. Both engines, one number."""
+    raw = _both_heads(TINY_LLAMA)
+    hooks = HooksEngine.load(Model.model_validate(TINY_LLAMA), device_map="cpu")
+    traced = model_engine.execute(plan.build_request(raw, data_root, model_engine))
+    hooked = hooks.execute(plan.build_request(raw, data_root, hooks))
+    assert torch.equal(traced.result("at_logits"), hooked.result("at_logits"))
+    assert torch.equal(traced.result("at_head"), hooked.result("at_head"))
+
+
+def test_the_hooks_engine_sees_the_cap_as_well(data_root):
+    """And it is the model's own output, so it carries the model's cap: the
+    same two numbers on tiny Gemma-2 that the traced engine reports."""
+    raw = _both_heads(GEMMA2)
+    hooks = HooksEngine.load(Model.model_validate(GEMMA2), device_map="cpu")
+    scored = hooks.execute(plan.build_request(raw, data_root, hooks))
+    at_head, at_logits = scored.result("at_head"), scored.result("at_logits")
+    assert torch.allclose(at_head, torch.full_like(at_head, 100.0))
+    assert torch.allclose(at_logits, torch.full_like(at_logits, 29.9237), atol=1e-3)
