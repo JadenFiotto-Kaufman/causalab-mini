@@ -1,6 +1,6 @@
 {
   "header": {
-    "description": "SAE feature ablation. The residual stream at layer 0 is read through a loaded sparse autoencoder \u2014 an encoder/decoder pair with an ERROR TERM, so what the dictionary does not explain is put back exactly \u2014 and one latent at a time is set to zero (`features: [j]`, swept). The `clean` step is the same model with nothing written; an ablated latent that was already zero on these prompts changes nothing, which is the point of doing this in feature space. The bundle here is a random 16->32 dictionary, a fixture: the mechanics are real, the latents mean nothing."
+    "description": "SAE feature ablation. The residual stream at layer 0 is read through a loaded sparse autoencoder \u2014 an encoder/decoder pair with an ERROR TERM, so what the dictionary does not explain is put back exactly \u2014 and one latent at a time is set to zero (`features: [j]`, swept). An ablated latent that was already zero on these prompts changes nothing, which is the point of doing this in feature space: the sweep's own points are the comparison. The bundle here is a random 16->32 dictionary, a fixture: the mechanics are real, the latents mean nothing."
   },
   "model": {
     "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",

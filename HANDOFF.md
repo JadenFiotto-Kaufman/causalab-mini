@@ -71,7 +71,10 @@ change to `steps.py`, `ops/`, `plan/` or `address.py`. What it had to supply by
 hand — and what turned out to be free — is FINDINGS §6. It is not wired into
 the CLI: `--engine` is a flag nobody has needed yet.
 
-Documents in `documents/`: nine. Ported from causalab's own corpus:
+Documents: **nine** in `documents/` (the protocol format), **21** in
+`documents/v2/` (the plan-shaped one) and **five** in `documents/real/`,
+which pin real checkpoints and are compiled but not run by the suite. The
+nine, ported from causalab's own corpus:
 `multi_position_patch_cpu.json` (three disjoint absolute writes in one
 intervened model), `hydra_effect_cpu.json` (five intervened models, and a
 read taken inside one that is the operand of a write in another — the only
@@ -215,12 +218,17 @@ token is a token the model produced). A bare `-1` is sugar for
   compiles to one ordinary read per decode step carrying a `stack` name, and
   the run puts them back together and cuts them — so neither engine needed a
   line. A write may only name a step the decode has reached.
+- **Chat turns are segments, and the data says so.** A role whose field
+  holds a list of `{"role", "content"}` messages is rendered through the
+  checkpoint's own chat template at compile time, and the character span of
+  each turn's content travels in the plan beside the anchors. A position
+  then names a turn by its own role — `{"segment": "user"}`, or
+  `{"segment": "user[1]"}` when that role speaks twice, with the bare name
+  `alignment_ambiguous` exactly as a variable occurring twice is. The
+  template's control tokens are between the turns and in none of them.
+  `{"segment": …, "variable": …}` composes. `documents/v2/chat_turn.json`.
 - **Deferred, deliberately**: the client-side pre-check and the CLI work
-  around it (`--precheck`, `validate` warnings, `vocab` learning the forms);
-  chat segments — `Anchor.segment` takes `system`/`user`/`assistant` in the
-  vocabulary and the prompt frame answers `alignment_missing` for them,
-  because rendering a chat template is client-side work nobody has asked for
-  yet. Only `eos` is implemented, in the generated frame.
+  around it (`--precheck`, `validate` warnings).
 - **Not run**: a real NDIF deployment. `remote="local"` pins the whole
   mechanism (it serializes, hides the local modules and resolves the
   persistent objects exactly as a server does) and an anchored document comes

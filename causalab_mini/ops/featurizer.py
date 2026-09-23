@@ -144,7 +144,8 @@ class Encoder:
 
     so a write changes what the dictionary explains and leaves what it does
     not explain exactly as it was — with `f′ = f` the activation comes back
-    to the bit, however bad the SAE's reconstruction is. Without the error
+    to an ulp, however bad the SAE's reconstruction is (measured: 1.49e-08
+    in fp32, because `decode(f) + (x − decode(f))` rounds twice). Without the error
     term, every SAE intervention would also be "replace the activation with
     its reconstruction", and the two effects could not be told apart.
 

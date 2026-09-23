@@ -316,6 +316,9 @@ def located(engine: Any, forward: Forward, start: int = 0, text: bool = True) ->
     frame = locate.frame_of(
         engine.tokenizer, forward.input_ids, forward.attention_mask, text=text
     )
+    # the runs the *client* located — a chat template's turns, which only it
+    # saw — in the same coordinates this frame uses
+    frame = replace(frame, segments=forward.segments)
     _same_text(forward, frame)
     rows = len(forward.input_ids)
     found: Record = {}

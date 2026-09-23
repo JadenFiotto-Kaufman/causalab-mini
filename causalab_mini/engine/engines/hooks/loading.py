@@ -61,7 +61,7 @@ def load(spec: Any, device_map: str = "cpu", dispatch: bool = True) -> tuple[Any
     return model, tokenizer
 
 
-def standardized(model: Any) -> Any:
+def standardized(model: Any, shell: Any = None) -> Any:
     """nnterp's names, against a raw HuggingFace tree.
 
     `Address.path` is written in nnterp's spellings — `layers.{L}`, `lm_head` —
@@ -94,6 +94,11 @@ def standardized(model: Any) -> Any:
         )
     layers = stacks[0]
     return SimpleNamespace(
+        model=model,
+        #: The weightless nnterp handle this engine keeps anyway, for the
+        #: module spellings and every width. A row's `select` — where the
+        #: tensor is inside a module's value — is asked of it too.
+        shell=shell,
         layers=layers,
         attentions=[_by_class(block, "Attention", "attentions") for block in layers],
         mlps=[_by_class(block, "MLP", "mlps") for block in layers],

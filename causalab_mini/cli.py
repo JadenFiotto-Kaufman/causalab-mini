@@ -15,16 +15,26 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
+
+from nnterp.rename_utils import RenamingError
+from pydantic import ValidationError
 
 from . import address, plan as plan_module
+from .address import AddressError
 from .data import rows as rows_module
+from .data.rows import DataError
+from .data.tokens import TokenError
 from .engine import NNterpEngine
+from .engine.base import EngineError
 from .engine.engines.hooks import HooksEngine
 from .ops import featurizer, intervene, metrics
+from .ops.locate import LocateError
 from .plan import document, sweep
+from .plan.document import DocumentError
 from .plan.explain import explain
-from .plan.spec import METRIC_COLUMNS, Spec
+from .plan.plan import PlanError
+from .plan.spec import METRIC_COLUMNS, Model, Spec
 from .shapes import Where
 
 #: What `--engine` means: the class, how it is loaded to *run*, and where it
@@ -38,10 +48,31 @@ ENGINES: dict[str, tuple[type, dict[str, Any], bool | str]] = {
 }
 SHAPE_ONLY = {"dispatch": False}
 
+#: What this package raises when it means "no". Every one carries a message
+#: written for the person who wrote the document, so the entry point prints
+#: that and nothing else. `ValidationError` is pydantic's and is how the
+#: plan-shaped format refuses; `RenamingError` is nnterp's, which mini
+#: forwards wherever a place is a family's to have or not have.
+REFUSALS: tuple[type[Exception], ...] = (
+    PlanError,          # the compiler, and the run's own refusals
+    DocumentError,      # the protocol format
+    AddressError,       # a component, a layer, an attention implementation
+    TokenError,         # a prompt, a conversation, an answer column
+    LocateError,        # a frame the resolver cannot build
+    DataError,          # a dataset ref, a column, a row
+    EngineError,        # a runtime asked for something it does not have
+    ValidationError,    # the plan-shaped format
+    RenamingError,      # nnterp, where a place is not this family's
+)
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="causalab-mini")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
+    parser.add_argument(
+        "--traceback", action="store_true",
+        help="on a refusal, print where it was raised as well as what it says",
+    )
     sub = parser.add_subparsers(dest="verb", required=True)
 
     sub.add_parser("schema", help="the JSON Schema of a plan-shaped document")
@@ -49,8 +80,12 @@ def main(argv: list[str] | None = None) -> int:
 
     one = sub.add_parser("model", help="what a model looks like: layers, widths, which components resolve")
     one.add_argument("key")
+    # the model block's own fields, with the model block's own choices — a
+    # document says which attention implementation it runs under, and two
+    # components exist only under one of them
     one.add_argument("--revision", default="main")
-    one.add_argument("--dtype", default="fp32", choices=("fp32", "bf16"))
+    one.add_argument("--dtype", default="fp32", choices=_choices("dtype"))
+    one.add_argument("--attn-implementation", default=None, choices=_choices("attn_implementation"))
     one.add_argument("--engine", default="nnterp", choices=list(ENGINES))
 
     one = sub.add_parser("tokens", help="whether each string is one token — a metric column must be")
@@ -63,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     one.add_argument("--data-root", default="documents/data")
 
     for verb, help_text in (
-        ("validate", "check a document; no model is loaded"),
+        ("validate", "compile a document without weights; say whether it is valid"),
         ("explain", "compile a document without weights and print the plan"),
         ("run", "execute a document and write its outputs"),
     ):
@@ -78,7 +113,16 @@ def main(argv: list[str] | None = None) -> int:
                              help="rows per model call; bounds memory, moves only the last bit (default: every row at once)")
 
     args = parser.parse_args(argv)
-    result = VERBS[args.verb](args)
+    try:
+        result = VERBS[args.verb](args)
+    except REFUSALS as refusal:
+        # A refusal is this package saying no, and it says why in its own
+        # message — every one of them is written to be read. The traceback
+        # is the library's business and is one flag away.
+        if args.traceback:
+            raise
+        print(f"{type(refusal).__name__}: {refusal}", file=sys.stderr)
+        return 1
     if args.json:
         print(json.dumps(result, indent=1, default=str))
     else:
@@ -125,36 +169,83 @@ def vocab(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def model(args: argparse.Namespace) -> dict[str, Any]:
-    spec = document.ModelSpec(args.key, args.revision, args.dtype)
+    """Every component, at every layer that answers differently.
+
+    A place is not a property of a checkpoint but of a checkpoint's layer:
+    DeepSeek's first blocks are dense and the rest are mixtures of experts,
+    and nnterp answers `unavailable_on(layer)` per layer for exactly that.
+    Asking at layer 0 only reported the first block as if it were the model.
+    Layers that answer alike are one band, so a model whose layers are all
+    the same prints one line per component, as before.
+    """
+    spec = Model.model_validate(  # the document's own model block, validated the same way
+        {
+            "key": args.key,
+            "revision": args.revision,
+            "dtype": args.dtype,
+            "attn_implementation": args.attn_implementation,
+        }
+    )
     engine = ENGINES[args.engine][0].load(spec, **SHAPE_ONLY)
-    components: dict[str, Any] = {}
-    for name, entry in address.describe().items():
-        layer = 0 if entry["layered"] else None
-        try:
-            located = engine.locate(name, layer)
-            width: Any
-            try:
-                width = engine.width(located)
-            except Exception:
-                width = None
-            components[name] = {"resolves": True, "width": width, "op": located.op}
-        except Exception as refusal:
-            components[name] = {"resolves": False, "why": str(refusal).splitlines()[0]}
+    components = {
+        name: _bands(engine, name, range(engine.num_layers) if entry["layered"] else [None])
+        for name, entry in address.describe().items()
+    }
     payload = {
         "key": args.key,
         "engine": args.engine,
+        "attn_implementation": getattr(engine.model.config, "_attn_implementation", None),
         "num_layers": engine.num_layers,
         "padding_side": getattr(engine.tokenizer, "padding_side", None),
         "components": components,
     }
-    lines = [f"{args.key} via {args.engine}: {payload['num_layers']} layers, padding_side={payload['padding_side']}"]
-    for name, entry in components.items():
-        if entry["resolves"]:
-            width = f"width={entry['width']}" if entry["width"] is not None else "no width (no featurizer here)"
-            lines.append(f"  {name:18s} ok   {width}" + (f"  op={entry['op']}" if entry["op"] else ""))
-        else:
-            lines.append(f"  {name:18s} --   {entry['why']}")
+    lines = [
+        f"{args.key} via {args.engine}: {payload['num_layers']} layers, "
+        f"{payload['attn_implementation']} attention, padding_side={payload['padding_side']}"
+    ]
+    for name, bands in components.items():
+        for index, band in enumerate(bands):
+            at = "" if band["layers"] is None or len(bands) == 1 else f"layers {band['layers']}  "
+            if band["resolves"]:
+                width = f"width={band['width']}" if band["width"] is not None else "no width (no featurizer here)"
+                said = f"ok   {at}{width}" + (f"  op={band['op']}" if band["op"] else "")
+            else:
+                said = f"--   {at}{band['why']}"
+            lines.append(f"  {name if index == 0 else '':18s} {said}")
     return {"text": "\n".join(lines), **payload}
+
+
+def _bands(engine: Any, name: str, layers: Any) -> list[dict[str, Any]]:
+    """One entry per run of layers that answer alike, in layer order."""
+    found: list[dict[str, Any]] = []
+    for layer in layers:
+        answer = _resolves(engine, name, layer)
+        if found and {k: v for k, v in found[-1].items() if k != "layers"} == answer:
+            found[-1]["layers"] = f"{found[-1]['layers'].split('-')[0]}-{layer}"
+            continue
+        found.append({"layers": None if layer is None else str(layer), **answer})
+    return found
+
+
+def _resolves(engine: Any, name: str, layer: int | None) -> dict[str, Any]:
+    try:
+        located = engine.locate(name, layer)
+    except REFUSALS as refusal:
+        return {"resolves": False, "why": str(refusal).splitlines()[0]}
+    try:
+        width: Any = engine.width(located)
+    except REFUSALS:
+        width = None
+    return {"resolves": True, "width": width, "op": located.op}
+
+
+def _choices(field: str) -> tuple[str, ...]:
+    """A model-block field's own values, off the model block — so a flag and
+    the document it stands in for cannot come to disagree."""
+    annotation = Model.model_fields[field].annotation
+    named = tuple(one for one in get_args(annotation) if isinstance(one, str))
+    # `Literal[...] | None` on an optional field: the values are one level in
+    return named or tuple(one for one in get_args(get_args(annotation)[0]) if isinstance(one, str))
 
 
 def tokens(args: argparse.Namespace) -> dict[str, Any]:
@@ -196,11 +287,24 @@ def data(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def validate(args: argparse.Namespace) -> dict[str, Any]:
+    """The same work `explain` does, without printing the plan.
+
+    A document is only valid against a model: which components exist, how
+    wide each site is, whether a layer is in range and whether a metric
+    column is one token are all questions about a checkpoint. `--engine
+    nnterp` answers them from a meta shell, in under a second and with
+    nothing downloaded but the config and the tokenizer, so there is no
+    reason for a cheaper check that passes documents `explain` refuses.
+    """
     raw = _read(args.document)
     shape = "plan-shaped" if "steps" in raw else "protocol"
-    for _, point in sweep.points(raw):
-        Spec.model_validate(point) if shape == "plan-shaped" else document.Document.from_json(point)
-    return {"text": f"ok: {args.document} is a valid {shape} document", "ok": True, "format": shape}
+    _, built = _compile(args, **SHAPE_ONLY)
+    return {
+        "text": f"ok: {args.document} is a valid {shape} document, {_plural(len(built.steps), 'step')}",
+        "ok": True,
+        "format": shape,
+        "steps": list(built.steps),
+    }
 
 
 def _compile(args: argparse.Namespace, **options: Any) -> tuple[Any, Any]:
@@ -226,6 +330,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     engine, built = _compile(args, **loading)
     written = engine.execute(built, remote=remote, batch_size=args.batch_size).write(args.out)
     return {"text": "\n".join(str(path) for path in written), "written": [str(path) for path in written]}
+
+
+def _plural(count: int, thing: str) -> str:
+    return f"{count} {thing}" + ("" if count == 1 else "s")
 
 
 def _read(path: str) -> dict[str, Any]:

@@ -106,6 +106,10 @@ class Site(Node):
                 "layers must be a one-element band; a band spanning several "
                 "layers is one address and is not implemented"
             )
+        # the same question the protocol format asks, of the same table
+        wrong = address.layered(self.component, self.layers[0] if self.layers else None)
+        if wrong is not None:
+            raise ValueError(wrong)
         return self
 
 

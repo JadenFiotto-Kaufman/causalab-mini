@@ -61,9 +61,9 @@ class Frame:
     ends: Indices
     texts: tuple[str, ...]
     offsets: tuple[tuple[int, ...], ...]  # len == the row's token count + 1
-    #: Per row, the character span of each run the *frame* located: `eos` in
-    #: the continuation. Empty for a plain prompt, which is every row of
-    #: every document today.
+    #: Per row, the character span of each run the *frame* located: a chat
+    #: turn in the prompt, `eos` in the continuation. Empty for a prompt
+    #: that is a plain string, which is most of them.
     segments: tuple[dict[str, tuple[int, int]], ...] = ()
 
 
@@ -108,13 +108,13 @@ def frame_of(tokenizer: Any, ids: TokenRows, mask: TokenRows, text: bool = True)
 
 
 def frame_of_texts(
-    tokenizer: Any, texts: list[str], text: bool = True
+    tokenizer: Any, texts: list[str], text: bool = True, add_special: bool = True
 ) -> tuple[TokenRows, TokenRows, Frame]:
     """Prompts in; the padded batch and its frame out. The client's `encode`
     is this with `text=False`, because it needs the ids and not the map."""
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    encoded = tokenizer(list(texts), padding=True)
+    encoded = tokenizer(list(texts), padding=True, add_special_tokens=add_special)
     ids = tuple(tuple(int(one) for one in row) for row in encoded["input_ids"])
     mask = tuple(tuple(int(one) for one in row) for row in encoded["attention_mask"])
     return ids, mask, frame_of(tokenizer, ids, mask, text=text)
@@ -219,9 +219,13 @@ def _run(frame: Frame, where: Where, row: int, anchor: str | None) -> tuple[list
     text = frame.texts[row]
     lo, hi = 0, len(text)
     if where.scope.segment is not None:
-        located = (frame.segments[row] if frame.segments else {}).get(where.scope.segment)
+        named = frame.segments[row] if frame.segments else {}
+        located = named.get(where.scope.segment)
         if located is None:
-            return [], "alignment_missing"
+            # a bare name the frame located more than once is the same case
+            # as a variable that occurs twice, and wants the same fix
+            twice = f"{where.scope.segment}[0]" in named
+            return [], "alignment_ambiguous" if twice else "alignment_missing"
         lo, hi = located
     if where.scope.variable is not None:
         if anchor is None:

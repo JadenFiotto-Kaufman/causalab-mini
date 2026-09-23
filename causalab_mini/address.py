@@ -125,8 +125,9 @@ _COMPONENTS = {
     "attention_key": _Component(
         # The same call as the query, argument 2: the keys *before* GQA's
         # repeat_kv, so this is key-head space and narrower than the query by
-        # the grouping ratio on a model that groups. No width: nnterp
-        # publishes nothing for it, which is what refuses a featurizer here.
+        # the grouping ratio on a model that groups. Its width is the same
+        # per-head one the query has — `qk_head_dim` multiplied out by the
+        # *key* head count, which `heads="kv"` is what says.
         path="attentions.{layer}",
         side="input",
         order=12,
@@ -158,7 +159,7 @@ _COMPONENTS = {
         # rather than the softmax's, which is the pattern the values are
         # actually mixed with on every family (after the cast, and after an
         # attention sink has been dropped) and the identity in eval mode.
-        # nnterp carries five per-family overrides, a sink tag and a
+        # nnterp carries six per-family overrides, a sink tag and a
         # validator behind that one name; mini carried one hardcoded op.
         # A write here is "make this head attend there".
         accessor="attention_probabilities",
@@ -493,6 +494,25 @@ def width(model: Any, address: Address) -> int:
     return int(value)
 
 
+def layered(component: str, layer: int | None) -> str | None:
+    """Why this component may not be addressed at this layer, or `None`.
+
+    A whole-model place takes none and a per-layer one takes exactly one,
+    and which a component is, is this table's to say — so both authoring
+    formats ask here rather than each keeping a list. A name only nnterp
+    knows is per layer unless nnterp says otherwise, which `locate` finds
+    out; here it is not refused for a layer either way.
+    """
+    entry = _COMPONENTS.get(component)
+    if entry is None:
+        return None
+    if not entry.per_layer and layer is not None:
+        return f"{component} takes no layers"
+    if entry.per_layer and not isinstance(layer, int):
+        return f"{component} is addressed at one layer"
+    return None
+
+
 def describe() -> dict[str, dict[str, Any]]:
     """The component vocabulary, as data an agent can read: for each name,
     where it is and what kind of place that is. This is the table, not a
@@ -501,7 +521,10 @@ def describe() -> dict[str, dict[str, Any]]:
         name: {
             "accessor": entry.accessor,
             "path": entry.path,
-            "side": entry.side,
+            # an interior's, and only an interior's: at a boundary the side
+            # is nnterp's to say and `locate` stamps it, so a table written
+            # without a model has no honest answer
+            "side": entry.side if entry.op is not None else None,
             "interior": entry.op is not None,
             "layered": entry.per_layer,
             "seq_axis": entry.seq_axis,

@@ -348,3 +348,23 @@ def test_a_reads_shorthand_keeps_it_unreduced(mean_raw):
     harvest = spec.steps["harvest"]
     assert isinstance(harvest, spec_module.Observe)
     assert harvest.outputs["acts_kept"].reduce == "none"
+
+
+@pytest.mark.parametrize(
+    "component, layers, message",
+    [
+        ("lm_head", [0], "lm_head takes no layers"),
+        ("block_output", None, "block_output is addressed at one layer"),
+    ],
+    ids=["a whole-model site with a layer", "a per-layer site without one"],
+)
+def test_a_site_is_checked_against_its_component(das_spec_raw, component, layers, message):
+    """The plan-shaped format asks the same question the protocol's does, of
+    the same table — whether a component is one place or one per layer is
+    `address`'s to answer, and neither format keeps a list of its own."""
+    site = {"component": component}
+    if layers is not None:
+        site["layers"] = layers
+    das_spec_raw["sites"]["probe"] = site
+    with pytest.raises(ValidationError, match=message):
+        Spec.model_validate(das_spec_raw)

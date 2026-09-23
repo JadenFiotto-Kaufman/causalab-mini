@@ -47,9 +47,21 @@ def digest(rows: list[Row]) -> str:
 
 
 def field_text(row: Row, field: str) -> str:
+    """`field_value`, refused unless it is a string."""
+    value = field_value(row, field)
+    if not isinstance(value, str):
+        raise DataError(f"field {field!r}: expected a string, got {type(value).__name__}")
+    return value
+
+
+def field_value(row: Row, field: str) -> Any:
     """`input` -> the column; `counterfactual_inputs[0]` -> one entry of a
     list-valued column; `counterfactual_inputs_variables[0].entity` -> a key
-    of a dict inside one. Dots walk into dicts, brackets into lists."""
+    of a dict inside one. Dots walk into dicts, brackets into lists.
+
+    Whatever is there, not necessarily a string: a role whose field is a
+    *list of messages* is a conversation, and what a row holds is how a
+    document says so."""
     value: Any = row
     for step in field.split("."):
         match = _STEP.match(step)
@@ -61,8 +73,6 @@ def field_text(row: Row, field: str) -> str:
         value = value[key]
         for index in indices:
             value = value[int(index)]
-    if not isinstance(value, str):
-        raise DataError(f"field {field!r}: expected a string, got {type(value).__name__}")
     return value
 
 
