@@ -441,6 +441,7 @@ def _spec_saves(
                 value=save.value,
                 example_ids=rows_module.example_ids(base_rows),
                 eligible=_eligible(base_rows, metric),
+                of=metric.of,
                 unit=metrics_module.UNITS[metric.kind][0],
                 estimand_version=metrics_module.UNITS[metric.kind][1],
             )
@@ -745,6 +746,7 @@ def _save(
         value=entry.value,
         example_ids=rows_module.example_ids(base_rows),
         eligible=_eligible(base_rows, document.metrics[entry.value]),
+        of=document.metrics[entry.value].of,
         unit=metrics_module.UNITS[kind][0],
         estimand_version=metrics_module.UNITS[kind][1],
         produced_by=document.digest,
@@ -935,7 +937,8 @@ def _forward(
     def anchors(pos: Where) -> tuple[str, ...]:
         if pos.scope is None or pos.scope.variable is None:
             return ()
-        return tuple(rows_module.field_text(row, pos.scope.variable) for row in rows)
+        field = experiment.fields[role]
+        return tuple(rows_module.variable_text(row, field, pos.scope.variable) for row in rows)
 
     # a tap is one place: an address, and — when the forward decodes — a step
     writes: dict[tuple[Address, Any], list[WriteOp]] = {}

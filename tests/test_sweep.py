@@ -110,7 +110,7 @@ def test_the_points_differ_in_the_swept_field_and_nothing_else(swept_plan, model
     # is what resolving a position against the padding the tokenizer
     # actually produced is for.
     positions = [
-        steps.located(model_engine, point.step("observe", plan.Observe).forwards[1])[1]["patch"]
+        steps.located(model_engine, point.step("observe", plan.Observe).forwards[1])[1]["patch"]["rows"]
         for point in swept_plan.steps.values()
     ]
     assert positions == [((10,),) * 4, ((9,),) * 4, ((8,),) * 4]

@@ -191,8 +191,14 @@ class SaveFile:
     value: str  # the result this file holds, by name, from this plan's subtree
     example_ids: ExampleIds = ()
     #: Per example id, whether the metric was computed for it. Empty: all.
-    #: The result holds one value per *eligible* row, in order.
+    #: The result holds one value per *eligible* row, in order. This is the
+    #: *column* half, decided from the data; a run that anchored a position
+    #: to text reports the intersection with what it could place, and the
+    #: table prefers that.
     eligible: tuple[bool, ...] = ()
+    #: The read a metric scored, so the table can say which token each row's
+    #: number came from. Empty for a save that is not a metric.
+    of: str = ""
     unit: str = ""
     estimand_version: str = ""
     produced_by: str = ""

@@ -65,10 +65,17 @@ def _file(step: Step, save: SaveFile, out: Path) -> Path:
     # The result holds one value per eligible row; an excluded measurement
     # is still a row of the table, with no value and `eligible: false` — so
     # it can never be read as a zero, or silently shorten a denominator.
-    eligible = save.eligible or (True,) * len(save.example_ids)
+    #
+    # Which rows those are has two halves. The compiled `eligible` is the
+    # column half — whether the data had an answer to score. A run that
+    # anchored a position to text also reports which rows it could place,
+    # and that list is already the intersection, so it wins where it exists.
+    run = step.results.get("eligible", {}).get(save.value)
+    eligible = run or save.eligible or (True,) * len(save.example_ids)
+    where = step.results.get("positions", {}).get(save.of, {})
     numbers = iter(value.tolist())
     rows = []
-    for example_id, included in zip(save.example_ids, eligible):
+    for index, (example_id, included) in enumerate(zip(save.example_ids, eligible)):
         number = next(numbers) if included else None
         rows.append(
             {
@@ -78,6 +85,9 @@ def _file(step: Step, save: SaveFile, out: Path) -> Path:
                 # `NaN`, which Python reads back and a strict parser refuses.
                 "value": float(number) if number is not None and math.isfinite(number) else None,
                 "eligible": included,
+                # where the number was read, and why it was nowhere
+                "positions": list(where["rows"][index]) if where else None,
+                "reason": where["reason"][index] if where else "",
                 "unit": save.unit,
                 "estimand_version": save.estimand_version,
                 "produced_by": save.produced_by,

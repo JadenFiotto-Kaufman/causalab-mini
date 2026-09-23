@@ -153,14 +153,11 @@ def _spelling(raw: Any) -> Any:
     """The spellings a document may use for a `Where`.
 
     `-1` is `{"index": -1}`: every shipped document is written that way and
-    the meaning is unambiguous. `{"step": k}` is the continuation frame and
-    `{"column": c}` a text anchor, both in the spellings that predate the
-    one vocabulary.
+    the meaning is unambiguous. `{"step": k}` is the continuation frame in
+    the spelling that predates it, `k` being a decode step.
     """
     if isinstance(raw, int) and not isinstance(raw, bool):
         return {"index": raw}
-    if isinstance(raw, dict) and set(raw) == {"column"}:
-        return {"all": True, "scope": {"variable": raw["column"]}}
     if isinstance(raw, dict) and set(raw) == {"step"}:
         step = raw["step"]
         if step == "all":

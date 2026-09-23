@@ -198,10 +198,16 @@ def is_ragged(positions: Positions) -> bool:
 
 def _flat(positions: Positions, device: Any) -> tuple[Any, Any]:
     """Every (row, position) pair in row order, for a ragged window. An
-    empty window — an excluded row — contributes nothing."""
+    empty window — an excluded row — contributes nothing, and a window that
+    is empty on *every* row is an empty gather rather than an error: the
+    dtype is stated because an empty Python list would be floats, which is
+    not a thing a tensor can be indexed by."""
     rows = [row for row, window in enumerate(positions) for _ in window]
     index = [position for window in positions for position in window]
-    return torch.as_tensor(rows, device=device), torch.as_tensor(index, device=device)
+    return (
+        torch.as_tensor(rows, dtype=torch.long, device=device),
+        torch.as_tensor(index, dtype=torch.long, device=device),
+    )
 
 
 def _selection(at: Selection | Positions) -> Selection:

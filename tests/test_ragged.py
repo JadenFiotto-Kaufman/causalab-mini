@@ -14,6 +14,7 @@ does to a tensor, to a document and to a refusal is here.
 
 import json
 import pathlib
+import shutil
 
 import pytest
 import torch
@@ -53,8 +54,8 @@ def test_a_column_is_a_text_anchor_and_lands_token_by_token(entity_raw, data_roo
     assert read.at.flat
 
     _, positions = steps.located(model_engine, forward)
-    assert [len(one) for one in positions["acts"]] == [3, 1, 1, 1]
-    assert ops.is_ragged(positions["acts"])
+    assert [len(one) for one in positions["acts"]["rows"]] == [3, 1, 1, 1]
+    assert ops.is_ragged(positions["acts"]["rows"])
 
 
 def test_a_dotted_field_reaches_into_a_dict_inside_a_list():
@@ -142,7 +143,9 @@ def test_a_write_with_nothing_to_write_on_a_row_is_refused_at_the_write(
     The refusal is at the write now, not at compile time: which rows a text
     anchor is in is a question about the model's own tokenization, so the
     compiler cannot answer it and no longer pretends to."""
-    entity_raw["interventions"]["ablated"]["writes"]["ablate"]["pos"] = {"column": "label"}
+    entity_raw["interventions"]["ablated"]["writes"]["ablate"]["pos"] = {
+        "all": True, "scope": {"variable": "label"}
+    }
     # `label` is " Sunday" etc. — an answer, never in the prompt
     built = plan.build_request(entity_raw, data_root, model_engine)
     with pytest.raises(plan.PlanError, match="has nothing to write on row"):
@@ -157,8 +160,9 @@ def test_an_entity_patch_between_rows_of_different_widths_is_refused_by_row(data
     what would make it land."""
     raw = json.loads((REPO / "documents" / "v2" / "patching.json").read_text())
     reads = raw["interventions"]["patching"]["reads"]
-    reads["v_cf"]["pos"] = {"column": "counterfactual_inputs_variables[0].entity"}
-    raw["interventions"]["patching"]["writes"]["patch"]["pos"] = {"column": "entity"}
+    entity = {"all": True, "scope": {"variable": "entity"}}
+    reads["v_cf"]["pos"] = entity
+    raw["interventions"]["patching"]["writes"]["patch"]["pos"] = entity
     built = plan.build_request(raw, data_root, model_engine)
     with pytest.raises(plan.PlanError, match="rows \\[.*\\] differ.*exact_length_buckets"):
         model_engine.execute(built)
@@ -169,3 +173,85 @@ def test_an_unreduced_ragged_output_cannot_be_an_operand(entity_raw, data_root, 
     entity_raw["steps"]["harvest"]["saves"] = []
     with pytest.raises(plan.PlanError, match="unreduced; the windows must match, or reduce the output"):
         plan.build_request(entity_raw, data_root, model_engine)
+
+
+# --------------------------------------------------------------------- #
+# and what a scoped anchor makes runnable instead
+# --------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def patch_raw():
+    return json.loads((REPO / "documents" / "v2" / "entity_patch.json").read_text())
+
+
+def _holed(data_root, tmp_path, entity="Neptune", drop=None):
+    """weekdays/train with row 1's entity replaced by a word that is not in
+    its prompt — or with that row taken out altogether."""
+    root = tmp_path / "data"
+    shutil.copytree(data_root, root)
+    path = root / "weekdays" / "train.json"
+    table = json.loads(path.read_text())
+    if drop is None:
+        table[1]["entity"] = entity
+    else:
+        table.pop(drop)
+    path.write_text(json.dumps(table))
+    return root
+
+
+def test_an_entity_patch_at_the_last_token_of_the_entity_lands_on_every_row(
+    patch_raw, data_root, model_engine
+):
+    """The reversal this whole vocabulary is for.
+
+    The same interchange refused above — each row's entity swapped in from
+    its counterfactual — runs, because `{"index": -1}` *inside* the entity is
+    one token on every row however many tokens the entity is. One spec, two
+    roles, and each role resolves its own row's text: the base patches the
+    piece `day` of ` Thursday` where the counterfactual read ` Saturday`
+    whole.
+    """
+    executed = model_engine.execute(plan.build_request(patch_raw, data_root, model_engine))
+    where = executed.step("score", plan.Observe).results["positions"]
+
+    assert where["patch"]["tokens"] == ("'day'", "' Friday'", "' Saturday'", "' Sunday'")
+    assert where["v_cf"]["tokens"] == ("' Saturday'", "' Sunday'", "'day'", "' Friday'")
+    # One token per row on both sides — which is why the swap lands at all.
+    assert [len(one) for one in where["patch"]["rows"]] == [1] * 4
+    assert set(where["patch"]["reason"]) == {""}
+    # These prompts differ only in the entity and are padded on the left, so
+    # the *index* coincides while the token addressed does not. Where the
+    # tail varies, so does the index — tests/test_locate.py.
+    assert executed.result("logit_diff").shape == (4,)
+
+
+def test_the_two_engines_patch_the_same_entity_to_the_bit(patch_raw, data_root, model_engine):
+    """The resolver is engine-agnostic: it is the model's tokenizer that
+    answers, and both engines hold the same one."""
+    hooks = HooksEngine.load(Spec.model_validate(patch_raw).model, device_map="cpu")
+    traced = model_engine.execute(plan.build_request(patch_raw, data_root, model_engine))
+    hooked = hooks.execute(plan.build_request(patch_raw, data_root, hooks))
+
+    score = (one.step("score", plan.Observe).results for one in (traced, hooked))
+    a, b = score
+    assert a["positions"] == b["positions"] and a["eligible"] == b["eligible"]
+    assert torch.equal(a["iia"], b["iia"])
+    assert torch.allclose(a["logit_diff"], b["logit_diff"], rtol=0, atol=1e-7)
+
+
+def test_a_row_whose_entity_is_not_in_its_prompt_refuses_the_write_by_name(
+    patch_raw, data_root, tmp_path, model_engine
+):
+    """And taking that row out is all it takes: the others score what they
+    scored, because a row is a row of a batch and nothing about the swap
+    depended on it."""
+    holed = _holed(data_root, tmp_path)
+    with pytest.raises(plan.PlanError, match=r"has nothing to write on row\(s\) \[1\]"):
+        model_engine.execute(plan.build_request(patch_raw, holed, model_engine))
+
+    whole = model_engine.execute(plan.build_request(patch_raw, data_root, model_engine))
+    without = model_engine.execute(
+        plan.build_request(patch_raw, _holed(data_root, tmp_path / "b", drop=1), model_engine)
+    )
+    assert torch.equal(without.result("logit_diff"), whole.result("logit_diff")[[0, 2, 3]])

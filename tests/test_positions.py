@@ -95,7 +95,8 @@ def test_a_cut_outside_the_row_is_reported_by_the_run_not_refused_by_the_compile
     built = plan.build_request(raw, data_root, model_engine)
     forward = built.step("score", plan.Observe).forwards[-1]
     _, positions = steps.located(model_engine, forward)
-    assert positions["logits"] == ((),) * 4
+    assert positions["logits"]["rows"] == ((),) * 4
+    assert positions["logits"]["reason"] == ("out_of_range",) * 4
 
 
 # --------------------------------------------------------------------- #
@@ -172,8 +173,8 @@ def test_the_window_is_a_spec_in_the_plan_and_integers_in_the_run(data_root, mod
     assert "pos={span:[-4, -1]}" in explain(built)
 
     ready, positions = steps.located(model_engine, forward)
-    assert positions["patch"] == ((7, 8, 9),) * 4
-    assert ready.taps[0].writes[0].at.positions == positions["patch"]
+    assert positions["patch"]["rows"] == ((7, 8, 9),) * 4
+    assert ready.taps[0].writes[0].at.positions == positions["patch"]["rows"]
 
 
 # --------------------------------------------------------------------- #

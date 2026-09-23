@@ -1,0 +1,107 @@
+{
+  "header": {
+    "description": "The pair-native interchange: one position spec, two roles, and each row's entity is different text. `{'index': -1, 'scope': {'variable': 'entity'}}` is the last token of THIS row's entity \u2014 ' Thursday' is three tokens on this tokenizer and ' Friday' one, so the base and the counterfactual are addressed by what they say rather than by a number counted off the end. The window is one token on every row, because 'the last token of' is a question about tokens, which is what makes the swap land where documents/v2/entity_mean_ablation.json's whole-entity read cannot. A row whose entity text is not in its prompt has nothing to write, and the run refuses it by name."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "roles": {
+    "base": {
+      "field": "input"
+    },
+    "counterfactual": {
+      "field": "counterfactual_inputs[0]"
+    }
+  },
+  "sites": {
+    "target": {
+      "component": "block_output",
+      "layers": [
+        0
+      ]
+    },
+    "head": {
+      "component": "lm_head"
+    }
+  },
+  "interventions": {
+    "patching": {
+      "reads": {
+        "v_cf": {
+          "site": "target",
+          "pos": {
+            "index": -1,
+            "scope": {
+              "variable": "entity"
+            }
+          },
+          "model": "original",
+          "input": "counterfactual"
+        },
+        "logits": {
+          "site": "head",
+          "pos": -1,
+          "model": "patched",
+          "input": "base"
+        }
+      },
+      "writes": {
+        "patch": {
+          "site": "target",
+          "pos": {
+            "index": -1,
+            "scope": {
+              "variable": "entity"
+            }
+          },
+          "mechanism": "swap",
+          "operand": "v_cf"
+        }
+      },
+      "models": {
+        "patched": {
+          "input": "base",
+          "writes": [
+            "patch"
+          ]
+        }
+      },
+      "metrics": {
+        "iia": {
+          "kind": "match",
+          "of": "logits",
+          "expected": "cf_answer",
+          "token_form": "space_prefixed"
+        },
+        "logit_diff": {
+          "kind": "logit_diff",
+          "of": "logits",
+          "a": "cf_answer",
+          "b": "base_answer",
+          "token_form": "space_prefixed"
+        }
+      }
+    }
+  },
+  "steps": {
+    "score": {
+      "kind": "observe",
+      "rows": {
+        "base": "weekdays/train",
+        "counterfactual": "weekdays/train"
+      },
+      "saves": [
+        {
+          "value": "iia",
+          "file_path": "iia.json"
+        },
+        {
+          "value": "logit_diff",
+          "file_path": "logit_diff.json"
+        }
+      ]
+    }
+  }
+}

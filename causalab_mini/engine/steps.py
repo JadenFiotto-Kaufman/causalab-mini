@@ -37,6 +37,12 @@ from ..plan import Featurizers, Fit, Forward, Observe, Plan, PlanError, Step, We
 from ..plan import plan as plan_module
 from ..shapes import Positions
 
+#: What a run reports about where it read and wrote: per op, each row's
+#: window, why it is empty when it is (`locate.REASONS`), and what the
+#: window decoded back to. Plain tuples of integers and strings, so it comes
+#: home in the plan's `results` like any other result does.
+Record = dict[str, dict[str, Any]]
+
 
 @dataclass
 class State:
@@ -111,19 +117,33 @@ def observe(engine: Any, step: Observe, state: State) -> dict[str, Any]:
     pass declares as its own outputs is published at the end.
     """
     values, positions = passes(engine, step, state)
-    # A metric reads one position per row — the compiler refused anything
-    # else — so its (rows, 1, vocab) is (rows, vocab) with the unit window off.
-    # A metric with excluded rows scores the others: the compiler said which,
-    # so this indexes and the mean downstream needs no mask.
+    rows = len(step.forwards[0].input_ids) if step.forwards else 0
+    # A metric's rows are the intersection of two halves: the column half,
+    # which the client decided from the data, and the position half, which
+    # only the run can know. Neither is authoritative alone.
+    eligible = {
+        metric.name: tuple(
+            (metric.rows is None or row in metric.rows)
+            and bool(positions[metric.of]["rows"][row])
+            for row in range(rows)
+        )
+        for metric in step.metrics
+    }
     scored = {
         metric.name: metrics.compute(
             metric.kind,
-            values[metric.of][:, 0] if metric.rows is None else values[metric.of][list(metric.rows), 0],
-            metric.ids,
+            *_measured(step, metric, values[metric.of], eligible[metric.name], positions[metric.of]["rows"], rows),
         )
         for metric in step.metrics
     }
     step.results.update({name: value.detach().cpu() for name, value in scored.items()})
+    if _reports(step, positions):
+        # Where this pass read and wrote, and which rows it could score.
+        # Plain tuples of integers and strings, so they come home in the plan
+        # like a metric does and a table can print them beside a number.
+        step.results["positions"] = positions
+        if eligible:
+            step.results["eligible"] = eligible
     # a decoding forward leaves its generated ids in `values`; they are a
     # result of the pass like a metric is
     step.results.update(
@@ -140,12 +160,73 @@ def observe(engine: Any, step: Observe, state: State) -> dict[str, Any]:
             tensor = featurizer_module.pca(tensor, output.k)
         state.outputs[output.name] = tensor.detach()
         if output.reduce == "none":
-            state.layout[output.name] = positions[output.read]
+            state.layout[output.name] = positions[output.read]["rows"]
         step.results[output.name] = tensor.detach().cpu()
     return scored
 
 
-def passes(engine: Any, step: Observe, state: State) -> tuple[dict[str, Any], dict[str, Positions]]:
+def _reports(step: Observe, positions: Record) -> bool:
+    """Whether this pass has anything to say about *where* it acted.
+
+    A pass whose positions are all fixed forms resolves the same integers on
+    every row and every run, and the document already says so — so it reports
+    nothing, and a plan compiled before any of this existed still writes the
+    table it used to. A pass that anchored to text, or that could not place a
+    row, reports both halves: the window per row and why it is empty.
+    """
+    anchored = any(
+        op.at.where is not None and op.at.where.scope is not None
+        for forward in step.forwards
+        for tap in forward.taps
+        for op in (*tap.reads, *tap.writes)
+    )
+    return bool(positions) and (
+        anchored or any(one for record in positions.values() for one in record["reason"])
+    )
+
+
+def _measured(
+    step: Observe,
+    metric: Any,
+    value: Any,
+    eligible: tuple[bool, ...],
+    located: Positions,
+    rows: int,
+) -> tuple[Any, tuple[Any, ...]]:
+    """What this metric scores: the read's eligible rows, and their token ids.
+
+    A metric reads one position per row — the compiler refused anything else
+    — so a rectangular read's `(rows, 1, vocab)` is `(rows, vocab)` with the
+    unit window off. A text-anchored read gathered flat instead, one row per
+    row it *found*, so the eligible rows are indexed by their place among
+    those. The ids came compiled for the *column*-eligible rows, and the
+    position half may drop more, so they are indexed the same way. Either
+    side holds one entry per eligible row, in row order, and the mean
+    downstream needs no mask.
+    """
+    keep = [row for row, one in enumerate(eligible) if one]
+    if not keep:
+        raise PlanError(
+            f"metric {metric.name!r}: none of these {len(eligible)} row(s) is both in the "
+            f"metric's columns and at a position the run could resolve; a metric of "
+            "nothing has no mean"
+        )
+    scored = metric.rows if metric.rows is not None else range(rows)
+    place = {row: index for index, row in enumerate(scored)}
+    ids = tuple(tuple(one[place[row]] for row in keep) for one in metric.ids)
+    if not _read(step, metric.of).at.flat:
+        return value[keep, 0], ids
+    found = {row: index for index, row in enumerate(row for row, one in enumerate(located) if one)}
+    return value[[found[row] for row in keep]], ids
+
+
+def _read(step: Observe, name: str) -> Any:
+    return next(
+        op for forward in step.forwards for tap in forward.taps for op in tap.reads if op.name == name
+    )
+
+
+def passes(engine: Any, step: Observe, state: State) -> tuple[dict[str, Any], Record]:
     """Every forward of a pass, over every row, `batch_size` rows at a time.
 
     A window of rows is a whole small pass: the same forwards in the same
@@ -163,7 +244,7 @@ def passes(engine: Any, step: Observe, state: State) -> tuple[dict[str, Any], di
     count = len(step.forwards[0].input_ids) if step.forwards else 0
     size = state.batch_size or count or 1
     parts: list[dict[str, Any]] = []
-    windows: list[dict[str, Positions]] = []
+    windows: list[Record] = []
     for start in range(0, count, size):
         stop = min(start + size, count)
         values = {
@@ -171,7 +252,7 @@ def passes(engine: Any, step: Observe, state: State) -> tuple[dict[str, Any], di
             for name, tensor in state.outputs.items()
         }
         published = set(values)
-        found: dict[str, Positions] = {}
+        found: Record = {}
         for forward in step.forwards:
             ready, resolved = located(engine, plan_module.window(forward, start, stop))
             found.update(resolved)
@@ -184,11 +265,15 @@ def passes(engine: Any, step: Observe, state: State) -> tuple[dict[str, Any], di
         merged[name] = parts[0][name] if len(parts) == 1 else torch.cat([part[name] for part in parts])
     # each window resolved its own rows; in row order they are the pass's
     return merged, {
-        name: tuple(one for part in windows for one in part[name]) for name in (windows[0] if windows else {})
+        name: {
+            key: tuple(one for part in windows for one in part[name][key])
+            for key in ("rows", "reason", "tokens")
+        }
+        for name in (windows[0] if windows else {})
     }
 
 
-def located(engine: Any, forward: Forward) -> tuple[Forward, dict[str, Positions]]:
+def located(engine: Any, forward: Forward) -> tuple[Forward, Record]:
     """`forward` with every op's positions resolved, and what each one got.
 
     This is where a spec becomes integers, and it happens here — in the
@@ -197,21 +282,31 @@ def located(engine: Any, forward: Forward) -> tuple[Forward, dict[str, Positions
     will actually see. One `Frame` is built per forward and every tap shares
     it; building one per tap is the one place this could be slow.
 
+    What comes back beside the forward is what the run reports: per op, each
+    row's `rows` window, the `reason` it is empty when it is, and the
+    `tokens` it actually addressed. The last of those is the provenance a
+    number needs, and it is free here because the tokenizer is here.
+
     A tap in the continuation frame is not resolved against the prompt at
     all: it acts at the one position its decode step processes, which is
     what `intervene.at_step` puts any non-empty window on.
     """
     frame = locate.frame_of(engine.tokenizer, forward.input_ids, forward.attention_mask)
     rows = len(forward.input_ids)
-    found: dict[str, Positions] = {}
+    found: Record = {}
 
     def resolve(op: Any) -> Any:
         where = op.at.where
         if where is None or where.frame == "generated":
             windows: Positions = ((0,),) * rows
+            reasons: tuple[str, ...] = ("",) * rows
         else:
-            windows, _ = locate.locate(frame, where, op.at.anchors)
-        found[op.name] = windows
+            windows, reasons = locate.locate(frame, where, op.at.anchors)
+        found[op.name] = {
+            "rows": windows,
+            "reason": reasons,
+            "tokens": tuple(locate.tokens_of(frame, one, row) for row, one in enumerate(windows)),
+        }
         return replace(op, at=replace(op.at, positions=windows))
 
     return (
@@ -230,7 +325,7 @@ def located(engine: Any, forward: Forward) -> tuple[Forward, dict[str, Positions
     )
 
 
-def _writes_land(forward: Forward, located: dict[str, Positions], start: int) -> None:
+def _writes_land(forward: Forward, record: Record, start: int) -> None:
     """The ragged write policy, and it is `refuse`.
 
     A read may have an empty window on a row — the anchor's text was not in
@@ -253,8 +348,8 @@ def _writes_land(forward: Forward, located: dict[str, Positions], start: int) ->
                     "position's text is not in those prompts. A read may skip a row; a "
                     "write may not"
                 )
-            if isinstance(write.operand, str) and write.operand in located:
-                have = [len(window) for window in located[write.operand]]
+            if isinstance(write.operand, str) and write.operand in record:
+                have = [len(window) for window in record[write.operand]["rows"]]
                 want = [len(window) for window in write.at.positions]
                 mismatched = [start + row for row, (a, b) in enumerate(zip(have, want)) if a != b]
                 if mismatched:

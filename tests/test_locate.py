@@ -151,3 +151,29 @@ def test_a_window_decodes_back_to_what_it_addressed(frames):
     _ids, _mask, frame = frames["pair"]
     windows, _ = locate.locate(frame, Where(index=-1, scope=Anchor(variable="e")), ("Thursday", "Friday"))
     assert [locate.tokens_of(frame, one, row) for row, one in enumerate(windows)] == ["'day'", "' Friday'"]
+
+
+def test_an_anchor_resolves_to_a_different_index_on_different_rows(model):
+    """The whole point of a spec: one form, and the integer is not the same
+    on every row.
+
+    These prompts are left-padded, so a row's text is pushed rightwards by
+    however many tokens the rows before the anchor take — ` Tuesday` is
+    three and ` Monday` is one. The number is therefore the row's, and a
+    document that wrote `-4` would be addressing a different word in each.
+    """
+    prompts = [
+        "Q: What day is one days after Monday?\nA:",
+        "Q: What day is three days after Monday?\nA:",
+        "Q: What day is two days after Tuesday?\nA:",
+        "Q: What day is five days after Tuesday?\nA:",
+    ]
+    _ids, _mask, frame = locate.frame_of_texts(model.tokenizer, prompts)
+    where = Where(index=-1, scope=Anchor(variable="number"))
+    windows, reasons = locate.locate(frame, where, ("one", "three", "two", "five"))
+
+    assert windows == ((8,), (8,), (6,), (6,))
+    assert set(reasons) == {""}
+    assert [locate.tokens_of(frame, one, row) for row, one in enumerate(windows)] == [
+        "' one'", "' three'", "' two'", "' five'"
+    ]
