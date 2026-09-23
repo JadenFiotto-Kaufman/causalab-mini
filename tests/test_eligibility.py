@@ -194,6 +194,8 @@ def test_the_table_keeps_that_row_too_and_says_which_token_it_missed(
     assert [row["eligible"] for row in table] == [True, False, True, True]
     assert [row["reason"] for row in table] == ["", "alignment_missing", "", ""]
     assert [row["positions"] for row in table] == [[6], [], [6], [6]]
+    # and what that position says, which is the question a number invites
+    assert [row["tokens"] for row in table] == ["'day'", "", "' Saturday'", "' Sunday'"]
     assert table[1]["value"] is None
     assert all(row["value"] is not None for row in table if row["eligible"])
 

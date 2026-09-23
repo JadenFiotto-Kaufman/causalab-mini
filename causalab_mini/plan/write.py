@@ -11,6 +11,17 @@ slot, with its identity stamped into the header: the thing a later document's
 name, so a plan's path in the tree is its path on disk. A one-plan document has
 its saves on the root and writes them straight into `out`, which is why nesting
 cost the existing documents nothing.
+
+A metric row carries where its number was read, why it was nowhere on a row
+that has none, and what the window says — the three the run records per op
+(`engine/steps.py`), for this metric's own read. A **write's** provenance has
+no table to live in: it is in the returned plan, at
+`step.results["positions"][<write>]`, and the case that matters on disk is the
+one that never gets there, because a write that could not land refuses the run
+and names the rows and the reason. Letting a save name `positions` would give
+it a file through the mechanism that already exists; it is not built, because
+a pass with no dynamic position records nothing and the save would then be a
+refusal the document could not have predicted.
 """
 
 from __future__ import annotations
@@ -85,9 +96,12 @@ def _file(step: Step, save: SaveFile, out: Path) -> Path:
                 # `NaN`, which Python reads back and a strict parser refuses.
                 "value": float(number) if number is not None and math.isfinite(number) else None,
                 "eligible": included,
-                # where the number was read, and why it was nowhere
+                # where the number was read, why it was nowhere, and what
+                # the window it came from actually says — the three the run
+                # records per op, printed for this metric's own read
                 "positions": list(where["rows"][index]) if where else None,
                 "reason": where["reason"][index] if where else "",
+                "tokens": where["tokens"][index] if where else "",
                 "unit": save.unit,
                 "estimand_version": save.estimand_version,
                 "produced_by": save.produced_by,
