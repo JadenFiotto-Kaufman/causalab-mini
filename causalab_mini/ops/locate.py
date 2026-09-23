@@ -70,6 +70,18 @@ class Frame:
 def frame_of(tokenizer: Any, ids: TokenRows, mask: TokenRows, text: bool = True) -> Frame:
     """The frame of a padded batch the plan already carries.
 
+    The content run starts after whatever the tokenizer puts before every
+    prompt. Llama's sentencepiece prepends a BOS and GPT-2's BPE prepends
+    nothing, so without this `{"index": 0}` is `<s>` on one family and the
+    first word on the other — the same document addressing two different
+    things, silently, which is the one thing a standardized position may not
+    do. The protocol agrees: "`{"index": 0}` is the first token of the
+    user's text".
+
+    Nothing addresses the prefix itself yet. It would be a run the frame
+    locates, like `eos` in the continuation — `{"scope": {"segment":
+    "bos"}}` — and no document has asked.
+
     `text=False` builds the content spans and nothing else. They come from
     the mask, and a position that names no anchor is index arithmetic over
     them — while the character map is O(L) decode calls of O(L) work per
@@ -77,15 +89,19 @@ def frame_of(tokenizer: Any, ids: TokenRows, mask: TokenRows, text: bool = True)
     forward per pass. A fit whose every position is a bare `-1` would spend
     all of that on a map nothing reads.
     """
+    prefix = _special_prefix(tokenizer)
     starts, ends, texts, offsets = [], [], [], []
     for row, flags in zip(ids, mask):
         real = [index for index, flag in enumerate(flags) if flag]
         if real != list(range(real[0], real[-1] + 1)):
             raise LocateError("padding is not contiguous; cannot place positions")
-        starts.append(real[0])
+        first = real[0]
+        if prefix and tuple(row[first : first + len(prefix)]) == prefix:
+            first += len(prefix)
+        starts.append(first)
         ends.append(real[-1] + 1)
         if text:
-            content, marks = _chars(tokenizer, row[real[0] : real[-1] + 1])
+            content, marks = _chars(tokenizer, row[first : real[-1] + 1])
             texts.append(content)
             offsets.append(marks)
     return Frame(tuple(starts), tuple(ends), tuple(texts), tuple(offsets))
@@ -138,6 +154,16 @@ def continuation(tokenizer: Any, generated: TokenRows) -> Frame:
         offsets.append(marks)
         segments.append({} if stop is None else {"eos": (marks[stop], marks[stop + 1])})
     return Frame(tuple(starts), tuple(ends), tuple(texts), tuple(offsets), tuple(segments))
+
+
+def _special_prefix(tokenizer: Any) -> tuple[int, ...]:
+    """The ids this tokenizer puts before every prompt, asked rather than
+    guessed: whatever it makes of the empty string is what it adds to
+    everything. Llama's is `(1,)`, GPT-2's is `()`."""
+    try:
+        return tuple(int(one) for one in tokenizer("", add_special_tokens=True)["input_ids"])
+    except Exception:  # a tokenizer that refuses the empty string adds nothing we can name
+        return ()
 
 
 def _chars(tokenizer: Any, content: Any) -> tuple[str, tuple[int, ...]]:

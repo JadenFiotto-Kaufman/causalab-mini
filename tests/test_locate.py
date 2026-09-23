@@ -59,14 +59,14 @@ def frames(model):
     "pos, where, expected",
     [
         (-1, Where(index=-1), {"pair": ((10,), (10,)), "even": ((8,), (8,))}),
-        ({"index": 0}, Where(index=0), {"pair": ((0,), (2,)), "even": ((0,), (0,))}),
+        ({"index": 0}, Where(index=0), {"pair": ((1,), (3,)), "even": ((1,), (1,))}),
         ({"last": 3}, Where(last=3), {"pair": ((8, 9, 10),) * 2, "even": ((6, 7, 8),) * 2}),
-        ({"span": [0, 2]}, Where(span=(0, 2)), {"pair": ((0, 1), (2, 3)), "even": ((0, 1),) * 2}),
+        ({"span": [0, 2]}, Where(span=(0, 2)), {"pair": ((1, 2), (3, 4)), "even": ((1, 2),) * 2}),
         ({"span": [-3, -1]}, Where(span=(-3, -1)), {"pair": ((8, 9),) * 2, "even": ((6, 7),) * 2}),
         (
             {"all": True},
             Where(all=True),
-            {"pair": (tuple(range(11)), tuple(range(2, 11))), "even": (tuple(range(9)),) * 2},
+            {"pair": (tuple(range(1, 11)), tuple(range(3, 11))), "even": (tuple(range(1, 9)),) * 2},
         ),
     ],
     ids=["-1", "index 0", "last 3", "span from the start", "negative span", "all"],
@@ -141,8 +141,9 @@ def test_the_frame_is_the_batch_the_plan_carries(frames, model):
     ids, mask, frame = frames["pair"]
     assert encoding.encode(model.tokenizer, PAIR) == (ids, mask, frame.texts[0])
     assert locate.frame_of(model.tokenizer, ids, mask) == frame
-    assert (frame.starts, frame.ends) == ((0, 2), (11, 11))
-    assert frame.texts[0].endswith("Thursday, tomorrow is")
+    # the content run starts after the BOS this tokenizer puts on everything
+    assert (frame.starts, frame.ends) == ((1, 3), (11, 11))
+    assert frame.texts[0] == "If today is Thursday, tomorrow is"
 
 
 def test_the_continuation_stops_at_the_first_eos_and_names_it(model):
@@ -281,3 +282,24 @@ def test_a_pass_with_no_anchor_never_builds_a_character_map(
     executed = model_engine.execute(plan.build_request(minimal_raw, data_root, model_engine))
     assert executed.result("logit_diff").shape == (4,)
     assert "positions" not in executed.step("observe", plan.Observe).results
+
+
+@pytest.mark.parametrize("which", ["llama", "gpt2"])
+def test_position_zero_is_the_first_real_token_on_both_families(model, gpt2_tokenizer, which):
+    """The one thing a standardized position may not do is mean two different
+    tokens on two families. Llama's sentencepiece prepends a BOS and GPT-2's
+    BPE prepends nothing, so the content run starts after whatever the
+    tokenizer puts on everything — and `{"index": 0}` is the first word on
+    both. (The protocol says the same: "the first token of the user's text".)
+    """
+    tokenizer = model.tokenizer if which == "llama" else gpt2_tokenizer
+    ids, _mask, frame = locate.frame_of_texts(tokenizer, PAIR)
+
+    window, reasons = locate.locate(frame, Where(index=0))
+    assert set(reasons) == {""}
+    # the tiny GPT-2's vocabulary is small enough to split "If" in two, so
+    # what is asserted is that the first token is the start of the prompt's
+    # own text and not a marker the tokenizer added
+    said = [tokenizer.decode([ids[row][one[0]]]) for row, one in enumerate(window)]
+    assert all(PAIR[row].startswith(one.strip()) for row, one in enumerate(said)), said
+    assert frame.texts[0] == PAIR[0], "and the frame's text is the prompt, with no marker on it"
