@@ -20,15 +20,17 @@ class EncodingError(ValueError):
     pass
 
 
-def encode(tokenizer: Any, texts: list[str]) -> tuple[TokenRows, TokenRows]:
-    """One padded batch of prompts: the ids and their mask, as integers.
+def encode(tokenizer: Any, texts: list[str]) -> tuple[TokenRows, TokenRows, str]:
+    """One padded batch of prompts: the ids, their mask, and what one row's
+    ids say here.
 
     The frame the resolver works against is built from these same ids, where
-    the run is — so the two can only disagree if the two tokenizers do, which
-    is what `locate.frame_of` checks for.
+    the run is, so the two can only disagree if the two tokenizers do. That
+    third value is how the run finds out: it decodes the same row with its
+    own tokenizer and compares the strings.
     """
-    ids, mask, _ = locate.frame_of_texts(tokenizer, texts)
-    return ids, mask
+    ids, mask, frame = locate.frame_of_texts(tokenizer, texts)
+    return ids, mask, frame.texts[0] if frame.texts else ""
 
 
 def token_id(tokenizer: Any, text: str, token_form: str) -> int:

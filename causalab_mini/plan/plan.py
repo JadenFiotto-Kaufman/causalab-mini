@@ -117,6 +117,10 @@ class Forward:
     #: bound holds, and the generated ids come back as a value named
     #: `<forward>.generated`.
     decode: int = 0
+    #: What row 0's ids say, according to the tokenizer that encoded them.
+    #: The run decodes the same row with its own and compares before it
+    #: looks for any text in it. One row is a sample, not a proof.
+    sample: str = ""
 
 
 def window(forward: Forward, start: int, stop: int) -> Forward:
@@ -131,6 +135,8 @@ def window(forward: Forward, start: int, stop: int) -> Forward:
         forward,
         input_ids=forward.input_ids[start:stop],
         attention_mask=forward.attention_mask[start:stop],
+        # the sample is row 0's, so only the window holding row 0 carries one
+        sample=forward.sample if start == 0 else "",
         taps=tuple(
             replace(
                 tap,

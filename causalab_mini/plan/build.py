@@ -944,7 +944,7 @@ def _forward(
     name: str,
     role: str,
     experiment: _Experiment,
-    batch: tuple[TokenRows, TokenRows],
+    batch: tuple[TokenRows, TokenRows, str],
     addresses: dict[str, Address],
     rows: list[rows_module.Row],
 ) -> Forward:
@@ -1026,6 +1026,7 @@ def _forward(
         input=role,
         input_ids=batch[0],
         attention_mask=batch[1],
+        sample=batch[2],
         taps=tuple(taps),
         decode=experiment.decode,
     )

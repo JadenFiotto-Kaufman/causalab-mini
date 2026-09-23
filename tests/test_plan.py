@@ -120,12 +120,14 @@ def test_the_batch_a_plan_carries_is_padded_to_one_width(model):
     # Two prompts of different length: the second is two tokens shorter, and
     # this tokenizer pads on the left. The plan carries the ids; where along
     # them a read acts is resolved where the model is (tests/test_locate.py).
-    ids, mask = encoding.encode(
+    ids, mask, sample = encoding.encode(
         model.tokenizer,
         ["If today is Thursday, tomorrow is", "If today is Friday, tomorrow is"],
     )
     assert [len(row) for row in ids] == [11, 11]
     assert [sum(row) for row in mask] == [11, 9]
+    # and what row 0's ids say here, for the run to check its own reading against
+    assert sample.endswith("If today is Thursday, tomorrow is")
 
 
 def test_the_metric_columns_resolved_to_the_token_ids_notes_measured(minimal_plan, model):

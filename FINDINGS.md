@@ -1620,14 +1620,33 @@ closed over by a block would be pickled by value, a few megabytes and a
 different object. `tests/test_structure.py` already banned the name; only
 its reason changed.
 
-### 24.2 Re-encoding one row is a cheap guard against the failure that is silent
+### 24.2 A character map from prefix lengths needs the prefixes to be prefixes
 
-If the two tokenizers ever disagree, every position is in range and in the
-wrong place — no shape error, no exception, just different numbers.
-`frame_of` re-encodes what row 0's ids decode to and compares, once per
-frame, one call. It round-trips exactly on both fixtures here, BOS included
-(`encode(decode(ids), add_special_tokens=False) == ids`), so the guard
-costs nothing and refuses by naming both spellings.
+`offsets[k] = len(decode(ids[:k]))` is a character offset only while the
+decode of a prefix really is a prefix of the decode of the whole. For a
+byte-fallback token it is not: a tokenizer that has no piece for 🙂 spells
+it as four byte tokens, and each *incomplete* prefix of those bytes decodes
+to one U+FFFD. Four bytes therefore contribute four characters to the
+prefixes and one to the whole, and the offsets run **backwards** —
+`(…, 11, 12, 13, 11, 17, …)` on the tiny Llama. Every window located after
+such a character is then wrong, and wrong quietly: `locate` reported a
+non-contiguous `(5, 7)` for an anchor whose tokens are `(3,)`, with no
+reason and with `tokens_of` naming a byte of the emoji.
+
+The fix is to park a prefix that is not one at the character it belongs to:
+the incomplete bytes get an empty span and the byte that completes the
+character gets the whole of it. Offsets are then non-decreasing whatever
+the tokenizer does, and an anchor after the character addresses its own
+tokens. Tested on both fixtures with an emoji and with CJK (the tiny GPT-2
+byte-falls-back on both; the tiny Llama has pieces for 東京 and not for 🙂).
+
+**Do not check a tokenizer by re-encoding.** `encode(decode(ids)) == ids`
+is not a property tokenizers have — it holds for ASCII on both fixtures
+here and fails on the first emoji — so a guard built on it refuses ordinary
+prompts, at compile time, accusing a tokenizer of disagreeing with itself.
+What both sides *can* do is read the same ids: the client puts row 0's
+decoded content in the plan and the run decodes the same row with its own
+tokenizer and compares the strings. Same cost, and it is true.
 
 ### 24.3 Left padding makes "the index differs per row" quietly false
 

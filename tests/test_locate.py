@@ -7,6 +7,9 @@ client-side resolver this replaced, form for form and index for index,
 before it was deleted.
 """
 
+import pathlib
+from dataclasses import replace
+
 import pytest
 
 from causalab_mini.data import encoding
@@ -14,6 +17,7 @@ from causalab_mini.ops import locate
 from causalab_mini.shapes import Anchor, Where
 
 # The prompts the suite tokenizes, and what each one is for.
+REPO = pathlib.Path(__file__).resolve().parents[1]
 PAIR = ["If today is Thursday, tomorrow is", "If today is Friday, tomorrow is"]
 FOUR = [
     "If today is Thursday, tomorrow is",
@@ -135,7 +139,7 @@ def test_the_frame_is_the_batch_the_plan_carries(frames, model):
     from those same ids, where the run is. The two constructors are one
     function, which is what makes that true."""
     ids, mask, frame = frames["pair"]
-    assert encoding.encode(model.tokenizer, PAIR) == (ids, mask)
+    assert encoding.encode(model.tokenizer, PAIR) == (ids, mask, frame.texts[0])
     assert locate.frame_of(model.tokenizer, ids, mask) == frame
     assert (frame.starts, frame.ends) == ((0, 2), (11, 11))
     assert frame.texts[0].endswith("Thursday, tomorrow is")
@@ -191,11 +195,69 @@ def test_an_anchor_resolves_to_a_different_index_on_different_rows(model):
     ]
 
 
-def test_a_tokenizer_that_disagrees_with_the_plan_is_refused_by_name(model, gpt2_tokenizer):
+def test_a_tokenizer_that_disagrees_with_the_plan_is_refused_by_name(model_engine, data_root):
     """The failure this design could have had. The client encodes and the
     *run* resolves, so the two sides must be the same tokenizer; when they
-    are not, every position is in range and in the wrong place. One row is
-    re-encoded before anything is placed, which turns that into a refusal."""
-    ids, mask, _frame = locate.frame_of_texts(model.tokenizer, PAIR)
-    with pytest.raises(locate.LocateError, match="disagrees with the one that encoded this plan"):
-        locate.frame_of(gpt2_tokenizer, ids, mask)
+    are not, every position is in range and in the wrong place. The plan
+    carries what one row's ids said on the client and the run decodes the
+    same row before it looks for any text in it."""
+    import json
+
+    from causalab_mini import plan
+    from causalab_mini.engine import steps
+
+    raw = json.loads((REPO / "documents" / "v2" / "entity_patch.json").read_text())
+    built = plan.build_request(raw, data_root, model_engine)
+    forward = built.step("score", plan.Observe).forwards[0]
+    assert forward.sample.endswith("tomorrow is"), "the client put its own reading in the plan"
+
+    skewed = replace(forward, sample="Something else entirely")
+    with pytest.raises(plan.PlanError, match="disagrees with the one that encoded this plan"):
+        steps.located(model_engine, skewed)
+
+
+# --------------------------------------------------------------------- #
+# text that is not one byte per character
+# --------------------------------------------------------------------- #
+
+
+MULTIBYTE = [
+    ("Alice 🙂 lives in Paris and Paris is nice", "lives"),
+    ("東京 is large and Paris is small", "small"),
+]
+
+
+@pytest.mark.parametrize("prompt, anchor", MULTIBYTE, ids=["emoji", "cjk"])
+@pytest.mark.parametrize("which", ["llama", "gpt2"])
+def test_an_anchor_after_a_multibyte_character_addresses_its_own_tokens(
+    model, gpt2_tokenizer, which, prompt, anchor
+):
+    """A character a tokenizer spells in byte-fallback pieces decodes to one
+    U+FFFD *per incomplete byte*, so `len(decode(prefix))` runs past the
+    character and then back again. Every window located after it would be
+    non-contiguous and addressed at the wrong tokens, with no reason
+    reported — so the offsets are built to be non-decreasing, and an anchor
+    is the tokens whose text it actually covers.
+    """
+    tokenizer = model.tokenizer if which == "llama" else gpt2_tokenizer
+    ids, _mask, frame = locate.frame_of_texts(tokenizer, [prompt])
+
+    offsets = frame.offsets[0]
+    assert list(offsets) == sorted(offsets), "offsets never run backwards"
+    assert offsets[-1] == len(frame.texts[0])
+
+    window, reasons = locate.locate(frame, Where(all=True, scope=Anchor(variable="v")), (anchor,))
+    assert reasons == ("",)
+    assert list(window[0]) == list(range(window[0][0], window[0][-1] + 1)), "contiguous"
+    assert anchor in locate.tokens_of(frame, window[0], 0)
+    assert "".join(tokenizer.decode([ids[0][k]]) for k in window[0]).strip() == anchor
+
+
+@pytest.mark.parametrize("which", ["llama", "gpt2"])
+def test_a_multibyte_prompt_compiles(model, gpt2_tokenizer, which):
+    """And it compiles at all: reading one row's ids back is a property both
+    tokenizers have, where re-encoding what they decode to is not."""
+    tokenizer = model.tokenizer if which == "llama" else gpt2_tokenizer
+    ids, mask, sample = encoding.encode(tokenizer, ["Alice 🙂 lives in Paris", "東京 is large"])
+    assert len(ids) == 2 and sample.endswith("lives in Paris")
+    assert locate.frame_of(tokenizer, ids, mask).texts[0] == sample

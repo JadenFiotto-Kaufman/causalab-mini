@@ -33,6 +33,7 @@ import safetensors.torch
 import torch
 
 from ..ops import featurizer as featurizer_module, intervene, locate, metrics
+from ..ops.locate import Frame
 from ..plan import Featurizers, Fit, Forward, Observe, Plan, PlanError, Step, Weights
 from ..plan import plan as plan_module
 from ..shapes import Positions, Selection
@@ -312,6 +313,7 @@ def located(engine: Any, forward: Forward) -> tuple[Forward, Record]:
     what `intervene.at_step` puts any non-empty window on.
     """
     frame = locate.frame_of(engine.tokenizer, forward.input_ids, forward.attention_mask)
+    _same_text(forward, frame)
     rows = len(forward.input_ids)
     found: Record = {}
 
@@ -421,6 +423,31 @@ def _eos_ids(tokenizer: Any) -> tuple[int, ...]:
     if found is None:
         return ()
     return tuple(int(one) for one in found) if isinstance(found, (list, tuple)) else (int(found),)
+
+
+def _same_text(forward: Forward, frame: Frame) -> None:
+    """One row of this batch, as the client read it and as the run reads it.
+
+    The ids were encoded by the client's tokenizer, and every anchor is
+    looked for in what *this* tokenizer says they say. Those are one object
+    on a local run and two on a remote one, and a disagreement would put
+    every position in range and in the wrong place — silently, because both
+    sides produce integers. Decoding the same row on both sides and
+    comparing the strings is a check the two sides can both make, which
+    re-encoding is not: `encode(decode(ids)) == ids` is not a property
+    tokenizers have, and an emoji is enough to break it.
+
+    One row is a sample. A skew that first shows on row 7 passes.
+    """
+    if not forward.sample or not frame.texts:
+        return
+    if frame.texts[0] != forward.sample:
+        raise PlanError(
+            "the tokenizer here disagrees with the one that encoded this plan: row 0's ids "
+            f"decode to {frame.texts[0]!r} here and to {forward.sample!r} where the plan was "
+            "compiled. Positions are resolved against the model's own tokenizer, so a plan "
+            "encoded by a different one would be addressed in the wrong place"
+        )
 
 
 def _writes_land(forward: Forward, record: Record, start: int) -> None:
