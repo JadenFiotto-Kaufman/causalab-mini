@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Home — causalab-mini</title>
+    <meta name="description" content="causalab-mini: a small, readable causal-intervention engine. A document is pure data; an engine turns it into tensors.">
+    <link rel="stylesheet" href="site.css">
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to content</a>
+
+    <div class="topbar">
+      <button class="iconbutton" data-nav-toggle aria-expanded="false" aria-controls="sidebar">menu</button>
+      <span class="brand">causalab-mini</span>
+      <button class="iconbutton js-only" data-theme-toggle style="margin-left:auto">dark</button>
+    </div>
+
+    <div class="layout">
+      <aside class="sidebar" id="sidebar">
+        <a class="brand" href="index.html">causalab-mini</a>
+        <span class="brand-sub">a plan is pure data; an engine turns it into tensors</span>
+
+        <nav aria-label="Documentation">
+          <ol>
+            <li><a href="index.html" aria-current="page">Home</a></li>
+          </ol>
+
+          <h2>The document</h2>
+          <ol>
+            <li><a href="documents.html">Documents</a></li>
+            <li><a href="locations.html">Locations</a></li>
+            <li><a href="positions.html">Positions</a></li>
+            <li><a href="ops.html">Reads, writes, metrics</a></li>
+          </ol>
+
+          <h2>Use cases</h2>
+          <ol>
+            <li><a href="use-cases/index.html">All use cases</a></li>
+          </ol>
+          <ol class="sub">
+          <li><a href="use-cases/layer-sweep.html">Layer sweep</a></li>
+          <li><a href="use-cases/entity-patching.html">Entity patching</a></li>
+          <li><a href="use-cases/das-fit.html">DAS fit</a></li>
+          <li><a href="use-cases/dbm-fit.html">DBM fit</a></li>
+          <li><a href="use-cases/attention-pattern.html">Attention pattern</a></li>
+          <li><a href="use-cases/logit-lens.html">Logit lens</a></li>
+          <li><a href="use-cases/generation.html">Generation</a></li>
+          <li><a href="use-cases/sae-features.html">SAE features</a></li>
+          <li><a href="use-cases/batching-and-remote.html">Batching &amp; remote</a></li>
+          <li><a href="use-cases/sweeps.html">Sweeps</a></li>
+          </ol>
+
+          <h2>Running</h2>
+          <ol>
+            <li><a href="cli.html">The CLI</a></li>
+          </ol>
+
+          <h2>Understand</h2>
+          <ol>
+            <li><a href="engine.html">The engine</a></li>
+            <li><a href="standardization.html">Standardization</a></li>
+            <li><a href="remote.html">Remote &amp; NDIF</a></li>
+          </ol>
+        </nav>
+
+        <div class="footer">
+          <p><a href="https://github.com/JadenFiotto-Kaufman/causalab-mini">source on GitHub</a></p>
+          <p><button class="iconbutton js-only" data-theme-toggle>dark</button></p>
+        </div>
+      </aside>
+
+      <main id="content">
+        <article class="page">
+          <header>
+            <p class="eyebrow">causalab-mini</p>
+            <h1>A small, readable intervention engine</h1>
+            <p class="lede">A causal-intervention experiment is a JSON document and
+            nothing else.</p>
+          </header>
+
+          <!-- the rule, stated in the same words as README.md:4-5 and causalab_mini/__init__.py:3-5 -->
+          <p>A document is pure data: which model, which rows, which places inside it
+          to read and to write, and what to score. The <strong>compiler</strong>
+          resolves everything that needs a model but not a row — the widths, a module
+          path, an interior's operation, the prompts' token ids — on the client,
+          without weights, and hands back a <strong>plan</strong> of strings, integers
+          and tuples. An <strong>engine</strong> walks that plan in one session and
+          turns it into tensors. The results come home by <strong>filling the plan
+          in</strong>: every number sits on the node that produced it, and a node's
+          path in the tree is its path on disk.</p>
+
+          <p>It is a clean-room reimplementation of causalab's intervention
+          engine, deliberately small — about 7,400 lines — so that you can read the
+          whole thing. It imports nothing from causalab.</p>
+
+          <figure>
+            <svg viewBox="0 0 640 232" role="img" aria-labelledby="pipe-t pipe-d" width="640">
+              <title id="pipe-t">How a document becomes results</title>
+              <desc id="pipe-d">A document compiles to a Plan; an engine executes the
+              Plan in one session and fills the Plan's own results; Plan.write puts
+              that tree on disk.</desc>
+              <defs>
+                <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5"
+                        markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fg-faint)"/>
+                </marker>
+              </defs>
+              <g fill="var(--bg-raised)" stroke="var(--rule-strong)" stroke-width="1">
+                <rect x="14"  y="24" width="150" height="52" rx="6"/>
+                <rect x="245" y="24" width="150" height="52" rx="6"/>
+                <rect x="476" y="24" width="150" height="52" rx="6"/>
+                <rect x="195" y="172" width="150" height="46" rx="6"/>
+              </g>
+              <g text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif">
+                <g fill="var(--fg)" font-size="14" font-weight="600">
+                  <text x="89"  y="48">document.json</text>
+                  <text x="320" y="48">Plan</text>
+                  <text x="551" y="48">Engine</text>
+                  <text x="270" y="194">out/</text>
+                </g>
+                <g fill="var(--fg-muted)" font-size="10.5">
+                  <text x="89"  y="65">roles · sites · steps</text>
+                  <text x="320" y="65">strings, ints, tuples</text>
+                  <text x="551" y="65">one session</text>
+                  <text x="270" y="209">iia.json · run.json</text>
+                </g>
+                <g fill="var(--fg-faint)" font-size="11">
+                  <text x="204" y="42">compile</text>
+                  <text x="435" y="42">execute</text>
+                  <text x="400" y="151">fills its own results</text>
+                </g>
+                <text x="252" y="132" fill="var(--fg-faint)" font-size="11" text-anchor="end">write</text>
+              </g>
+              <g stroke="var(--fg-faint)" stroke-width="1.4" fill="none" marker-end="url(#arrow)">
+                <path d="M 168 50 L 240 50"/>
+                <path d="M 399 50 L 471 50"/>
+                <path d="M 551 80 C 551 126, 360 126, 360 82"/>
+                <path d="M 262 80 L 262 167"/>
+              </g>
+            </svg>
+            <figcaption>The plan that goes out to the engine is the plan that comes
+            back. Nothing is re-parsed on the way home: a result is set on the node
+            that produced it, and a node's path in the tree is its path on disk.</figcaption>
+          </figure>
+
+          <h2>Install</h2>
+
+          <!-- CONTRIBUTING.md:3-11 -->
+          <pre><code class="language-bash">git clone https://github.com/JadenFiotto-Kaufman/causalab-mini
+cd causalab-mini
+uv sync</code></pre>
+
+          <p>That is the whole setup. The read-only verbs of the command line need no
+          GPU, no weights and no network beyond a model's config, and run in seconds:</p>
+
+          <pre><code class="language-bash">uv run causalab-mini vocab                  # components, mechanisms, kinds, position forms
+uv run causalab-mini data weekdays/train    # columns, rows, a sample
+uv run causalab-mini validate documents/v2/patching.json
+uv run causalab-mini explain  documents/v2/patching.json</code></pre>
+
+
+          <h2>Run one document</h2>
+
+          <p>The smallest real experiment in the repository is an interchange
+          intervention: read the residual stream at the last token of a
+          counterfactual prompt, swap it into the same place on the base prompt, and
+          score what the model then says. It runs on a tiny random-weight Llama, on
+          CPU, in a few seconds.</p>
+
+          <details class="listing">
+            <summary><code>documents/v2/patching.json</code> <span class="what">— the whole document, nothing elided</span></summary>
+            <pre><code class="language-json">{
+  &quot;header&quot;: {
+    &quot;description&quot;: &quot;The smallest real interchange \u2014 one swap at the last position of layer 0 \u2014 in causalab-mini&#x27;s plan-shaped format. Compare documents/minimal_cpu.json, the same experiment in the protocol&#x27;s. Here there is one step, because the run is one pass.&quot;
+  },
+  &quot;model&quot;: {
+    &quot;key&quot;: &quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;,
+    &quot;revision&quot;: &quot;9fb191250dd56d0ba7ec9785a025ed29c03d5998&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;
+  },
+  &quot;roles&quot;: {
+    &quot;base&quot;: {
+      &quot;field&quot;: &quot;input&quot;
+    },
+    &quot;counterfactual&quot;: {
+      &quot;field&quot;: &quot;counterfactual_inputs[0]&quot;
+    }
+  },
+  &quot;sites&quot;: {
+    &quot;target&quot;: {
+      &quot;component&quot;: &quot;block_output&quot;,
+      &quot;layers&quot;: [
+        0
+      ]
+    },
+    &quot;head&quot;: {
+      &quot;component&quot;: &quot;lm_head&quot;
+    }
+  },
+  &quot;interventions&quot;: {
+    &quot;patching&quot;: {
+      &quot;reads&quot;: {
+        &quot;v_cf&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;original&quot;,
+          &quot;input&quot;: &quot;counterfactual&quot;
+        },
+        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;patched&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        }
+      },
+      &quot;writes&quot;: {
+        &quot;patch&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;mechanism&quot;: &quot;swap&quot;,
+          &quot;operand&quot;: &quot;v_cf&quot;
+        }
+      },
+      &quot;models&quot;: {
+        &quot;patched&quot;: {
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;writes&quot;: [
+            &quot;patch&quot;
+          ]
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;iia&quot;: {
+          &quot;kind&quot;: &quot;match&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;expected&quot;: &quot;cf_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
+        },
+        &quot;logit_diff&quot;: {
+          &quot;kind&quot;: &quot;logit_diff&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;a&quot;: &quot;cf_answer&quot;,
+          &quot;b&quot;: &quot;base_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
+        }
+      }
+    }
+  },
+  &quot;steps&quot;: {
+    &quot;score&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;iia&quot;,
+          &quot;file_path&quot;: &quot;iia.json&quot;
+        },
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;logit_diff.json&quot;
+        }
+      ]
+    }
+  }
+}</code></pre>
+          </details>
+
+          <p>Four blocks do the work. <code>roles</code> says which column of a row
+          each input reads. <code>sites</code> names the places — a component, and a
+          layer where the component is per-layer. <code>interventions</code> is the
+          experiment: the reads, the writes, the models a write applies to, and the
+          metrics. <code>steps</code> says which rows to run over and which results to
+          write out.</p>
+
+          <p><code>explain</code> compiles it against the model without loading any
+          weights, and prints what would run:</p>
+
+          <!-- ran 2026-09-23 in the repo root, CUDA_VISIBLE_DEVICES= -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/patching.json
+&lt;root&gt;: Plan
+  score: Observe  metrics=[&#x27;iia/match&#x27;, &#x27;logit_diff/logit_diff&#x27;]  saves=[&#x27;iia.json&#x27;, &#x27;logit_diff.json&#x27;]
+      forward &#x27;original&#x27; on &#x27;counterfactual&#x27;  (4 rows x 11 tokens)
+        read  &#x27;v_cf&#x27; at block_output[0] pos={index:-1} via &#x27;identity&#x27;
+      forward &#x27;patched&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+        write &#x27;patch&#x27; at block_output[0] pos={index:-1} swap(v_cf) via &#x27;identity&#x27;
+        read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;</code></pre>
+
+          <p>and <code>run</code> does it and writes the files:</p>
+
+          <pre><code class="language-bash">$ uv run causalab-mini run documents/v2/patching.json --device-map cpu --out out
+out/document.json
+out/run.json
+out/iia.json
+out/logit_diff.json</code></pre>
+
+
+          <h2>Read the output</h2>
+
+          <p>A metric table is a JSON array of row objects, one file per metric, with
+          the labels repeated on every row so <code>jq</code> and a person can both
+          read it. One row of <code>out/iia.json</code>:</p>
+
+          <!-- the shape is written by causalab_mini/plan/write.py:80-96 -->
+          <pre><code class="language-json">{
+ &quot;example_id&quot;: &quot;0&quot;,
+ &quot;metric&quot;: &quot;iia&quot;,
+ &quot;value&quot;: 0.0,
+ &quot;eligible&quot;: true,
+ &quot;positions&quot;: null,
+ &quot;reason&quot;: &quot;&quot;,
+ &quot;unit&quot;: &quot;fraction&quot;,
+ &quot;estimand_version&quot;: &quot;match/v1&quot;,
+ &quot;produced_by&quot;: &quot;ffd162b5011bc74abf2f400d71595f63849a393a1fcf78aa234d26bbc77e791e&quot;
+}</code></pre>
+
+          <div class="note">
+            <span class="label">what the fields are for</span>
+            <p><code>eligible</code> is false when the measurement was excluded — the
+            row's data had no answer to score, or the run could not place the position
+            — and then <code>value</code> is <code>null</code> and <code>reason</code>
+            says which. An excluded row is still a row, so it can never be read as a
+            zero or silently shorten a denominator. <code>produced_by</code> is the
+            digest of the experiment that made it: everything in the document except
+            <code>header</code>.</p>
+          </div>
+
+          <p>Beside the metrics, <code>run</code> writes <code>document.json</code>
+          (the experiment, verbatim) and <code>run.json</code> (the engine, the library
+          versions, a digest of this package, and the dtype the model was actually
+          served in). A result is never a file with no way back to what produced it.</p>
+
+          <p>These numbers are zero because the checkpoint has random weights — it is a
+          fixture that proves the machinery, not a model that knows anything. For a
+          real result, see the worked example below.</p>
+
+          <h2>A map of the site</h2>
+
+          <h3>The document</h3>
+          <ul class="cards">
+            <li><a href="documents.html" data-status="stub"><span class="title">Documents</span>
+              <span class="blurb">The protocol field by field, and the JSON Schema the
+              <code>schema</code> verb prints.</span></a></li>
+            <li><a href="locations.html" data-status="stub"><span class="title">Locations</span>
+              <span class="blurb">Naming <em>where</em>: components, layers, heads and
+              units, the attention pattern, interiors, what resolves on which model.</span></a></li>
+            <li><a href="positions.html" data-status="stub"><span class="title">Positions</span>
+              <span class="blurb">The <code>Where</code> vocabulary, eligibility and its
+              reasons, the generated frame.</span></a></li>
+            <li><a href="ops.html" data-status="stub"><span class="title">Reads, writes, metrics</span>
+              <span class="blurb">Write mechanisms, operands, featurizers, metric kinds,
+              <code>reduce</code>, and sweeps.</span></a></li>
+          </ul>
+
+          <h3>Use cases</h3>
+          <p>Ten worked experiments, each one a real document run end to end.
+          <a href="use-cases/layer-sweep.html">The layer sweep</a> is the one to read
+          first: it is a complete result on a real model, from the document to the
+          curve.</p>
+          <ul class="cards">
+            <li><a href="use-cases/index.html"><span class="title">All use cases</span>
+              <span class="blurb">The directory, with the document each one runs.</span></a></li>
+            <li><a href="use-cases/layer-sweep.html"><span class="title">Layer sweep</span>
+              <span class="blurb">Where "today" is held in Llama-3.2-1B, and where it
+              crosses to the last token.</span></a></li>
+          </ul>
+
+          <h3>Running, and how it works</h3>
+          <ul class="cards">
+            <li><a href="cli.html" data-status="stub"><span class="title">The CLI</span>
+              <span class="blurb">Every verb, every flag, and what lands on disk.</span></a></li>
+            <li><a href="engine.html" data-status="stub"><span class="title">The engine</span>
+              <span class="blurb">Eight members, one session, and why a plan has no
+              <code>execute</code>.</span></a></li>
+            <li><a href="standardization.html" data-status="stub"><span class="title">Standardization</span>
+              <span class="blurb">What nnterp names and what mini still knows about
+              model internals.</span></a></li>
+            <li><a href="remote.html" data-status="stub"><span class="title">Remote &amp; NDIF</span>
+              <span class="blurb"><code>--engine ndif</code>: the same document, no local
+              weights.</span></a></li>
+          </ul>
+
+          <div class="seealso">
+            <h2>See also</h2>
+            <ul>
+              <li><a href="use-cases/layer-sweep.html">Layer sweep</a> — the worked example, end to end</li>
+              <li><a href="https://github.com/JadenFiotto-Kaufman/causalab-mini">The repository</a>
+                  — <code>HANDOFF.md</code> is the state of the project, <code>NOTES.md</code>
+                  the reading of the protocol, <code>FINDINGS.md</code> every model fact it
+                  had to learn</li>
+            </ul>
+          </div>
+
+        </article>
+      </main>
+    </div>
+    <script src="site.js"></script>
+  </body>
+</html>

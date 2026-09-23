@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Use cases — causalab-mini</title>
+    <meta name="description" content="Worked experiments, each one a real document run end to end.">
+    <link rel="stylesheet" href="../site.css">
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to content</a>
+
+    <div class="topbar">
+      <button class="iconbutton" data-nav-toggle aria-expanded="false" aria-controls="sidebar">menu</button>
+      <span class="brand">causalab-mini</span>
+      <button class="iconbutton js-only" data-theme-toggle style="margin-left:auto">dark</button>
+    </div>
+
+    <div class="layout">
+      <aside class="sidebar" id="sidebar">
+        <a class="brand" href="../index.html">causalab-mini</a>
+        <span class="brand-sub">a plan is pure data; an engine turns it into tensors</span>
+
+        <nav aria-label="Documentation">
+          <ol>
+            <li><a href="../index.html">Home</a></li>
+          </ol>
+
+          <h2>The document</h2>
+          <ol>
+            <li><a href="../documents.html">Documents</a></li>
+            <li><a href="../locations.html">Locations</a></li>
+            <li><a href="../positions.html">Positions</a></li>
+            <li><a href="../ops.html">Reads, writes, metrics</a></li>
+          </ol>
+
+          <h2>Use cases</h2>
+          <ol>
+            <li><a href="../use-cases/index.html" aria-current="page">All use cases</a></li>
+          </ol>
+          <ol class="sub">
+          <li><a href="../use-cases/layer-sweep.html">Layer sweep</a></li>
+          <li><a href="../use-cases/entity-patching.html">Entity patching</a></li>
+          <li><a href="../use-cases/das-fit.html">DAS fit</a></li>
+          <li><a href="../use-cases/dbm-fit.html">DBM fit</a></li>
+          <li><a href="../use-cases/attention-pattern.html">Attention pattern</a></li>
+          <li><a href="../use-cases/logit-lens.html">Logit lens</a></li>
+          <li><a href="../use-cases/generation.html">Generation</a></li>
+          <li><a href="../use-cases/sae-features.html">SAE features</a></li>
+          <li><a href="../use-cases/batching-and-remote.html">Batching &amp; remote</a></li>
+          <li><a href="../use-cases/sweeps.html">Sweeps</a></li>
+          </ol>
+
+          <h2>Running</h2>
+          <ol>
+            <li><a href="../cli.html">The CLI</a></li>
+          </ol>
+
+          <h2>Understand</h2>
+          <ol>
+            <li><a href="../engine.html">The engine</a></li>
+            <li><a href="../standardization.html">Standardization</a></li>
+            <li><a href="../remote.html">Remote &amp; NDIF</a></li>
+          </ol>
+        </nav>
+
+        <div class="footer">
+          <p><a href="https://github.com/JadenFiotto-Kaufman/causalab-mini">source on GitHub</a></p>
+          <p><button class="iconbutton js-only" data-theme-toggle>dark</button></p>
+        </div>
+      </aside>
+
+      <main id="content">
+        <article class="page">
+          <header>
+            <p class="eyebrow">Use cases</p>
+            <h1>Worked experiments</h1>
+            <p class="lede">Ten experiments, each one a real document in the
+            repository, run end to end with its output.</p>
+          </header>
+
+          <p>Every page here shows one document copied verbatim from
+          <code>documents/</code>, the command that ran it, the output that command
+          produced, and what the numbers mean. Start with the layer sweep: it is a
+          complete result on a real model and the other pages follow its shape.</p>
+
+          <ul class="cards">
+            <li><a href="layer-sweep.html"><span class="title">Layer sweep</span>
+              <span class="blurb">Interchange the residual stream at every layer and two
+              positions. Llama-3.2-1B; the answer crosses tokens at layer 12.
+              <code>documents/real/weekdays_layer_sweep.json</code></span></a></li>
+            <li><a href="entity-patching.html" data-status="stub"><span class="title">Entity patching</span>
+              <span class="blurb">One position spec, two roles, each row's entity
+              different text. <code>documents/v2/entity_patch.json</code></span></a></li>
+            <li><a href="das-fit.html" data-status="stub"><span class="title">DAS fit</span>
+              <span class="blurb">Fit a rotation so one subspace carries the answer;
+              score it held out. <code>documents/v2/das.json</code></span></a></li>
+            <li><a href="dbm-fit.html" data-status="stub"><span class="title">DBM fit</span>
+              <span class="blurb">Learn which units carry it, as a binary mask.
+              <code>documents/v2/dbm.json</code></span></a></li>
+            <li><a href="attention-pattern.html" data-status="stub"><span class="title">Attention pattern</span>
+              <span class="blurb">Swap where a head looks, separately from what it moves.
+              <code>documents/v2/attention_pattern_patching.json</code></span></a></li>
+            <li><a href="logit-lens.html" data-status="stub"><span class="title">Logit lens</span>
+              <span class="blurb">What the model would say if each layer were its last.
+              <code>documents/v2/logit_lens.json</code></span></a></li>
+            <li><a href="generation.html" data-status="stub"><span class="title">Generation</span>
+              <span class="blurb">Intervene on the prompt, then read what it actually
+              said. <code>documents/v2/generate_probe.json</code></span></a></li>
+            <li><a href="sae-features.html" data-status="stub"><span class="title">SAE features</span>
+              <span class="blurb">Read through a dictionary and ablate one latent.
+              <code>documents/v2/sae_feature_ablation.json</code></span></a></li>
+            <li><a href="batching-and-remote.html" data-status="stub"><span class="title">Batching &amp; remote</span>
+              <span class="blurb">Bound memory with <code>--batch-size</code>; run the same
+              document on NDIF.</span></a></li>
+            <li><a href="sweeps.html" data-status="stub"><span class="title">Sweeps</span>
+              <span class="blurb">One document that is many experiments, and what a sweep
+              may not touch. <code>documents/pos_sweep_cpu.json</code></span></a></li>
+          </ul>
+
+          <h2>The corpus these come from</h2>
+
+          <p>Three directories hold documents, and they are different things.</p>
+
+          <table>
+            <thead><tr><th>directory</th><th>what is in it</th></tr></thead>
+            <tbody>
+              <tr><td><code>documents/real/</code></td>
+                  <td>Llama-3.2-1B on the weekday task, with measured results: behaviour,
+                      layer sweeps, head patching, DAS, pattern patching. Its
+                      <code>README.md</code> records the numbers and the wall times.</td></tr>
+              <tr><td><code>documents/v2/</code></td>
+                  <td>The plan-shaped format on tiny CPU fixtures — one document per
+                      technique, so each runs in seconds and can be copied as a
+                      starting point.</td></tr>
+              <tr><td><code>documents/*.json</code></td>
+                  <td>The protocol's own format: documents ported from causalab's corpus,
+                      plus a few authored here. Each says in its own
+                      <code>header.description</code> which it is.</td></tr>
+            </tbody>
+          </table>
+
+          <div class="seealso">
+            <h2>See also</h2>
+            <ul>
+              <li><a href="../documents.html">Documents</a> — the format these are written in</li>
+              <li><a href="../cli.html">The CLI</a> — the commands these pages run</li>
+            </ul>
+          </div>
+
+        </article>
+      </main>
+    </div>
+    <script src="../site.js"></script>
+  </body>
+</html>
