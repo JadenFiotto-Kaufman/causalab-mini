@@ -78,21 +78,1411 @@
             <p class="lede">The document format field by field, with the JSON Schema.</p>
           </header>
 
-          <div class="stub">
-            <span class="label">in progress</span>
-            <p>This page has not been written yet. It is one page of a set being
-            filled in; the rest of the site is live.</p>
-            <p>What it will cover:</p>
+          <!-- causalab_mini/plan/spec.py:1-29 — the module docstring states the shape rule -->
+          <p>A document is one JSON object and nothing else. It names a model, which
+          column of a row each prompt comes from, the places inside the model to read
+          and to write, the experiment those make up, and the steps that run it over
+          rows. Nothing in it is code, and nothing in it is resolved: <code>pos</code>
+          stays <code>-1</code> and <code>"weekdays/train"</code> stays a string until
+          the compiler resolves them against a loaded tokenizer and the rows on
+          disk.</p>
+
+          <!-- causalab_mini/plan/build.py:511-524 — build_request picks the front end by shape -->
+          <p>Two formats parse. The <strong>plan-shaped</strong> one below is the
+          format — the one every document in <code>documents/v2/</code> and
+          <code>documents/real/</code> is written in, and the one the
+          <code>schema</code> verb describes. The other is a narrow reader for the
+          protocol's own JSON, kept for the documents at the top of
+          <code>documents/</code>. A document is told apart by shape: it is
+          plan-shaped if it has <code>steps</code>.</p>
+
+          <h2>At a glance</h2>
+
+          <p>The smallest real experiment in the repository: read the residual stream
+          at the last token of a counterfactual prompt, swap it into the same place on
+          the base prompt, score what the model then says.</p>
+
+          <figure class="listing">
+            <figcaption><code>documents/v2/patching.json</code> <span class="what">— the whole document</span></figcaption>
+            <pre><code class="language-json">{
+  &quot;header&quot;: {
+    &quot;description&quot;: &quot;The smallest real interchange \u2014 one swap at the last position of layer 0 \u2014 in causalab-mini&#x27;s plan-shaped format. Compare documents/minimal_cpu.json, the same experiment in the protocol&#x27;s. Here there is one step, because the run is one pass.&quot;
+  },
+  &quot;model&quot;: {
+    &quot;key&quot;: &quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;,
+    &quot;revision&quot;: &quot;9fb191250dd56d0ba7ec9785a025ed29c03d5998&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;
+  },
+  &quot;roles&quot;: {
+    &quot;base&quot;: {
+      &quot;field&quot;: &quot;input&quot;
+    },
+    &quot;counterfactual&quot;: {
+      &quot;field&quot;: &quot;counterfactual_inputs[0]&quot;
+    }
+  },
+  &quot;sites&quot;: {
+    &quot;target&quot;: {
+      &quot;component&quot;: &quot;block_output&quot;,
+      &quot;layers&quot;: [
+        0
+      ]
+    },
+    &quot;head&quot;: {
+      &quot;component&quot;: &quot;lm_head&quot;
+    }
+  },
+  &quot;interventions&quot;: {
+    &quot;patching&quot;: {
+      &quot;reads&quot;: {
+        &quot;v_cf&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;original&quot;,
+          &quot;input&quot;: &quot;counterfactual&quot;
+        },
+        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;patched&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        }
+      },
+      &quot;writes&quot;: {
+        &quot;patch&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;mechanism&quot;: &quot;swap&quot;,
+          &quot;operand&quot;: &quot;v_cf&quot;
+        }
+      },
+      &quot;models&quot;: {
+        &quot;patched&quot;: {
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;writes&quot;: [
+            &quot;patch&quot;
+          ]
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;iia&quot;: {
+          &quot;kind&quot;: &quot;match&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;expected&quot;: &quot;cf_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
+        },
+        &quot;logit_diff&quot;: {
+          &quot;kind&quot;: &quot;logit_diff&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;a&quot;: &quot;cf_answer&quot;,
+          &quot;b&quot;: &quot;base_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
+        }
+      }
+    }
+  },
+  &quot;steps&quot;: {
+    &quot;score&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;iia&quot;,
+          &quot;file_path&quot;: &quot;iia.json&quot;
+        },
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;logit_diff.json&quot;
+        }
+      ]
+    }
+  }
+}</code></pre>
+          </figure>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-bash">$ uv run causalab-mini validate documents/v2/patching.json
+ok: documents/v2/patching.json is a valid plan-shaped document</code></pre>
+
+          <!-- causalab_mini/plan/spec.py:438-451 — class Spec, the top level -->
+          <table>
+            <thead><tr><th>field</th><th>type</th><th>default</th><th>what it is</th></tr></thead>
+            <tbody>
+            <tr><td><code>header</code></td><td>object</td><td><code>{}</code></td><td>authoring metadata. One key, <code>description</code>. Not part of the digest</td></tr>
+            <tr><td><code>model</code></td><td>object</td><td>required</td><td>the checkpoint, pinned to a revision and a dtype</td></tr>
+            <tr><td><code>roles</code></td><td><code>{name: object}</code></td><td>required</td><td>which column of a row each input role's text comes from</td></tr>
+            <tr><td><code>sites</code></td><td><code>{name: object}</code></td><td>required</td><td>the places a read or a write may name</td></tr>
+            <tr><td><code>featurizers</code></td><td><code>{name: object}</code></td><td><code>{}</code></td><td>parameter sets, by name</td></tr>
+            <tr><td><code>interventions</code></td><td><code>{name: object}</code></td><td>required, at least one</td><td>the experiment: reads, writes, intervened models, metrics</td></tr>
+            <tr><td><code>steps</code></td><td><code>{name: object}</code></td><td>required</td><td>what runs, over which rows, and what comes out</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/plan/spec.py:45-48 — model_config = ConfigDict(extra="forbid", frozen=True) -->
+          <div class="note">
+            <span class="label">every node refuses a key it does not know</span>
+            <p>Every object in the document is a pydantic model with
+            <code>extra="forbid"</code>, so a misspelling anywhere is a load error that
+            names the path to it — <code>interventions.patching.reads.v_cf.position</code>
+            — rather than a key that is quietly ignored and still changes the
+            digest.</p>
+          </div>
+
+          <h2 id="model">model</h2>
+
+          <!-- causalab_mini/plan/spec.py:60-68 — class Model -->
+          <table>
+            <thead><tr><th>field</th><th>type</th><th>default</th><th>what it is</th></tr></thead>
+            <tbody>
+            <tr><td><code>key</code></td><td>string</td><td>required</td><td>the HuggingFace repository id</td></tr>
+            <tr><td><code>revision</code></td><td>string</td><td>required</td><td>a commit, a branch or a tag. Part of the identity of the experiment, not a convenience</td></tr>
+            <tr><td><code>dtype</code></td><td><code>"fp32"</code> | <code>"bf16"</code></td><td>required</td><td>what the weights are loaded as</td></tr>
+            <tr><td><code>attn_implementation</code></td><td><code>"eager"</code> | <code>"sdpa"</code> | <code>null</code></td><td><code>null</code></td><td>absent, the library's default. <code>eager</code> is the only one under which <code>attention_scores</code> and <code>attention_probs</code> exist</td></tr>
+            </tbody>
+          </table>
+
+          <figure class="listing">
+            <figcaption><code>documents/real/weekdays_layer_sweep.json</code> <span class="what">— the <code>model</code> block</span></figcaption>
+            <pre><code class="language-json">  &quot;model&quot;: {
+    &quot;key&quot;: &quot;meta-llama/Llama-3.2-1B&quot;,
+    &quot;revision&quot;: &quot;4e20de362430cd3b72f300e6b0f18e50e7166e08&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;
+  }</code></pre>
+          </figure>
+
+          <!-- causalab_mini/plan/spec.py:65-68 — the comment: "It is part of the experiment and not of the run" -->
+          <p><code>attn_implementation</code> is part of the experiment rather than of
+          the run: the implementations differ in the last bits, and a document that
+          reads an attention pattern has to ask for <code>eager</code>. There is no
+          <code>device</code> field. Where the weights sit is a property of the run,
+          and is a flag — see <a href="#not-fields">what is not a document field</a>.</p>
+
+          <h2 id="roles">roles, and the rows a step runs over</h2>
+
+          <!-- causalab_mini/plan/spec.py:71-73 — class Role: field -->
+          <p>A <strong>role</strong> is one side of a paired prompt. Its only field is
+          <code>field</code>, the column of a row its text comes from. Which
+          <em>rows</em> it reads is not here: that is a step's, because two steps may
+          run the same experiment over different splits.</p>
+
+          <figure class="listing">
+            <figcaption><code>documents/v2/patching.json</code> <span class="what">— the <code>roles</code> block</span></figcaption>
+            <pre><code class="language-json">  &quot;roles&quot;: {
+    &quot;base&quot;: {
+      &quot;field&quot;: &quot;input&quot;
+    },
+    &quot;counterfactual&quot;: {
+      &quot;field&quot;: &quot;counterfactual_inputs[0]&quot;
+    }
+  }</code></pre>
+          </figure>
+
+          <!-- causalab_mini/data/rows.py:49-66 — field_text: dots walk into dicts, brackets into lists -->
+          <p>A field is a path into the row: <code>input</code> is a column,
+          <code>counterfactual_inputs[0]</code> one entry of a list-valued column, and
+          <code>a.b</code> walks into a dict. The value has to be a string.</p>
+
+          <!-- causalab_mini/data/rows.py:27-37 — load(): path + optional #split -->
+          <p>A step names its rows as a <strong>dataset ref</strong>: a path relative
+          to the data root (<code>--data-root</code>, default
+          <code>documents/data</code>), with an optional <code>#split</code>. A table
+          is a JSON array of flat row objects and a split is a column of that table
+          selected by value, not a second file — so <code>weekdays/data#train</code>
+          is the rows of <code>documents/data/weekdays/data.json</code> whose
+          <code>split</code> is <code>"train"</code>.</p>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-bash">$ uv run causalab-mini data weekdays/data
+weekdays/data: 4 rows
+  columns: answer, base_answer, cf_answer, counterfactual_inputs, counterfactual_inputs_variables, entity, input, label, split
+  splits:  test, train
+  sample:  {&quot;answer&quot;: &quot; Friday&quot;, &quot;base_answer&quot;: &quot; Friday&quot;, &quot;cf_answer&quot;: &quot; Saturday&quot;, &quot;counterfactual_inputs&quot;: [&quot;If today is Friday, tomorrow is&quot;], &quot;counterfactual_inputs_variables&quot;: [{&quot;entity&quot;: &quot;Friday&quot;}], &quot;entity&quot;: &quot;Thursday&quot;, &quot;input&quot;: &quot;If today is Thursday, tomorrow is&quot;, &quot;label&quot;: &quot; Saturday&quot;, &quot;split&quot;: &quot;train&quot;}</code></pre>
+
+          <h3><code>&lt;column&gt;_variables</code></h3>
+
+          <!-- causalab_mini/data/rows.py:69-95 — variable_text: the sibling column first, a top-level column otherwise -->
+          <p>A position may anchor to a <em>variable</em> — "this row's entity" — and
+          each role then resolves its own text for it. The rule is the protocol's: the
+          <code>&lt;column&gt;_variables</code> sibling of the role's own field first,
+          then a top-level column of that name. For a role whose field is
+          <code>counterfactual_inputs[0]</code>, the variable <code>entity</code> is
+          looked for at <code>counterfactual_inputs_variables[0].entity</code>, then at
+          the column <code>entity</code>. That is what lets one position spec mean the
+          right thing in both prompts of a pair. A name that is neither is refused on
+          the client, naming both places it looked.</p>
+
+          <p>The forms a position can take are <a href="positions.html">their own
+          page</a>; what matters here is that the anchor is a fact about the
+          <em>row</em>, and so is resolved before anything runs.</p>
+
+          <h2 id="sites">sites</h2>
+
+          <!-- causalab_mini/plan/spec.py:76-109 — class Site -->
+          <table>
+            <thead><tr><th>field</th><th>type</th><th>default</th><th>what it is</th></tr></thead>
+            <tbody>
+            <tr><td><code>component</code></td><td>string</td><td>required</td><td>one of the 21 names <code>vocab</code> lists</td></tr>
+            <tr><td><code>layers</code></td><td><code>[int]</code> | <code>null</code></td><td><code>null</code></td><td>a one-element band. A layerless component takes none</td></tr>
+            <tr><td><code>heads</code></td><td><code>[int]</code> | <code>null</code></td><td><code>null</code></td><td>at a per-head tensor, the heads this site is</td></tr>
+            <tr><td><code>units</code></td><td><code>[int]</code> | <code>null</code></td><td><code>null</code></td><td>anywhere with a known width, the single features this site is</td></tr>
+            </tbody>
+          </table>
+
+          <figure class="listing">
+            <figcaption><code>documents/v2/patching.json</code> <span class="what">— the <code>sites</code> block</span></figcaption>
+            <pre><code class="language-json">  &quot;sites&quot;: {
+    &quot;target&quot;: {
+      &quot;component&quot;: &quot;block_output&quot;,
+      &quot;layers&quot;: [
+        0
+      ]
+    },
+    &quot;head&quot;: {
+      &quot;component&quot;: &quot;lm_head&quot;
+    }
+  }</code></pre>
+          </figure>
+
+          <!-- causalab_mini/plan/spec.py:88-109 — _one_layer: heads or units, not both; layers is one element -->
+          <p>A site names <code>heads</code> or <code>units</code>, never both: they
+          slice the same axis at two grains, and the site's width becomes theirs —
+          <code>len(heads) · head_dim</code>, or <code>len(units)</code> — so a
+          featurizer, a swap or a harvest there is of those and leaves the rest alone.
+          <code>layers</code> is a one-element list; a band spanning several layers is
+          one address and is not implemented. Which components exist, which are
+          per-head, which are read-only and which need eager attention is
+          <a href="locations.html">the locations page</a>.</p>
+
+          <h2 id="featurizers">featurizers</h2>
+
+          <!-- causalab_mini/plan/spec.py:118-148 — class Featurizer -->
+          <table>
+            <thead><tr><th>field</th><th>type</th><th>default</th><th>what it is</th></tr></thead>
+            <tbody>
+            <tr><td><code>kind</code></td><td><code>subspace</code> | <code>pca</code> | <code>gate</code> | <code>sae</code> | <code>linear</code></td><td>required</td><td>what the parameter set is</td></tr>
+            <tr><td><code>k</code></td><td>int &gt; 0 | <code>null</code></td><td><code>null</code></td><td>the rank of a basis. A gate has none: its features are the units</td></tr>
+            <tr><td><code>parametrization</code></td><td><code>"cayley"</code></td><td><code>"cayley"</code></td><td>how a rotation is parametrized</td></tr>
+            <tr><td><code>seed</code></td><td>int | <code>null</code></td><td><code>null</code></td><td>the draw the initial basis comes from. Absent, the fit's seed, or 0</td></tr>
+            <tr><td><code>file_path</code></td><td>string | <code>null</code></td><td><code>null</code></td><td>load the parameter from a safetensors bundle instead of drawing it</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/plan/spec.py:136-148 — _drawn_or_loaded, and :115 LOADED_ONLY -->
+          <p>The validator pairs the kind with its numbers. A <code>subspace</code> or
+          a <code>pca</code> needs <code>k</code>; a <code>gate</code> takes neither
+          <code>k</code> nor <code>seed</code>, because it masks every unit of its site
+          and starts at θ = 0. <code>pca</code>, <code>sae</code> and
+          <code>linear</code> exist only as a file — nothing draws or trains one — so
+          each needs <code>file_path</code>. A loaded featurizer has no
+          <code>seed</code>: its weights are its bytes.</p>
+
+          <figure class="listing">
+            <figcaption><code>documents/v2/pca_control.json</code> <span class="what">— a basis loaded from what <code>pca_harvest.json</code> wrote</span></figcaption>
+            <pre><code class="language-json">  &quot;featurizers&quot;: {
+    &quot;rot&quot;: {
+      &quot;kind&quot;: &quot;pca&quot;,
+      &quot;k&quot;: 4,
+      &quot;file_path&quot;: &quot;documents/artifacts/pca.safetensors&quot;
+    }
+  }</code></pre>
+          </figure>
+
+          <!-- causalab_mini/plan/build.py:312-336 — _identity(), the stamp; :340-387 _load_featurizer -->
+          <div class="note">
+            <span class="label">a loaded bundle is checked against the document</span>
+            <p>A rotation is a grid of numbers and nothing in the numbers says which
+            model or which layer it came from. The safetensors header does. A bundle
+            this project wrote carries a stamp — model key, revision, dtype, component,
+            layer, kind, <code>k</code>, <code>d</code>, parametrization — and the load
+            compares every key that is present against what this document declares,
+            refusing by name on a mismatch. A bundle from elsewhere, a published SAE,
+            has no stamp of ours, and then the shapes are all there is to check: its
+            width must be this site's.</p>
+          </div>
+
+          <!-- causalab_mini/plan/spec.py:499-512 — one featurizer name is used at exactly one site -->
+          <p>A featurizer does not say where it is. One name is one parameter set, so
+          the site it acts at is derived from the reads and writes that name it — and a
+          name used at two sites is refused, because one rotation cannot have two
+          widths. The kinds themselves, and what each does to a read or a write, are on
+          <a href="ops.html">the ops page</a>.</p>
+
+          <h2 id="interventions">interventions</h2>
+
+          <!-- causalab_mini/plan/spec.py:306-317 — class Intervention -->
+          <p>An intervention is the experiment, declared once. A step names the one it
+          runs; when the document declares exactly one, it need not. That is why a fit
+          and the run that scores it cannot drift apart — they are the same
+          declaration over different rows.</p>
+
+          <table>
+            <thead><tr><th>field</th><th>type</th><th>default</th><th>what it is</th></tr></thead>
+            <tbody>
+            <tr><td><code>reads</code></td><td><code>{name: object}</code></td><td>required</td><td>what comes out</td></tr>
+            <tr><td><code>writes</code></td><td><code>{name: object}</code></td><td><code>{}</code></td><td>what goes in</td></tr>
+            <tr><td><code>models</code></td><td><code>{name: object}</code></td><td><code>{}</code></td><td>an intervened model: a role, and the writes in force on it</td></tr>
+            <tr><td><code>metrics</code></td><td><code>{name: object}</code></td><td><code>{}</code></td><td>what to score</td></tr>
+            <tr><td><code>decode</code></td><td>int ≥ 0</td><td><code>0</code></td><td>tokens to generate after the prompt. 0 is one forward pass</td></tr>
+            </tbody>
+          </table>
+
+          <h3 id="reads">reads</h3>
+
+          <!-- causalab_mini/plan/spec.py:172-181 — class Read -->
+          <table>
+            <thead><tr><th>field</th><th>type</th><th>default</th><th>what it is</th></tr></thead>
+            <tbody>
+            <tr><td><code>site</code></td><td>string</td><td>required</td><td>a declared site</td></tr>
+            <tr><td><code>pos</code></td><td>position</td><td>required</td><td>where in the sequence. A bare integer is <code>{"index": i}</code></td></tr>
+            <tr><td><code>input</code></td><td>string</td><td>required</td><td>a declared role: whose prompt this forward runs</td></tr>
+            <tr><td><code>model</code></td><td>string</td><td><code>"original"</code></td><td><code>"original"</code>, or an intervened model of this intervention</td></tr>
+            <tr><td><code>featurizer</code></td><td>string</td><td><code>"identity"</code></td><td>read the activation in that parameter set's space</td></tr>
+            <tr><td><code>view</code></td><td><code>"raw"</code> | <code>"logits"</code></td><td><code>"raw"</code></td><td><code>logits</code> projects a residual-stream read through the final norm and head</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/plan/spec.py:153 RESIDUAL_STREAM; :622-633 the two refusals on view -->
+          <p><code>view: "logits"</code> is only for the residual stream —
+          <code>embeddings</code>, <code>block_input</code>, <code>block_output</code>,
+          <code>ln_final</code> — because that is what the final norm and head expect,
+          and it cannot be combined with a featurizer. A layer sweep plus a
+          <code>token_prob</code> metric on a <code>logits</code> view is the logit
+          lens, as one document.</p>
+
+          <h3 id="writes">writes</h3>
+
+          <!-- causalab_mini/plan/spec.py:190-235 — class Write -->
+          <table>
+            <thead><tr><th>field</th><th>type</th><th>default</th><th>what it is</th></tr></thead>
+            <tbody>
+            <tr><td><code>site</code></td><td>string</td><td>required</td><td>a declared site, not read-only</td></tr>
+            <tr><td><code>pos</code></td><td>position</td><td>required</td><td>where in the sequence</td></tr>
+            <tr><td><code>mechanism</code></td><td>enum</td><td>required</td><td>one of the six below</td></tr>
+            <tr><td><code>operand</code></td><td>string | number | <code>{"ref": …}</code> | <code>null</code></td><td><code>null</code></td><td>what the mechanism acts with</td></tr>
+            <tr><td><code>featurizer</code></td><td>string</td><td><code>"identity"</code></td><td>the space the mechanism acts in</td></tr>
+            <tr><td><code>features</code></td><td><code>[int]</code> | <code>null</code></td><td><code>null</code></td><td>which coordinates of that space it touches; the rest pass through</td></tr>
+            <tr><td><code>params</code></td><td><code>{string: number}</code></td><td><code>{}</code></td><td>the mechanism's numbers</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/plan/spec.py:190-195 — the class docstring says why these are two fields -->
+          <div class="note">
+            <span class="label">mechanism and operand are two fields</span>
+            <p>The protocol writes a mechanism as a key —
+            <code>{"swap": "v_cf"}</code> — and a key that is itself the mechanism's
+            name cannot be enumerated by a schema. The schema is what an agent reads,
+            so here the mechanism is a value.</p>
+          </div>
+
+          <!-- causalab_mini/plan/spec.py:238-249 — MECHANISM_PARAMS and NO_OPERAND -->
+          <table>
+            <thead><tr><th>mechanism</th><th>operand</th><th>required params</th><th>optional params</th></tr></thead>
+            <tbody>
+            <tr><td><code>swap</code></td><td>yes</td><td>—</td><td>—</td></tr>
+            <tr><td><code>add_scaled</code></td><td>yes</td><td>—</td><td><code>scale</code></td></tr>
+            <tr><td><code>lerp</code></td><td>yes</td><td><code>t</code></td><td>—</td></tr>
+            <tr><td><code>gaussian</code></td><td>no</td><td><code>seed</code></td><td><code>scale</code></td></tr>
+            <tr><td><code>clamp</code></td><td>no</td><td>at least one of <code>lo</code>, <code>hi</code></td><td>—</td></tr>
+            <tr><td><code>renormalize</code></td><td>no</td><td>—</td><td>—</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/plan/spec.py:213-228 — _mechanism_and_its_numbers -->
+          <p>The validator checks the pair: a mechanism that takes no operand is
+          refused one, a mechanism that needs an operand is refused without one, and
+          <code>params</code> is checked by name both ways — missing and extra.
+          <code>gaussian</code> draws its own noise, <code>clamp</code> only bounds,
+          and <code>renormalize</code> measures against the pre-write value the seam
+          supplies, so none of the three takes an operand.</p>
+
+          <p>An operand is one of four things:</p>
+
+          <table>
+            <thead><tr><th>spelling</th><th>what it is</th></tr></thead>
+            <tbody>
+            <tr><td><code>"v_cf"</code></td><td>a read of <em>this</em> intervention</td></tr>
+            <tr><td><code>{"ref": "mean"}</code></td><td>a value an <em>earlier sibling step</em> published under <code>outputs</code></td></tr>
+            <tr><td><code>0.0</code></td><td>a literal number — zero ablation</td></tr>
+            <tr><td><code>null</code></td><td>nothing, for a mechanism that takes none</td></tr>
+            </tbody>
+          </table>
+
+          <figure class="listing">
+            <figcaption><code>documents/v2/steer_renormalize.json</code> <span class="what">— an <code>add_scaled</code> with a cross-step operand, and a <code>renormalize</code> after it</span></figcaption>
+            <pre><code class="language-json">      &quot;writes&quot;: {
+        &quot;steer&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;mechanism&quot;: &quot;add_scaled&quot;,
+          &quot;operand&quot;: {
+            &quot;ref&quot;: &quot;direction&quot;
+          },
+          &quot;params&quot;: {
+            &quot;scale&quot;: 4.0
+          }
+        },
+        &quot;restore&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;mechanism&quot;: &quot;renormalize&quot;
+        }
+      }</code></pre>
+          </figure>
+
+          <!-- causalab_mini/plan/spec.py:660-671 — a renormalize comes last among the writes at its site -->
+          <p>The order of <code>writes</code> inside an intervened model is the order
+          they apply. A <code>renormalize</code> restores the norm the other writes at
+          its site changed, so it is refused unless it comes after at least one of them
+          and last among them; first, or alone, it is the identity. What each mechanism
+          does to the tensor is <a href="ops.html">the ops page</a>.</p>
+
+          <h3 id="models">models</h3>
+
+          <!-- causalab_mini/plan/spec.py:252-255 — class IntervenedModel -->
+          <p>An intervened model has two fields: <code>input</code>, a declared role,
+          and <code>writes</code>, the names of the writes in force on it. It is how
+          one document holds two models at once — the steered one and the same one
+          without the renormalize, say — and a read names which of them it reads.</p>
+
+          <!-- causalab_mini/plan/build.py:1024-1052 — _schedule: the model/read graph is the schedule -->
+          <p>A read in one model may be the operand of a write in another, so the
+          forwards are ordered by that dependency. The graph has to be acyclic; it
+          <em>is</em> the schedule, and a cycle is refused by the compiler.</p>
+
+          <h3 id="metrics">metrics</h3>
+
+          <!-- causalab_mini/plan/spec.py:257-304 — the five metric classes, discriminated on `kind` -->
+          <p>Every metric has <code>kind</code>, <code>of</code> (the name of a read)
+          and <code>token_form</code>, which is <code>"space_prefixed"</code> and is the
+          only form. The rest of its fields name <strong>columns of the base
+          rows</strong>, not literal strings: the answer is per row, so the document
+          names a column and the table carries the text.</p>
+
+          <table>
+            <thead><tr><th>kind</th><th>its columns</th><th>unit</th><th>estimand</th></tr></thead>
+            <tbody>
+            <tr><td><code>match</code></td><td><code>expected</code></td><td>fraction</td><td><code>match/v1</code></td></tr>
+            <tr><td><code>logit_diff</code></td><td><code>a</code>, <code>b</code></td><td>logit</td><td><code>logit_diff/v1</code></td></tr>
+            <tr><td><code>cross_entropy</code></td><td><code>target</code></td><td>nat</td><td><code>cross_entropy/v1</code></td></tr>
+            <tr><td><code>token_logit</code></td><td><code>token</code></td><td>logit</td><td><code>token_logit/v1</code></td></tr>
+            <tr><td><code>token_prob</code></td><td><code>token</code></td><td>probability</td><td><code>token_prob/v1</code></td></tr>
+            </tbody>
+          </table>
+
+          <figure class="listing">
+            <figcaption><code>documents/v2/patching.json</code> <span class="what">— the <code>metrics</code> of the one intervention</span></figcaption>
+            <pre><code class="language-json">      &quot;metrics&quot;: {
+        &quot;iia&quot;: {
+          &quot;kind&quot;: &quot;match&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;expected&quot;: &quot;cf_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
+        },
+        &quot;logit_diff&quot;: {
+          &quot;kind&quot;: &quot;logit_diff&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;a&quot;: &quot;cf_answer&quot;,
+          &quot;b&quot;: &quot;base_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
+        }
+      }</code></pre>
+          </figure>
+
+          <!-- causalab_mini/plan/spec.py:708-718 — `of` must be a read, and that read must be one position wide -->
+          <p><code>of</code> has to be a read of the same intervention, and that read
+          has to be one position wide: a metric scores one position per row, so a
+          window of several is refused with the width it found.</p>
+
+          <h4>rows, and eligibility</h4>
+
+          <!-- causalab_mini/data/rows.py:97-115 — column() and eligible() -->
+          <p>A row whose value in a named column is null or empty is an
+          <strong>excluded measurement</strong> — not a zero. Which rows a metric can
+          be computed for is decided on the client, where the data is: the eligible
+          rows are the ones where every column the kind names has a value, and that
+          vector is compiled into the plan and written into the saved table. A column
+          that <em>no</em> row has is a misspelling and is refused.</p>
+
+          <!-- causalab_mini/plan/build.py:636-652 — _metric() refuses a metric with no eligible row -->
+          <p>A metric none of the rows is eligible for is refused before anything runs:
+          "a metric of nothing has no mean". An excluded row still appears in the
+          output table, with <code>value: null</code>, <code>eligible: false</code> and
+          a <code>reason</code>, so it can never shorten a denominator quietly.</p>
+
+          <!-- ran 2026-09-23, CPU, fp32 — the shape is causalab_mini/plan/write.py -->
+          <pre><code class="language-json">{
+  &quot;example_id&quot;: &quot;0&quot;,
+  &quot;metric&quot;: &quot;logit_diff&quot;,
+  &quot;value&quot;: -0.02835773676633835,
+  &quot;eligible&quot;: true,
+  &quot;positions&quot;: null,
+  &quot;reason&quot;: &quot;&quot;,
+  &quot;unit&quot;: &quot;logit&quot;,
+  &quot;estimand_version&quot;: &quot;logit_diff/v1&quot;,
+  &quot;produced_by&quot;: &quot;a53cd70e47fa3a3f34c71dda53b00d72d528eba4495aae0dd2182719820acad9&quot;
+}</code></pre>
+
+          <p><code>example_id</code> is the row's <code>example_id</code> column if the
+          table has one, and the zero-based row index otherwise.</p>
+
+          <h3 id="decode">decode: generating after the prompt</h3>
+
+          <!-- causalab_mini/plan/spec.py:314-317 — decode: int, ge=0 -->
+          <p><code>decode</code> on an intervention generates that many tokens after
+          the prompt, greedily, on every forward of it. With it, a position may name
+          the continuation frame — <code>{"frame": "generated", "index": k}</code> —
+          and the intervention publishes <code>&lt;model&gt;.generated</code>, the
+          generated ids, which a save may take to a <code>.safetensors</code> file.</p>
+
+          <figure class="listing">
+            <figcaption><code>documents/v2/generate_probe.json</code> <span class="what">— the read in the continuation frame, and the bound</span></figcaption>
+            <pre><code class="language-json">        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: {
+            &quot;frame&quot;: &quot;generated&quot;,
+            &quot;index&quot;: {
+              &quot;sweep&quot;: [
+                0,
+                1,
+                2
+              ]
+            }
+          },
+          &quot;model&quot;: &quot;patched&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        }
+…
+      &quot;decode&quot;: 3</code></pre>
+          </figure>
+
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:116-126 — min_new_tokens=decode, do_sample=False -->
+          <div class="note">
+            <span class="label">the decode is a bound, not a stopping condition</span>
+            <p>The generation runs with <code>min_new_tokens</code> equal to
+            <code>max_new_tokens</code> and no sampling: EOS is held off, so the loop
+            runs to its bound and the batch stays rectangular. How far a row
+            <em>meant</em> to generate is then a result rather than a ragged tensor —
+            its continuation frame is cut at its first stop token, and a row that never
+            stopped has no <code>eos</code> segment, which comes home as a reported
+            reason.</p>
+          </div>
+
+          <!-- causalab_mini/plan/spec.py:676-707 — the four refusals on a generated position -->
+          <p>A generated position without <code>decode &gt; 0</code> is refused, as is
+          a step beyond the bound. A <em>write</em> in the continuation frame is
+          narrower still: it has to name a step the decode has already reached —
+          <code>{"index": k}</code> with <code>k ≥ 0</code>, or
+          <code>{"all": true}</code> — and takes no scope, because every other cut of
+          the continuation is only known once the decode has finished.</p>
+
+          <h2 id="steps">steps</h2>
+
+          <!-- causalab_mini/plan/spec.py:430 — Step = Union[Observe, Fit, Weights], discriminated on `kind` -->
+          <p>The steps run in the order written, and that order is checked. Three
+          kinds, told apart by <code>kind</code>.</p>
+
+          <table>
+            <thead><tr><th><code>kind</code></th><th>what it does</th><th>its fields</th></tr></thead>
+            <tbody>
+            <tr><td><code>observe</code></td><td>one pass over its rows</td><td><code>rows</code>, <code>intervention</code>, <code>outputs</code>, <code>saves</code></td></tr>
+            <tr><td><code>fit</code></td><td>trains featurizers, then scores held-out rows</td><td><code>rows</code>, <code>intervention</code>, <code>params</code>, <code>objective</code>, <code>anneal</code>, <code>epochs</code>, <code>pairs</code>, <code>seed</code>, <code>optimizer</code>, <code>early_stop</code>, <code>eval</code>, <code>saves</code></td></tr>
+            <tr><td><code>weights</code></td><td>publishes fitted parameters</td><td><code>names</code>, <code>saves</code></td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/plan/spec.py:377-393 — class Observe; :519-523 every role needs rows -->
+          <p>An <code>observe</code> or a <code>fit</code> gives
+          <code>rows</code> as role → dataset ref, and <strong>every declared role
+          needs one</strong>. <code>intervention</code> is optional when the document
+          declares exactly one.</p>
+
+          <h3 id="saves">saves</h3>
+
+          <!-- causalab_mini/plan/spec.py:343-354 — class Save; the field is `saves`, not `save` -->
+          <p>A save is <code>{"value": …, "file_path": …}</code> and it sits on the
+          step whose result it names. <code>value</code> has to be something
+          <em>that</em> step produces — a metric of its intervention, one of its
+          outputs, a <code>&lt;model&gt;.generated</code>, or a name a
+          <code>weights</code> step publishes — and naming anything else is refused
+          with the list of what it does produce.</p>
+
+          <!-- causalab_mini/plan/build.py:421-430 — a tensor value needs a .safetensors path -->
+          <!-- causalab_mini/plan/write.py:27-47 — only a nested Plan gets a directory -->
+          <p>A metric goes to a JSON table; an output or a generated-ids value is a
+          tensor and needs a <code>.safetensors</code> path. The path is relative to
+          <code>--out</code> — or, in a swept document, to the point's own directory,
+          which is the only nesting the output tree has. Every step of one document
+          writes into that same directory.</p>
+
+          <!-- causalab_mini/plan/spec.py:345-350 — FINDINGS §9: nnsight mounts .save() onto object -->
+          <div class="note">
+            <span class="label">the field is <code>saves</code>, not <code>save</code></span>
+            <p>nnsight mounts a <code>.save()</code> method onto <code>object</code>,
+            so every pydantic model in a process that has imported nnsight inherits
+            one, and a field called <code>save</code> would shadow it.</p>
+          </div>
+
+          <h3 id="outputs">outputs, and <code>ref</code> across steps</h3>
+
+          <!-- causalab_mini/plan/spec.py:325-340 — class Output -->
+          <p>An <code>observe</code> step may publish values for the steps after it.
+          An output has <code>read</code> (a read of its intervention),
+          <code>reduce</code> and <code>k</code>:</p>
+
+          <table>
+            <thead><tr><th><code>reduce</code></th><th>what is published</th><th><code>k</code></th></tr></thead>
+            <tbody>
+            <tr><td><code>none</code> (default)</td><td>the read as it is, <code>rows × width</code></td><td>not allowed</td></tr>
+            <tr><td><code>mean</code></td><td>one vector, averaged over rows</td><td>not allowed</td></tr>
+            <tr><td><code>pca</code></td><td>the top-<code>k</code> principal directions, a basis a later document loads as a <code>pca</code> featurizer</td><td>required</td></tr>
+            </tbody>
+          </table>
+
+          <p>A bare string is shorthand for keeping the read unreduced:
+          <code>"outputs": {"active": "latents"}</code> means
+          <code>{"read": "latents", "reduce": "none"}</code>.</p>
+
+          <p>Mean ablation is the whole pattern in one document: one step harvests and
+          publishes a mean, a later step swaps it in with <code>{"ref": "mean"}</code>.
+          The mean never touches disk unless a save asks for it.</p>
+
+          <figure class="listing">
+            <figcaption><code>documents/v2/mean_ablation.json</code> <span class="what">— the <code>steps</code> block; the write that uses the output is in <code>interventions.ablated</code></span></figcaption>
+            <pre><code class="language-json">  &quot;steps&quot;: {
+    &quot;harvest&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;intervention&quot;: &quot;harvest&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;outputs&quot;: {
+        &quot;mean&quot;: {
+          &quot;read&quot;: &quot;acts&quot;,
+          &quot;reduce&quot;: &quot;mean&quot;
+        }
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;mean&quot;,
+          &quot;file_path&quot;: &quot;mean.safetensors&quot;
+        }
+      ]
+    },
+    &quot;clean&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;intervention&quot;: &quot;clean&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;clean.json&quot;
+        }
+      ]
+    },
+    &quot;ablated&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;intervention&quot;: &quot;ablated&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;ablated.json&quot;
+        }
+      ]
+    }
+  }</code></pre>
+          </figure>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/mean_ablation.json
+&lt;root&gt;: Plan
+  harvest: Observe  metrics=[]  outputs=[&#x27;mean=mean(acts)&#x27;]  saves=[&#x27;mean.safetensors&#x27;]
+      forward &#x27;original&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+        read  &#x27;acts&#x27; at block_output[0] pos={index:-1} via &#x27;identity&#x27;
+  clean: Observe  metrics=[&#x27;logit_diff/logit_diff&#x27;]  saves=[&#x27;clean.json&#x27;]
+      forward &#x27;original&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+        read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
+  ablated: Observe  metrics=[&#x27;logit_diff/logit_diff&#x27;]  saves=[&#x27;ablated.json&#x27;]
+      forward &#x27;ablated&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+        write &#x27;ablate&#x27; at block_output[0] pos={index:-1} swap(mean) via &#x27;identity&#x27;
+        read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;</code></pre>
+
+          <!-- causalab_mini/plan/spec.py:524-556 — a ref must be to an EARLIER sibling; names may not collide -->
+          <p>Three things are checked about a reference. It must name an output an
+          <strong>earlier</strong> step published — the message lists what has been
+          published so far. Two steps may not publish the same name. And an output may
+          not share its name with a read, because an operand names one or the
+          other.</p>
+
+          <!-- causalab_mini/plan/build.py:133-174 — the rows and the window have to line up -->
+          <p>The compiler then checks the shapes, because it knows them and the block
+          would only find out from a shape error: an unreduced output has to have the
+          same row count and the same window as the write that swaps it in; a mean over
+          a ragged read is one vector and broadcasts anywhere; and a <code>pca</code>
+          basis is refused as an operand outright — a basis is loaded as a featurizer,
+          not written at a site.</p>
+
+          <h3 id="fit">fit</h3>
+
+          <!-- causalab_mini/plan/spec.py:405-421 — class Fit -->
+          <table>
+            <thead><tr><th>field</th><th>type</th><th>default</th><th>what it is</th></tr></thead>
+            <tbody>
+            <tr><td><code>rows</code></td><td><code>{role: ref}</code></td><td>required</td><td>the rows it fits on</td></tr>
+            <tr><td><code>params</code></td><td><code>[string]</code></td><td>required</td><td>the featurizers it trains</td></tr>
+            <tr><td><code>objective</code></td><td><code>[[number, string]]</code></td><td>required</td><td>Σ wᵢ·termᵢ, minimized</td></tr>
+            <tr><td><code>epochs</code></td><td>int &gt; 0</td><td>required</td><td>passes over the rows</td></tr>
+            <tr><td><code>pairs</code></td><td>int &gt; 0</td><td>required</td><td>rows per update</td></tr>
+            <tr><td><code>seed</code></td><td>int</td><td><code>0</code></td><td>the shuffle, and the initial draw of a featurizer with no seed of its own</td></tr>
+            <tr><td><code>optimizer</code></td><td>object</td><td>required</td><td><code>name</code> (<code>"adamw"</code>), <code>lr</code>, <code>weight_decay</code> (default <code>0.0</code>)</td></tr>
+            <tr><td><code>early_stop</code></td><td>object</td><td>required</td><td><code>metric</code>, <code>mode</code> (<code>"max"</code> | <code>"min"</code>, default <code>"max"</code>), <code>patience</code> &gt; 0</td></tr>
+            <tr><td><code>eval</code></td><td>object</td><td>required</td><td>the held-out pass: its own <code>rows</code>, and its own <code>saves</code></td></tr>
+            <tr><td><code>anneal</code></td><td><code>{gate: object}</code></td><td><code>{}</code></td><td>a gate's temperature: <code>start</code>, <code>end</code>, geometric between</td></tr>
+            <tr><td><code>intervention</code></td><td>string | <code>null</code></td><td><code>null</code></td><td>which experiment it fits</td></tr>
+            <tr><td><code>saves</code></td><td><code>[object]</code></td><td><code>[]</code></td><td>its own results: <code>train/loss</code>, <code>train/eval</code></td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/plan/spec.py:557-594 — everything a fit is cross-checked for -->
+          <p>An objective term is a metric of the intervention, or
+          <code>&lt;gate&gt;.mask</code> for a gate this fit trains — the mean of its
+          soft mask, which is its L1 penalty. <code>early_stop.metric</code> has to be
+          a metric. <code>params</code> has to be declared featurizers, and none of
+          them may be a <code>pca</code>, <code>sae</code> or <code>linear</code>,
+          which are fixed by definition. <code>anneal</code> may only name a gate this
+          fit trains. The eval pass needs rows for every role, and its saves have to be
+          things that pass produces.</p>
+
+          <!-- causalab_mini/plan/build.py:234-244 — the two row sets must be endpoint-disjoint unless they are the same ref -->
+          <p>If the fit's rows and the eval's rows are different refs, the compiler
+          checks they are <strong>endpoint-disjoint</strong> and refuses with the
+          number of shared rows. The same ref for both is the visible
+          train-equals-test ablation, and is allowed.</p>
+
+          <!-- causalab_mini/plan/spec.py:730-762 — _check_order -->
+          <div class="caution">
+            <span class="label">a featurizer may not be used before it is trained</span>
+            <p>A step that runs a forward uses every featurizer its intervention names.
+            If a later fit trains one of them, that earlier step scored an untrained
+            rotation — a valid document with a silently wrong number. It is refused,
+            with the fix in the message: move the step after the fit, or, for a
+            deliberate untrained baseline, declare a <em>second</em> featurizer that no
+            fit names.</p>
+          </div>
+
+          <h3 id="weights">weights</h3>
+
+          <!-- causalab_mini/plan/spec.py:424-427 — class Weights; :596-607 its refusals -->
+          <p>A <code>weights</code> step has <code>names</code> — declared featurizers
+          — and <code>saves</code>. It is what writes a fitted parameter to a
+          safetensors bundle, stamped with the identity a later document's load is
+          checked against. An <code>sae</code> or a <code>linear</code> may not be
+          named: its tensors are the file it came from, and there is no fitted weight
+          to publish.</p>
+
+          <h2 id="sweep">sweep</h2>
+
+          <!-- causalab_mini/plan/sweep.py:1-31 — the module docstring -->
+          <p><code>{"sweep": [a, b, c]}</code> at any field means the document is three
+          <strong>points</strong>: the same experiment three times, differing in that
+          one field. A sweep is lowered on the client before anything is compiled, so a
+          point is an ordinary document in every way — its own addresses, its own
+          tokenization, its own digest — and nothing downstream knows a sweep
+          happened.</p>
+
+          <table>
+            <thead><tr><th>spelling</th><th>what it is</th></tr></thead>
+            <tbody>
+            <tr><td><code>{"sweep": [0, 1, 2]}</code></td><td>the literal values</td></tr>
+            <tr><td><code>{"sweep": {"range": [0, 16]}}</code></td><td>0, 1, … 15. <code>[start, stop]</code> or <code>[start, stop, step]</code>, as Python's</td></tr>
+            <tr><td><code>{"sweep": [-4, -1], "as": "pos"}</code></td><td>a named axis: every wrapper with the same <code>as</code> moves together</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/plan/sweep.py:88-96 — itertools.product over the axes -->
+          <p>Several swept fields are their <strong>cross product</strong>, one point
+          per combination. The named axis exists because a cross product is sometimes
+          the wrong thing: a patch reads at a position and writes at the same one, and
+          swept separately those are N² points, most of them reading one place and
+          writing another. Naming the axis makes them one coordinate.</p>
+
+          <figure class="listing">
+            <figcaption><code>documents/real/weekdays_layer_sweep.json</code> <span class="what">— a range over layers, and a named axis shared by the read and the write</span></figcaption>
+            <pre><code class="language-json">  &quot;sites&quot;: {
+    &quot;target&quot;: {
+      &quot;component&quot;: &quot;block_output&quot;,
+      &quot;layers&quot;: [
+        {
+          &quot;sweep&quot;: {
+            &quot;range&quot;: [
+              0,
+              16
+            ]
+          }
+        }
+      ]
+    },
+    &quot;head&quot;: {
+      &quot;component&quot;: &quot;lm_head&quot;
+    }
+  }
+…
+        &quot;v_cf&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: {
+            &quot;sweep&quot;: [
+              -4,
+              -1
+            ],
+            &quot;as&quot;: &quot;pos&quot;
+          },
+          &quot;model&quot;: &quot;original&quot;,
+          &quot;input&quot;: &quot;counterfactual&quot;
+        }
+…
+        &quot;patch&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: {
+            &quot;sweep&quot;: [
+              -4,
+              -1
+            ],
+            &quot;as&quot;: &quot;pos&quot;
+          },
+          &quot;mechanism&quot;: &quot;swap&quot;,
+          &quot;operand&quot;: &quot;v_cf&quot;
+        }</code></pre>
+          </figure>
+
+          <p>Sixteen layers × two positions, and because <code>pos</code> is one named
+          axis rather than two fields, that is 32 points and not the 64 a cross product
+          would give. Each point is a directory named for the values it took —
+          <code>layers=12,pos=-1/</code> — in the order the fields appear in the
+          document.</p>
+
+          <!-- ran 2026-09-23, CPU, fp32 — two points, the whole output -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/logit_lens.json
+&lt;root&gt;: Plan
+  layers=0: Plan
+    lens: Observe  metrics=[&#x27;p_answer/token_prob&#x27;, &#x27;top1/match&#x27;]  saves=[&#x27;p_answer.json&#x27;, &#x27;top1.json&#x27;]
+        forward &#x27;original&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+          read  &#x27;lens&#x27; at block_output[0] pos={index:-1} via &#x27;identity&#x27; as logits
+  layers=1: Plan
+    lens: Observe  metrics=[&#x27;p_answer/token_prob&#x27;, &#x27;top1/match&#x27;]  saves=[&#x27;p_answer.json&#x27;, &#x27;top1.json&#x27;]
+        forward &#x27;original&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+          read  &#x27;lens&#x27; at block_output[1] pos={index:-1} via &#x27;identity&#x27; as logits</code></pre>
+
+          <!-- causalab_mini/plan/sweep.py:61-70 — model and header may not be swept -->
+          <p>Two places may not be swept: <code>model</code> and <code>header</code>.
+          The engine loads the model once and every point runs against it, and those
+          two are the identity of the run rather than a coordinate in it. Everything
+          else the protocol allows here — <code>at_once</code>, cohorts, swept bundles
+          — is refused by name.</p>
+
+          <h2 id="digest">header, and the digest</h2>
+
+          <!-- causalab_mini/plan/spec.py:56-57 — class Header: description only -->
+          <p><code>header</code> has one field, <code>description</code>, and it is free
+          text. Every document in the corpus uses it to say what the experiment is for
+          and what its numbers do and do not mean; it is the first thing worth reading
+          about a document.</p>
+
+          <!-- causalab_mini/plan/spec.py:453-462 — the digest is everything but `header` -->
+          <p>The <strong>digest</strong> is the identity of the experiment: the SHA-256
+          of the document with <code>header</code> removed, serialized with sorted keys
+          and no whitespace. It is what every metric row is <code>produced_by</code>
+          and what a saved featurizer is stamped with. Rewriting the description does
+          not make a new experiment:</p>
+
+          <!-- ran 2026-09-23 -->
+          <pre><code class="language-bash">$ uv run python -c &#x27;
+import json
+from causalab_mini.plan.spec import Spec
+raw = json.load(open(&quot;documents/v2/patching.json&quot;))
+a = Spec.model_validate(raw).digest
+raw[&quot;header&quot;][&quot;description&quot;] = &quot;anything else at all&quot;
+b = Spec.model_validate(raw).digest
+print(a); print(b); print(&quot;same:&quot;, a == b)&#x27;
+ffd162b5011bc74abf2f400d71595f63849a393a1fcf78aa234d26bbc77e791e
+ffd162b5011bc74abf2f400d71595f63849a393a1fcf78aa234d26bbc77e791e
+same: True</code></pre>
+
+          <p>The converse is the reason nothing is quietly ignored: a key the reader
+          skipped would still be in the bytes the digest is taken over, so two runs
+          that did the same thing would claim to be different experiments — or worse,
+          a key that changes the experiment would load, do nothing, and be stamped as
+          if it had.</p>
+
+          <h2 id="schema">The schema, and the vocabulary</h2>
+
+          <!-- causalab_mini/cli.py:94-97 — schema() is Spec.model_json_schema() -->
+          <p><code>causalab-mini schema</code> prints the JSON Schema of the
+          plan-shaped document — pydantic's dump of the same classes that validate it,
+          so the schema and the checker cannot disagree. It is 1,116 lines, and this
+          site carries a copy: <a href="schema.json">schema.json</a>, generated by
+          <code>causalab-mini schema</code> on 2026-09-23 and regenerated by running it
+          again.</p>
+
+          <p><code>vocab</code> is the other half — the names a document may use, on
+          one screen:</p>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-bash">$ uv run causalab-mini vocab
+components:
+  attention_query        interior  [heads]
+  attention_key          interior  [heads]
+  attention_scores       interior  [heads]  needs eager attention
+  attention_probs        nnterp attention_probabilities  [heads]  needs eager attention
+  attention_z            interior  [heads]
+  input_ids              nnterp embeddings_input  (read-only)
+  embeddings             nnterp embeddings_output
+  block_input            nnterp layers_input
+  attention_input_norm   nnterp attentions_norm_output
+  attention_premix       nnterp attentions_premix  [heads]
+  attention_output       nnterp attentions_output
+  block_mid              nnterp layers_mid
+  mlp_input_norm         nnterp mlps_norm_output
+  mlp_input              nnterp mlps_input
+  mlp_activation         nnterp mlps_activation
+  mlp_neuron_output      nnterp mlps_neurons
+  mlp_output             nnterp mlps_output
+  block_output           nnterp layers_output
+  ln_final               nnterp ln_final_output
+  lm_head                nnterp lm_head_output
+  logits                 nnterp logits
+mechanisms:       add_scaled, clamp, gaussian, lerp, renormalize, swap
+featurizer kinds: gate, linear, pca, sae, subspace (plus &#x27;identity&#x27;, never declared)
+metric kinds:     match(expected), logit_diff(a, b), cross_entropy(target), token_logit(token), token_prob(token)
+position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, all=bool
+                  scope: variable=str, segment=Literal[&#x27;system&#x27;, &#x27;user&#x27;, &#x27;assistant&#x27;, &#x27;eos&#x27;]
+                  frame: Literal[&#x27;prompt&#x27;, &#x27;generated&#x27;]; a bare integer is {&quot;index&quot;: i}; -1 is the last token</code></pre>
+
+          <p>Both verbs take <code>--json</code>, like every verb, so an agent parses
+          instead of scraping.</p>
+
+          <h2 id="everything">The everything document</h2>
+
+          <!-- measured 2026-09-23: 69 distinct field paths, the most of the 25
+               documents in documents/v2 and documents/real -->
+          <p><code>documents/v2/dbm.json</code> names more distinct fields than any
+          other document in the corpus: all three step kinds, a <code>gate</code> featurizer,
+          a fit with an objective of two terms, an anneal, an early stop and its own
+          held-out saves, and a sweep on one of the objective weights so that the
+          document <em>is</em> the sparsity curve.</p>
+
+          <details class="listing">
+            <summary><code>documents/v2/dbm.json</code> <span class="what">— the whole document</span></summary>
+            <pre><code class="language-json">{
+  &quot;header&quot;: {
+    &quot;description&quot;: &quot;DBM on the tiny CPU Llama: learn WHICH units of layer 0&#x27;s output carry the answer, as a binary mask, rather than which directions (compare das.json \u2014 the only differences are the featurizer&#x27;s kind, one objective term and the anneal). The mask is soft, \u03c3(\u03b8/T), while the fit updates it and hard, \u03b8 &gt; 0, whenever it is scored; `mask.mask` in the objective is the mean of the soft mask, the L1 pressure toward keeping few units. The L1 weight is swept, so the document is the sparsity curve: measured 2026-09-21, 4, 2, 1 and 0 of 16 units kept.&quot;
+  },
+  &quot;model&quot;: {
+    &quot;key&quot;: &quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;,
+    &quot;revision&quot;: &quot;9fb191250dd56d0ba7ec9785a025ed29c03d5998&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;
+  },
+  &quot;roles&quot;: {
+    &quot;base&quot;: {
+      &quot;field&quot;: &quot;input&quot;
+    },
+    &quot;counterfactual&quot;: {
+      &quot;field&quot;: &quot;counterfactual_inputs[0]&quot;
+    }
+  },
+  &quot;sites&quot;: {
+    &quot;target&quot;: {
+      &quot;component&quot;: &quot;block_output&quot;,
+      &quot;layers&quot;: [
+        0
+      ]
+    },
+    &quot;head&quot;: {
+      &quot;component&quot;: &quot;lm_head&quot;
+    }
+  },
+  &quot;featurizers&quot;: {
+    &quot;mask&quot;: {
+      &quot;kind&quot;: &quot;gate&quot;
+    }
+  },
+  &quot;interventions&quot;: {
+    &quot;dbm&quot;: {
+      &quot;reads&quot;: {
+        &quot;v_cf&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;original&quot;,
+          &quot;input&quot;: &quot;counterfactual&quot;,
+          &quot;featurizer&quot;: &quot;mask&quot;
+        },
+        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;patched&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        }
+      },
+      &quot;writes&quot;: {
+        &quot;patch&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;featurizer&quot;: &quot;mask&quot;,
+          &quot;mechanism&quot;: &quot;swap&quot;,
+          &quot;operand&quot;: &quot;v_cf&quot;
+        }
+      },
+      &quot;models&quot;: {
+        &quot;patched&quot;: {
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;writes&quot;: [
+            &quot;patch&quot;
+          ]
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;iia&quot;: {
+          &quot;kind&quot;: &quot;logit_diff&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;a&quot;: &quot;cf_answer&quot;,
+          &quot;b&quot;: &quot;base_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
+        },
+        &quot;ce&quot;: {
+          &quot;kind&quot;: &quot;cross_entropy&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;target&quot;: &quot;cf_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
+        }
+      }
+    }
+  },
+  &quot;steps&quot;: {
+    &quot;fit&quot;: {
+      &quot;kind&quot;: &quot;fit&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/data#train&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays/data#train&quot;
+      },
+      &quot;params&quot;: [
+        &quot;mask&quot;
+      ],
+      &quot;objective&quot;: [
+        [
+          1.0,
+          &quot;ce&quot;
+        ],
+        [
+          {
+            &quot;sweep&quot;: [
+              0.0001,
+              0.002,
+              0.01,
+              0.05
+            ]
+          },
+          &quot;mask.mask&quot;
+        ]
+      ],
+      &quot;epochs&quot;: 20,
+      &quot;pairs&quot;: 16,
+      &quot;seed&quot;: 0,
+      &quot;optimizer&quot;: {
+        &quot;name&quot;: &quot;adamw&quot;,
+        &quot;lr&quot;: 0.05,
+        &quot;weight_decay&quot;: 0.0
+      },
+      &quot;early_stop&quot;: {
+        &quot;metric&quot;: &quot;ce&quot;,
+        &quot;mode&quot;: &quot;min&quot;,
+        &quot;patience&quot;: 20
+      },
+      &quot;eval&quot;: {
+        &quot;rows&quot;: {
+          &quot;base&quot;: &quot;weekdays/data#test&quot;,
+          &quot;counterfactual&quot;: &quot;weekdays/data#test&quot;
+        },
+        &quot;saves&quot;: [
+          {
+            &quot;value&quot;: &quot;iia&quot;,
+            &quot;file_path&quot;: &quot;held_out_iia.json&quot;
+          }
+        ]
+      },
+      &quot;anneal&quot;: {
+        &quot;mask&quot;: {
+          &quot;start&quot;: 1.0,
+          &quot;end&quot;: 0.05
+        }
+      }
+    },
+    &quot;score&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/data#train&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays/data#train&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;iia&quot;,
+          &quot;file_path&quot;: &quot;iia.json&quot;
+        },
+        {
+          &quot;value&quot;: &quot;ce&quot;,
+          &quot;file_path&quot;: &quot;ce.json&quot;
+        }
+      ]
+    },
+    &quot;weights&quot;: {
+      &quot;kind&quot;: &quot;weights&quot;,
+      &quot;names&quot;: [
+        &quot;mask&quot;
+      ],
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;mask&quot;,
+          &quot;file_path&quot;: &quot;mask.safetensors&quot;
+        }
+      ]
+    }
+  }
+}</code></pre>
+          </details>
+
+          <h2 id="refused">What the compiler refuses</h2>
+
+          <p>Every message below is the real one, from running a deliberately broken
+          document. Each is a copy of a corpus document with one thing changed, named
+          in the caption. <code>validate</code> and <code>explain</code> do not catch
+          their own exceptions, so the message arrives at the end of a traceback; the
+          traceback is trimmed here with a <code>…</code> and nothing else is.</p>
+
+          <p>These eleven need no model and no weights, so they are available while
+          you are still writing:</p>
+
+          <!-- causalab_mini/plan/spec.py:45-48 — extra="forbid" on every node -->
+          <figure class="listing">
+            <figcaption><code>documents/v2/patching.json</code> <span class="what">— with <code>pos</code> misspelt <code>position</code> on the read <code>v_cf</code></span></figcaption>
+            <pre><code class="language-bash">$ uv run causalab-mini validate bad/unknown_key.json
+…
+pydantic_core._pydantic_core.ValidationError: 1 validation error for Spec
+interventions.patching.reads.v_cf.position
+  Extra inputs are not permitted [type=extra_forbidden, input_value=-1, input_type=int]</code></pre>
+          </figure>
+
+          <!-- causalab_mini/plan/spec.py:620-621 -->
+          <figure class="listing">
+            <figcaption><code>documents/v2/patching.json</code> <span class="what">— with the read's site misspelt</span></figcaption>
+            <pre><code class="language-bash">$ uv run causalab-mini validate bad/undeclared_site.json
+…
+pydantic_core._pydantic_core.ValidationError: 1 validation error for Spec
+  Value error, interventions.patching: read &#x27;v_cf&#x27;: undeclared site &#x27;targit&#x27; [type=value_error, input_value={&#x27;header&#x27;: {&#x27;description&#x27;...: &#x27;logit_diff.json&#x27;}]}}}, input_type=dict]</code></pre>
+          </figure>
+
+          <!-- causalab_mini/plan/spec.py:641-647 — address.describe()[…]["read_only"] -->
+          <figure class="listing">
+            <figcaption><code>documents/v2/patching.json</code> <span class="what">— with the write moved to a site whose component is <code>input_ids</code></span></figcaption>
+            <pre><code class="language-bash">$ uv run causalab-mini validate bad/read_only.json
+…
+  Value error, interventions.patching: write &#x27;patch&#x27;: &#x27;input_ids&#x27; is read-only — the model&#x27;s input, not an activation [type=value_error, input_value={&#x27;header&#x27;: {&#x27;description&#x27;...: &#x27;logit_diff.json&#x27;}]}}}, input_type=dict]</code></pre>
+          </figure>
+
+          <!-- causalab_mini/plan/spec.py:213-221 — MECHANISM_PARAMS checked both ways -->
+          <figure class="listing">
+            <figcaption><code>documents/v2/patching.json</code> <span class="what">— with the mechanism changed to <code>lerp</code> and no <code>params</code></span></figcaption>
+            <pre><code class="language-bash">$ uv run causalab-mini validate bad/lerp_no_t.json
+…
+pydantic_core._pydantic_core.ValidationError: 1 validation error for Spec
+interventions.patching.writes.patch
+  Value error, mechanism &#x27;lerp&#x27; needs params [&#x27;t&#x27;] [type=value_error, input_value={&#x27;site&#x27;: &#x27;target&#x27;, &#x27;pos&#x27;:...erp&#x27;, &#x27;operand&#x27;: &#x27;v_cf&#x27;}, input_type=dict]</code></pre>
+          </figure>
+
+          <!-- causalab_mini/plan/spec.py:648-653 — a bare string operand is a read of this intervention -->
+          <figure class="listing">
+            <figcaption><code>documents/v2/patching.json</code> <span class="what">— with the operand naming a value no read of this intervention has</span></figcaption>
+            <pre><code class="language-bash">$ uv run causalab-mini validate bad/operand_missing.json
+…
+  Value error, interventions.patching: write &#x27;patch&#x27;: operand &#x27;mean&#x27; is not a read of this intervention; a value from an earlier step is {&quot;ref&quot;: …} [type=value_error, input_value={&#x27;header&#x27;: {&#x27;description&#x27;...: &#x27;logit_diff.json&#x27;}]}}}, input_type=dict]</code></pre>
+          </figure>
+
+          <!-- causalab_mini/plan/spec.py:708-712 -->
+          <figure class="listing">
+            <figcaption><code>documents/v2/patching.json</code> <span class="what">— with a metric's <code>of</code> pointing at a name that is not a read</span></figcaption>
+            <pre><code class="language-bash">$ uv run causalab-mini validate bad/metric_of.json
+…
+  Value error, interventions.patching: metric &#x27;iia&#x27;: `of` must be a read name, got &#x27;v_cf_logits&#x27; [type=value_error, input_value={&#x27;header&#x27;: {&#x27;description&#x27;...: &#x27;logit_diff.json&#x27;}]}}}, input_type=dict]</code></pre>
+          </figure>
+
+          <!-- causalab_mini/plan/spec.py:609-614 -->
+          <figure class="listing">
+            <figcaption><code>documents/v2/patching.json</code> <span class="what">— with a save naming a metric that does not exist</span></figcaption>
+            <pre><code class="language-bash">$ uv run causalab-mini validate bad/save_missing.json
+…
+  Value error, step &#x27;score&#x27;: saves &#x27;iia2&#x27;, which it does not produce (it produces [&#x27;iia&#x27;, &#x27;logit_diff&#x27;]) [type=value_error, input_value={&#x27;header&#x27;: {&#x27;description&#x27;...: &#x27;logit_diff.json&#x27;}]}}}, input_type=dict]</code></pre>
+          </figure>
+
+          <!-- causalab_mini/plan/spec.py:622-629 — RESIDUAL_STREAM -->
+          <figure class="listing">
+            <figcaption><code>documents/v2/patching.json</code> <span class="what">— with <code>view: "logits"</code> on a read of <code>lm_head</code></span></figcaption>
+            <pre><code class="language-bash">$ uv run causalab-mini validate bad/view_logits.json
+…
+  Value error, interventions.patching: read &#x27;logits&#x27;: view &#x27;logits&#x27; projects the residual stream through the head, and &#x27;lm_head&#x27; is not the residual stream (one of [&#x27;block_input&#x27;, &#x27;block_output&#x27;, &#x27;embeddings&#x27;, &#x27;ln_final&#x27;]) [type=value_error, input_value={&#x27;header&#x27;: {&#x27;description&#x27;...: &#x27;logit_diff.json&#x27;}]}}}, input_type=dict]</code></pre>
+          </figure>
+
+          <!-- causalab_mini/plan/spec.py:730-762 — _check_order -->
+          <figure class="listing">
+            <figcaption><code>documents/v2/das.json</code> <span class="what">— with the <code>score</code> step moved before the <code>fit</code></span></figcaption>
+            <pre><code class="language-bash">$ uv run causalab-mini validate bad/order.json
+…
+  Value error, step &#x27;score&#x27; uses featurizer &#x27;rot&#x27; before step &#x27;fit&#x27; trains it, so it would run on the untrained parameter. Move it after the fit — or, for a deliberate untrained baseline, declare a second featurizer that no fit names [type=value_error, input_value={&#x27;header&#x27;: {&#x27;description&#x27;...: &#x27;rot.safetensors&#x27;}]}}}, input_type=dict]</code></pre>
+          </figure>
+
+          <!-- causalab_mini/plan/spec.py:499-512 — one featurizer name is one site -->
+          <figure class="listing">
+            <figcaption><code>documents/v2/das.json</code> <span class="what">— with <code>rot</code> also named by the read at the <code>head</code> site</span></figcaption>
+            <pre><code class="language-bash">$ uv run causalab-mini validate bad/two_sites.json
+…
+  Value error, featurizer &#x27;rot&#x27; is used at [&#x27;head&#x27;, &#x27;target&#x27;]; one name is one site [type=value_error, input_value={&#x27;header&#x27;: {&#x27;description&#x27;...: &#x27;rot.safetensors&#x27;}]}}}, input_type=dict]</code></pre>
+          </figure>
+
+          <!-- causalab_mini/plan/sweep.py:61-70 -->
+          <figure class="listing">
+            <figcaption><code>documents/v2/patching.json</code> <span class="what">— with <code>model.dtype</code> wrapped in a sweep</span></figcaption>
+            <pre><code class="language-bash">$ uv run causalab-mini validate bad/sweep_model.json
+…
+causalab_mini.plan.sweep.SweepError: model.dtype is swept; a sweep may not change the model or the header — those are the identity of the run, not a coordinate in it</code></pre>
+          </figure>
+
+          <p>The next two need the model's config, which <code>explain</code> reads
+          without loading any weights. <code>validate</code> passes both, because
+          neither the layer count nor the width of a site is in the document:</p>
+
+          <!-- causalab_mini/plan/build.py:59-65 -->
+          <figure class="listing">
+            <figcaption><code>documents/v2/patching.json</code> <span class="what">— at layer 99 of the two-layer fixture</span></figcaption>
+            <pre><code class="language-bash">$ uv run causalab-mini explain bad/layer99.json
+…
+causalab_mini.plan.plan.PlanError: site &#x27;target&#x27;: layer 99 is outside the model&#x27;s 2 layers</code></pre>
+          </figure>
+
+          <!-- causalab_mini/plan/build.py:286-291 -->
+          <figure class="listing">
+            <figcaption><code>documents/v2/das.json</code> <span class="what">— with <code>k: 999</code> at a 16-wide site</span></figcaption>
+            <pre><code class="language-bash">$ uv run causalab-mini explain bad/k999.json
+…
+causalab_mini.plan.plan.PlanError: featurizer &#x27;rot&#x27;: k=999 is not a subspace of the 16-wide site &#x27;target&#x27;</code></pre>
+          </figure>
+
+          <div class="note">
+            <span class="label">where a refusal lives</span>
+            <p>A check about one value is a validator on the node that holds it. A
+            check about two pieces of the document — a read's site, a save's value, the
+            order of the steps — is a cross-check on the whole <code>Spec</code>. A
+            check that needs the loaded model — a layer number, a site's width, a row
+            count, an attention mask's layout — is the compiler's, and raises
+            <code>PlanError</code>. That is why <code>validate</code> is fast and
+            offline, and why <code>explain</code> is the next thing to run.</p>
+          </div>
+
+          <h2 id="protocol">The protocol format</h2>
+
+          <!-- causalab_mini/plan/document.py:1-18 — only the subset of protocol_version 3 this slice runs -->
+          <p>The other reader accepts the protocol's own JSON, and only the subset of
+          <code>protocol_version</code> 3 that this project runs. Every other real
+          protocol feature is refused <strong>by name</strong> at load, so a document
+          that cannot be run fails loudly instead of running as something else.</p>
+
+          <!-- causalab_mini/plan/document.py:87-96 — TOP_LEVEL and METHOD_SECTIONS -->
+          <table>
+            <thead><tr><th>level</th><th>what is accepted</th></tr></thead>
+            <tbody>
+            <tr><td>top level</td><td><code>header</code>, <code>model</code>, <code>data</code>, <code>method</code></td></tr>
+            <tr><td><code>method</code></td><td><code>sites</code>, <code>reads</code>, <code>writes</code>, <code>intervened_models</code>, <code>featurizers</code>, <code>metrics</code>, <code>train</code>, <code>save</code></td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/plan/document.py:56-67, :120-131 — the narrow enums and the one position form -->
+          <p>Inside that, it is narrower than the plan-shaped format on almost every
+          axis: one mechanism (<code>swap</code>), one featurizer kind
+          (<code>subspace</code>), one optimizer, one early-stop mode, two roles
+          (<code>base</code> and <code>counterfactual</code>), one position form (an
+          integer index), a site at one layer with no heads and no units, and one flat
+          <code>save</code> list rather than a save per step. There are no
+          <code>steps</code>: the order of execution is implied, so a document with a
+          fit is fit, then observe, then weights.</p>
+
+          <!-- causalab_mini/plan/spec.py:25-28 — the two things pydantic does that the
+               hand-written checker did badly -->
+          <p>It has no schema, and its refusal of an unknown key is written out by
+          hand at each level rather than falling out of the type. Those are the two
+          things pydantic does for the plan-shaped format, and the reason that format
+          exists. <code>validate</code> says which reader took a document:</p>
+
+          <!-- ran 2026-09-23 -->
+          <pre><code class="language-bash">$ uv run causalab-mini validate documents/minimal_cpu.json
+ok: documents/minimal_cpu.json is a valid protocol document</code></pre>
+
+          <p>The nine documents at the top of <code>documents/</code> are in this
+          format; <code>documents/v2/</code> and <code>documents/real/</code> are
+          plan-shaped. Write new documents in the plan-shaped one.</p>
+
+          <h2 id="not-fields">What is not a document field</h2>
+
+          <!-- causalab_mini/cli.py:66-78 — the flags on validate/explain/run -->
+          <p>A document is the experiment. Where it runs, how much of it runs at once
+          and where the results land are the run's, and are flags:</p>
+
+          <table>
+            <thead><tr><th>flag</th><th>default</th><th>what it decides</th></tr></thead>
+            <tbody>
+            <tr><td><code>--engine</code></td><td><code>nnterp</code></td><td><code>nnterp</code>, <code>hooks</code>, or <code>ndif</code> — the same document with no local weights</td></tr>
+            <tr><td><code>--device-map</code></td><td><code>auto</code></td><td>where the weights sit. Ignored by <code>ndif</code>, whose weights are the server's</td></tr>
+            <tr><td><code>--batch-size</code></td><td>every row at once</td><td>rows per model call; bounds memory, moves only the last bit</td></tr>
+            <tr><td><code>--data-root</code></td><td><code>documents/data</code></td><td>what a dataset ref is relative to</td></tr>
+            <tr><td><code>--out</code></td><td><code>out</code></td><td>the directory the save tree is written under</td></tr>
+            </tbody>
+          </table>
+
+          <p>None of them enters the digest, which is the point: the same document
+          scored locally and on NDIF is the same experiment, and the numbers are
+          comparable because nothing about the run is in its identity. What
+          <em>is</em> recorded is the run: <code>run.json</code>, written beside the
+          results, carries the engine, whether it was remote, the batch size, the
+          library versions, a digest of this package and the dtype the model was
+          actually served in.</p>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-json">{
+ &quot;engine&quot;: &quot;NNterpEngine&quot;,
+ &quot;remote&quot;: false,
+ &quot;batch_size&quot;: null,
+ &quot;versions&quot;: {
+  &quot;torch&quot;: &quot;2.14.0&quot;,
+  &quot;transformers&quot;: &quot;5.17.0&quot;,
+  &quot;nnsight&quot;: &quot;0.8.1.dev125+ga8ee93782&quot;,
+  &quot;nnterp&quot;: &quot;1.3.1.dev64+g0e4b401af&quot;,
+  &quot;pydantic&quot;: &quot;2.13.5&quot;
+ },
+ &quot;causalab_mini&quot;: &quot;76c8c9d0c0d1f3e0b8e2eaeb09564107d1c0a70cb9e8b7d6cecab09fdc92d8a1&quot;,
+ &quot;served_dtype&quot;: &quot;torch.float32&quot;
+}</code></pre>
+
+          <div class="seealso">
+            <h2>See also</h2>
             <ul>
-            <li>The two authoring formats — the plan-shaped one (<code>steps</code>) and the protocol's — and which files use which. <code>causalab_mini/plan/spec.py</code> and <code>causalab_mini/plan/document.py</code>.</li>
-            <li><code>header</code>, <code>model</code> (key, revision, dtype, <code>attn_implementation</code>), <code>roles</code>, <code>sites</code>, <code>featurizers</code>, <code>interventions</code>, <code>steps</code> — a table per block.</li>
-            <li>The three step kinds: <code>observe</code>, <code>fit</code>, <code>weights</code>; <code>outputs</code>, <code>saves</code>, and a fit's <code>eval</code>.</li>
-            <li>The JSON Schema, from <code>causalab-mini schema</code> — the thing an agent reads.</li>
-            <li><code>digest</code>: what identifies an experiment, and why <code>header</code> is excluded.</li>
-            <li>The cross-checks a document is refused for, with the real refusal text.</li>
+              <li><a href="locations.html">Locations</a> — which components exist, which are per-head, and what <code>heads</code> and <code>units</code> slice</li>
+              <li><a href="positions.html">Positions</a> — every form <code>pos</code> can take, the anchors, and what happens when one cannot be placed</li>
+              <li><a href="ops.html">Reads, writes, metrics</a> — what each mechanism does to the tensor, what a featurizer does to a read, and how a metric is computed</li>
+              <li><a href="use-cases/layer-sweep.html">Layer sweep</a> — a swept document run end to end on a real model, from the JSON to the curve</li>
+              <li><a href="cli.html">The CLI</a> — <code>validate</code>, <code>explain</code>, <code>run</code> and the rest, with every flag</li>
+              <li><a href="schema.json">schema.json</a> — the JSON Schema, as <code>causalab-mini schema</code> prints it</li>
             </ul>
-            <p>Writing it? Read <code>docs/STYLE.md</code> first — it has the page
-            template, the citation rule and the nav snippet to paste.</p>
           </div>
 
         </article>
