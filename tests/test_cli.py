@@ -97,7 +97,9 @@ def test_explain_prints_the_compiled_plan_without_weights(capsys):
     assert out["steps"] == ["featurizers", "fit", "score", "weights"]
     text = out["text"]
     assert "rot: subspace k=8 d=16" in text  # d derived, never authored
-    assert "pos=(10, 10)" in text and "pos=(8, 8)" in text  # one -1, two widths
+    # the spec, not the rows: every pass of this document reads at the last
+    # token, and the integer that is differs between passes of different width
+    assert "pos={index:-1}" in text and "pos=(" not in text
     assert "saves=['held_out_iia.json']" in text
 
 

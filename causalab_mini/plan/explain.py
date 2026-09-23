@@ -1,9 +1,9 @@
 """A plan, as text a person or an agent can read.
 
 `explain` is what a document *means*: every forward, every tap, every
-resolved position and width, every save — the compiled tree, printed. It
-needs no weights, because a plan is compiled against a meta model, so it is
-the loop an author lives in: write, explain, fix.
+position spec and width, every save — the compiled tree, printed. It needs
+no weights, because a plan is compiled against a meta model, so it is the
+loop an author lives in: write, explain, fix.
 """
 
 from __future__ import annotations
@@ -18,12 +18,30 @@ def _features(at: Any) -> str:
     return "" if at.take is None else f" features={list(at.take)}/{at.groups}"
 
 
-def _pos(positions: tuple[tuple[int, ...], ...]) -> str:
-    """`(10, 10)` for unit windows, `[8:11], [8:11]` for wider ones, and `-`
-    for a row with no window — an excluded measurement."""
-    if positions and all(len(window) == 1 for window in positions):
-        return str(tuple(window[0] for window in positions))
-    return ", ".join(f"[{w[0]}:{w[-1] + 1}]" if w else "-" for w in positions)
+def _pos(at: Any) -> str:
+    """A position, as the document wrote it: the spec, not the integers.
+
+    There are no integers to print. A plan is compiled without rows in hand
+    and the run resolves the spec against its own tokenizer, per row — so
+    what `explain` can honestly say is what was asked for, and what the
+    *run* reports is what was found (`results["positions"]`).
+    """
+    where = at.where
+    if where is None:
+        return "-"
+    cut = (
+        f"index:{where.index}" if where.index is not None
+        else f"last:{where.last}" if where.last is not None
+        else f"span:{list(where.span)}" if where.span is not None
+        else "all"
+    )
+    scope = "" if where.scope is None else " scope:{%s}" % ", ".join(
+        f"{key}:{value}"
+        for key, value in (("segment", where.scope.segment), ("variable", where.scope.variable))
+        if value is not None
+    )
+    frame = "" if where.frame == "prompt" else f"{where.frame} "
+    return "{%s%s%s}" % (frame, cut, scope)
 
 
 def explain(step: Step, name: str = "<root>") -> str:
@@ -79,14 +97,14 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
                     args = [] if write.operand is None else [str(write.operand)]
                     args += [f"{k}={v}" for k, v in write.params.items()]
                     out.append(
-                        f"{pad}      write {write.name!r} at {where} pos={_pos(write.at.positions)}{_features(write.at)} "
+                        f"{pad}      write {write.name!r} at {where} pos={_pos(write.at)}{_features(write.at)} "
                         f"{write.mechanism}({', '.join(args)}) via {write.featurizer!r}"
                         f"{'' if write.features is None else f' on its features {list(write.features)}'}"
                     )
                 for read in tap.reads:
                     view = "" if read.view == "raw" else f" as {read.view}"
                     out.append(
-                        f"{pad}      read  {read.name!r} at {where} pos={_pos(read.at.positions)}{_features(read.at)} via {read.featurizer!r}{view}"
+                        f"{pad}      read  {read.name!r} at {where} pos={_pos(read.at)}{_features(read.at)} via {read.featurizer!r}{view}"
                     )
     elif isinstance(step, Weights):
         out.append(f"{pad}{name}: Weights  names={list(step.names)}{tail}")

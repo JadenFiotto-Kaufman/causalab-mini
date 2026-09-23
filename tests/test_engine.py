@@ -20,13 +20,20 @@ from causalab_mini.plan.document import ModelSpec
 class FakeEngine(Engine):
     """An engine for a runtime that does not exist: it opens nothing and its
     forwards are made up. It implements the whole run half of the contract,
-    which is the point — two methods, and one of them is two lines."""
+    which is the point — two methods and a tokenizer, because resolving a
+    position against the text the model will see is something the *run*
+    does."""
 
     VOCAB = 32000  # the metrics index by token id, so the width has to be real
 
-    def __init__(self) -> None:
+    def __init__(self, tokenizer: Any) -> None:
         self.model = None
         self.calls: list[str] = []
+        self._tokenizer = tokenizer
+
+    @property
+    def tokenizer(self) -> Any:
+        return self._tokenizer
 
     def execute(self, plan: Plan, remote: bool | str = False, batch_size: int | None = None) -> Plan:
         steps.run(self, plan, batch_size=batch_size)
@@ -109,11 +116,11 @@ def test_an_engine_that_ships_holds_nothing_but_its_model(model_engine):
     assert set(vars(model_engine)) == {"model"}
 
 
-def test_an_engine_with_no_model_and_no_session_runs_the_same_plan(minimal_plan, tmp_path):
+def test_an_engine_with_no_model_and_no_session_runs_the_same_plan(minimal_plan, tmp_path, model_engine):
     """The plan does not know which engine is running it, and a plan compiled
     for the nnterp engine runs unchanged on one that has never heard of
     nnsight."""
-    engine = FakeEngine()
+    engine = FakeEngine(model_engine.tokenizer)
     executed = engine.execute(minimal_plan)
 
     assert engine.calls == ["original", "patched"]

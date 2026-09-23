@@ -116,20 +116,16 @@ def test_a_write_whose_operand_is_read_in_its_own_model_is_a_cycle(minimal_raw, 
 # --------------------------------------------------------------------- #
 
 
-def test_positions_resolve_to_the_last_real_token_of_each_row(model):
+def test_the_batch_a_plan_carries_is_padded_to_one_width(model):
     # Two prompts of different length: the second is two tokens shorter, and
-    # this tokenizer pads on the left.
-    batch = encoding.encode(
+    # this tokenizer pads on the left. The plan carries the ids; where along
+    # them a read acts is resolved where the model is (tests/test_locate.py).
+    ids, mask = encoding.encode(
         model.tokenizer,
         ["If today is Thursday, tomorrow is", "If today is Friday, tomorrow is"],
     )
-    assert [len(row) for row in batch.input_ids] == [11, 11]
-    assert batch.starts == (0, 2) and batch.ends == (11, 11)
-
-    assert encoding.positions(batch, -1) == ((10,), (10,))  # the last real token
-    assert encoding.positions(batch, 0) == ((0,), (2,))  # the first real token of each row
-    with pytest.raises(encoding.EncodingError):
-        encoding.positions(batch, -12)
+    assert [len(row) for row in ids] == [11, 11]
+    assert [sum(row) for row in mask] == [11, 9]
 
 
 def test_the_metric_columns_resolved_to_the_token_ids_notes_measured(minimal_plan, model):

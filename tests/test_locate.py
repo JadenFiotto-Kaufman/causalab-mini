@@ -1,12 +1,10 @@
-"""The resolver, against the client-side one it replaces.
+"""The resolver: which indices a position names, on this row.
 
-`ops/locate.py` answers "which indices does this position name, on this row"
-where the model is. Everything it has to agree with is here: for every
-position form and every batch the suite tokenizes, the windows it returns are
-the ones `data/encoding.positions` returned on the client, index for index.
-
-The expected windows are written out as literals as well as compared, so this
-file keeps saying what the forms mean after the client-side resolver is gone.
+`ops/locate.py` answers that where the model is, against the model's own
+tokenizer. Every form is here, over the batches the suite tokenizes, with
+the windows written out — these literals were checked against the
+client-side resolver this replaced, form for form and index for index,
+before it was deleted.
 """
 
 import pytest
@@ -28,14 +26,12 @@ EVEN = ["If today is Friday, tomorrow is", "If today is Sunday, tomorrow is"]
 
 @pytest.fixture
 def frames(model):
-    """Each batch as both resolvers see it: the client's `Batch`, and the
-    `Frame` the block builds from the same ids."""
-    made = {}
-    for name, texts in (("pair", PAIR), ("four", FOUR), ("even", EVEN)):
-        batch = encoding.encode(model.tokenizer, texts)
-        frame = locate.frame_of(model.tokenizer, batch.input_ids, batch.attention_mask)
-        made[name] = (batch, frame)
-    return made
+    """Each batch as the resolver sees it: the ids a plan would carry, and
+    the frame built from those same ids."""
+    return {
+        name: locate.frame_of_texts(model.tokenizer, texts)
+        for name, texts in (("pair", PAIR), ("four", FOUR), ("even", EVEN))
+    }
 
 
 # --------------------------------------------------------------------- #
@@ -59,13 +55,17 @@ def frames(model):
     ],
     ids=["-1", "index 0", "last 3", "span from the start", "negative span", "all"],
 )
-def test_locate_resolves_what_the_client_resolved(frames, pos, where, expected):
-    for name, (batch, frame) in frames.items():
+def test_every_form_is_content_relative_and_uniform(frames, pos, where, expected):
+    """Row 1 of `pair` starts at index 2 because of its padding, and every
+    form lands on its content the same way — which is why `0` is `(0, 2)`."""
+    for name, (_ids, _mask, frame) in frames.items():
         windows, reasons = locate.locate(frame, where)
-        assert windows == encoding.positions(batch, pos), name
         assert set(reasons) == {""}, name
         if name in expected:
             assert windows == expected[name], name
+        for row, window in enumerate(windows):
+            assert set(window) <= set(range(frame.starts[row], frame.ends[row])), name
+            assert where.width is None or len(window) == where.width, name
 
 
 def test_a_variable_anchor_resolves_what_a_column_resolved(frames):
@@ -73,21 +73,21 @@ def test_a_variable_anchor_resolves_what_a_column_resolved(frames):
     `{"all": true, "scope": {"variable": c}}` is what it becomes: the tokens
     of this row's own text, located in its prompt. ` Thursday` is three
     tokens on this tokenizer and ` Friday` one."""
-    batch, frame = frames["pair"]
+    _ids, _mask, frame = frames["pair"]
     anchors = ("Thursday", "Friday")
     windows, reasons = locate.locate(frame, Where(all=True, scope=Anchor(variable="entity")), anchors)
 
-    assert windows == encoding.positions(batch, {"column": "entity"}, list(anchors))
+    assert windows == ((4, 5, 6), (6,))
     assert [len(one) for one in windows] == [3, 1]
     assert set(reasons) == {""}
 
 
 def test_a_row_whose_text_is_not_in_its_prompt_says_why(frames):
-    batch, frame = frames["pair"]
+    _ids, _mask, frame = frames["pair"]
     where = Where(all=True, scope=Anchor(variable="entity"))
     windows, reasons = locate.locate(frame, where, ("Thursday", "Neptune"))
 
-    assert windows == encoding.positions(batch, {"column": "entity"}, ["Thursday", "Neptune"])
+    assert windows[0] == (4, 5, 6)
     assert windows[1] == () and reasons == ("", "alignment_missing")
 
 
@@ -100,22 +100,15 @@ def test_a_value_that_occurs_twice_is_ambiguous_rather_than_the_first_one(model)
 
 
 @pytest.mark.parametrize(
-    "pos, where",
-    [
-        ({"last": 12}, Where(last=12)),
-        ({"span": [0, 40]}, Where(span=(0, 40))),
-        ({"index": 40}, Where(index=40)),
-        ({"index": -40}, Where(index=-40)),
-    ],
+    "where",
+    [Where(last=12), Where(span=(0, 40)), Where(index=40), Where(index=-40)],
     ids=["too wide", "past the end", "index past the end", "index before the start"],
 )
-def test_a_cut_outside_the_run_is_a_reason_where_it_was_a_refusal(frames, pos, where):
-    """The one behaviour that changes shape: the client raised before the run,
-    and the block reports per row, because on a text-anchored run only the row
-    knows how long it is."""
-    batch, frame = frames["pair"]
-    with pytest.raises(encoding.EncodingError, match="outside the row's content"):
-        encoding.positions(batch, pos)
+def test_a_cut_outside_the_run_is_a_reason_rather_than_a_refusal(frames, where):
+    """A cut that does not fit is reported per row, not raised: on a
+    text-anchored run only the row knows how long the run is, and the
+    scope-free case is the same three steps."""
+    _ids, _mask, frame = frames["pair"]
     windows, reasons = locate.locate(frame, where)
     assert windows == ((), ()) and set(reasons) == {"out_of_range"}
 
@@ -125,12 +118,15 @@ def test_a_cut_outside_the_run_is_a_reason_where_it_was_a_refusal(frames, pos, w
 # --------------------------------------------------------------------- #
 
 
-def test_the_frame_is_the_batch_the_client_encoded(frames, model):
-    for name, (batch, frame) in frames.items():
-        assert (frame.starts, frame.ends) == (batch.starts, batch.ends), name
-        assert (frame.texts, frame.offsets) == (batch.texts, batch.offsets), name
-    ids, mask, frame = locate.frame_of_texts(model.tokenizer, PAIR)
-    assert (ids, mask) == (frames["pair"][0].input_ids, frames["pair"][0].attention_mask)
+def test_the_frame_is_the_batch_the_plan_carries(frames, model):
+    """The client tokenizes and the plan carries the ids; the frame is built
+    from those same ids, where the run is. The two constructors are one
+    function, which is what makes that true."""
+    ids, mask, frame = frames["pair"]
+    assert encoding.encode(model.tokenizer, PAIR) == (ids, mask)
+    assert locate.frame_of(model.tokenizer, ids, mask) == frame
+    assert (frame.starts, frame.ends) == ((0, 2), (11, 11))
+    assert frame.texts[0].endswith("Thursday, tomorrow is")
 
 
 def test_the_continuation_stops_at_the_first_eos_and_names_it(model):
@@ -152,6 +148,6 @@ def test_the_continuation_stops_at_the_first_eos_and_names_it(model):
 def test_a_window_decodes_back_to_what_it_addressed(frames):
     """The provenance claim: the last token of ` Thursday` is the piece
     `day`, and a run can say so because the block has the tokenizer."""
-    _, frame = frames["pair"]
+    _ids, _mask, frame = frames["pair"]
     windows, _ = locate.locate(frame, Where(index=-1, scope=Anchor(variable="e")), ("Thursday", "Friday"))
     assert [locate.tokens_of(frame, one, row) for row, one in enumerate(windows)] == ["'day'", "' Friday'"]

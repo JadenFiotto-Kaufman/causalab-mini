@@ -32,10 +32,11 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
 
 from .. import address
-from ..data import encoding
+from ..shapes import Where
+
 
 class Node(BaseModel):
     """Every node refuses a key it does not know, and says where it was."""
@@ -147,8 +148,32 @@ class Featurizer(Node):
 #: logits view makes sense of, because the final norm and head expect it.
 RESIDUAL_STREAM = frozenset({"embeddings", "block_input", "block_output", "ln_final"})
 
-#: A position form: one index, or a window of the same width on every row.
-Position = int | dict[str, Any]
+
+def _spelling(raw: Any) -> Any:
+    """The spellings a document may use for a `Where`.
+
+    `-1` is `{"index": -1}`: every shipped document is written that way and
+    the meaning is unambiguous. `{"step": k}` is the continuation frame and
+    `{"column": c}` a text anchor, both in the spellings that predate the
+    one vocabulary.
+    """
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        return {"index": raw}
+    if isinstance(raw, dict) and set(raw) == {"column"}:
+        return {"all": True, "scope": {"variable": raw["column"]}}
+    if isinstance(raw, dict) and set(raw) == {"step"}:
+        step = raw["step"]
+        if step == "all":
+            return {"frame": "generated", "all": True}
+        if not (isinstance(step, int) and not isinstance(step, bool) and step >= 0):
+            raise ValueError(f"position {raw!r}: a step is a non-negative integer, or 'all'")
+        return {"frame": "generated", "index": step}
+    return raw
+
+
+#: A position, as a document may write it: a `Where`, or one of its two
+#: spellings above.
+Position = Annotated[Where, BeforeValidator(_spelling)]
 
 
 class Read(Node):
@@ -161,12 +186,6 @@ class Read(Node):
     #: norm and head. With a layer sweep and a `token_prob` metric that is
     #: the logit lens, as one document.
     view: Literal["raw", "logits"] = "raw"
-
-    @field_validator("pos")
-    @classmethod
-    def _a_known_form(cls, pos: Any) -> Any:
-        encoding.width_of(pos)  # refuses an unknown or ragged form by name
-        return pos
 
 
 class Reference(Node):
@@ -197,12 +216,6 @@ class Write(Node):
     #: The mechanism's numbers: `scale` for add_scaled and gaussian, `t` for
     #: lerp, `seed` for gaussian.
     params: dict[str, float] = Field(default_factory=dict)
-
-    @field_validator("pos")
-    @classmethod
-    def _a_known_form(cls, pos: Any) -> Any:
-        encoding.width_of(pos)
-        return pos
 
     @model_validator(mode="after")
     def _mechanism_and_its_numbers(self) -> "Write":
@@ -674,21 +687,20 @@ class Spec(Node):
             for write in model.writes:
                 _refuse(write in one.writes, f"{where}: model {name!r}: undeclared write {write!r}")
         for name, read in one.reads.items():
-            step = encoding.step_of(read.pos)
-            if step is not None:
-                _refuse(step != "all", f"{where}: read {name!r}: a read is at one step; 'all' is for writes")
+            if read.pos.frame == "generated":
+                _refuse(not read.pos.all, f"{where}: read {name!r}: a read is at one step; 'all' is for writes")
                 _refuse(one.decode > 0, f"{where}: read {name!r}: a step position needs `decode` > 0")
                 _refuse(
-                    isinstance(step, int) and step < one.decode,
-                    f"{where}: read {name!r}: step {step} of a {one.decode}-token decode",
+                    read.pos.index is not None and read.pos.index < one.decode,
+                    f"{where}: read {name!r}: step {read.pos.index} of a {one.decode}-token decode",
                 )
         for name, write in one.writes.items():
-            step = encoding.step_of(write.pos)
-            if step is not None:
+            if write.pos.frame == "generated":
                 _refuse(one.decode > 0, f"{where}: write {name!r}: a step position needs `decode` > 0")
                 _refuse(
-                    step == "all" or (isinstance(step, int) and step < one.decode),
-                    f"{where}: write {name!r}: step {step} of a {one.decode}-token decode",
+                    write.pos.all or (write.pos.index is not None and write.pos.index < one.decode),
+                    f"{where}: write {name!r}: step "
+                    f"{'all' if write.pos.all else write.pos.index} of a {one.decode}-token decode",
                 )
         for name, metric in one.metrics.items():
             _refuse(
@@ -696,14 +708,14 @@ class Spec(Node):
                 f"{where}: metric {name!r}: `of` must be a read name, got {metric.of!r}",
             )
             _refuse(
-                encoding.width_of(one.reads[metric.of].pos) == 1,
+                one.reads[metric.of].pos.width == 1,
                 f"{where}: metric {name!r} reads {metric.of!r}, a window of "
-                f"{encoding.width_of(one.reads[metric.of].pos) or 'varying'} positions; "
+                f"{one.reads[metric.of].pos.width or 'varying'} positions; "
                 "a metric scores one position per row",
             )
         for name, write in one.writes.items():
             if isinstance(write.operand, str):
-                have, want = encoding.width_of(one.reads[write.operand].pos), encoding.width_of(write.pos)
+                have, want = one.reads[write.operand].pos.width, write.pos.width
                 # a ragged side has no width until the rows are known; the
                 # compiler checks those row by row
                 _refuse(

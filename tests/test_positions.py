@@ -1,9 +1,10 @@
-"""Positions: one index, or a window of the same width on every row.
+"""Positions: a spec the document writes, and the width it promises.
 
-A resolved position is a window per row, `((10,), (10,))` for the unit case,
-so a read is always `(rows, w, width)` — a rectangle. Every form here keeps
-it one, which is the cheap half of the position story; `{"all": true}` and
-per-row variables would not, and are refused until reads can be ragged.
+A document says *where* — `-1`, `{"last": 3}`, `{"span": [a, b)}` — and what
+a run resolves that to is a window per row, `((10,), (10,))` for the unit
+case, so a read of a form with a fixed width is `(rows, w, width)`: a
+rectangle. What the forms mean, row by row, is `tests/test_locate.py`; what
+they promise a compiler, and what a document may not write, is here.
 
 The claim that decides whether a window is the right abstraction: patching
 the last three tokens in ONE write must equal patching them in three, to the
@@ -16,64 +17,85 @@ import pathlib
 
 import pytest
 import torch
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from causalab_mini import ops, plan
-from causalab_mini.data import encoding
+from causalab_mini.engine import steps
 from causalab_mini.engine.engines.hooks import HooksEngine
-from causalab_mini.plan.spec import Spec
+from causalab_mini.plan.spec import Position, Spec
+from causalab_mini.shapes import Where
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 WINDOW = REPO / "documents" / "v2" / "window_patch.json"
 THREE = REPO / "documents" / "multi_position_patch_cpu.json"
 
 
-@pytest.fixture
-def batch(model):
-    # left-padded to width 11: row 0 has 11 content tokens, row 1 has 9
-    return encoding.encode(
-        model.tokenizer, ["If today is Thursday, tomorrow is", "If today is Friday, tomorrow is"]
-    )
-
-
 # --------------------------------------------------------------------- #
-# resolving
+# what a form promises
 # --------------------------------------------------------------------- #
 
 
 @pytest.mark.parametrize(
-    "pos, expected",
+    "pos, width",
     [
-        (-1, ((10,), (10,))),
-        ({"index": -1}, ((10,), (10,))),
-        (0, ((0,), (2,))),
-        ({"last": 3}, ((8, 9, 10), (8, 9, 10))),
-        ({"span": [0, 2]}, ((0, 1), (2, 3))),
-        ({"span": [-3, -1]}, ((8, 9), (8, 9))),
+        (-1, 1),
+        ({"index": -1}, 1),
+        (0, 1),
+        ({"last": 3}, 3),
+        ({"span": [0, 2]}, 2),
+        ({"span": [-3, -1]}, 2),
+        ({"all": True}, None),
     ],
-    ids=["-1", "index", "0", "last 3", "span from the start", "negative span"],
+    ids=["-1", "index", "0", "last 3", "span from the start", "negative span", "all"],
 )
-def test_every_form_is_content_relative_and_uniform(batch, pos, expected):
-    """Row 1 starts at index 2 because of its padding, and every form lands
-    on its content the same way — which is why `0` is `(0, 2)`."""
-    assert encoding.positions(batch, pos) == expected
-    assert encoding.width_of(pos) == len(expected[0])
+def test_a_forms_width_is_known_without_a_row(pos, width):
+    """`width` is what lets the compiler check a write against its operand
+    before either has been resolved. `None` is the ragged case, and it is
+    decided by the form rather than by the data."""
+    where = TypeAdapter(Position).validate_python(pos)
+    assert where.width == width
+    assert where.ragged == (width is None)
+
+
+def _with(raw, read, pos):
+    raw["interventions"]["window"]["reads"][read]["pos"] = pos
+    return raw
 
 
 @pytest.mark.parametrize(
     "pos, message",
     [
-        ({"last": 12}, "outside the row's content"),
-        ({"span": [-1, -3]}, "outside the row's content"),
-        ({"span": [0, 0]}, "outside the row's content"),
-        ({"variable": "entity"}, "column.*locates a column's text"),
-        ("last", "not a form this slice runs"),
+        ({"span": [-1, -3]}, "is not a forward window"),
+        ({"span": [0, 0]}, "is not a forward window"),
+        ({"last": 0}, "not a positive number of tokens"),
+        ({"index": -1, "last": 2}, "exactly one of index/span/last/all"),
+        ({}, "exactly one of index/span/last/all"),
+        ({"variable": "entity"}, "Unexpected keyword argument"),
+        ("last", "should be a dictionary or an instance of Where"),
+        ({"scope": {}, "index": -1}, "names a variable, a segment, or both"),
+        ({"index": -1, "scope": {"segment": "eos"}}, "'eos' is a run of the generated frame"),
     ],
-    ids=["too wide", "backwards", "empty", "variable", "not a form"],
+    ids=["backwards", "empty", "no tokens", "two cuts", "no cut", "a bare variable",
+         "not a form", "an empty anchor", "eos in the prompt"],
 )
-def test_what_a_window_may_not_be(batch, pos, message):
-    with pytest.raises(encoding.EncodingError, match=message):
-        encoding.positions(batch, pos)
+def test_what_a_position_may_not_be(pos, message):
+    """Every one of these is refused by pydantic with the path to the key,
+    before a model is loaded — a position is a spec and a spec is checkable."""
+    with pytest.raises(ValidationError, match=message):
+        TypeAdapter(Position).validate_python(pos)
+
+
+def test_a_cut_outside_the_row_is_reported_by_the_run_not_refused_by_the_compiler(
+    data_root, model_engine
+):
+    """`{"index": 40}` is a form of width 1, and whether a row has a
+    fortieth token is a fact about that row. The compiler no longer has the
+    rows' lengths, so this is `out_of_range` where it is resolved."""
+    raw = _with(json.loads(WINDOW.read_text()), "logits", {"index": 40})
+    built = plan.build_request(raw, data_root, model_engine)
+    forward = built.step("score", plan.Observe).forwards[-1]
+    _, positions = steps.located(model_engine, forward)
+    assert positions["logits"] == ((),) * 4
 
 
 # --------------------------------------------------------------------- #
@@ -138,13 +160,20 @@ def test_the_window_document_agrees_across_engines_to_the_ulp(data_root, model_e
     assert (a - b).abs().max() < 2e-8
 
 
-def test_the_window_shows_in_the_plan(data_root, model_engine):
+def test_the_window_is_a_spec_in_the_plan_and_integers_in_the_run(data_root, model_engine):
+    """A fresh plan carries the spec and no integers; the run resolves it
+    against its own tokenizer, and gets -4, -3, -2 of an 11-token row."""
     from causalab_mini.plan.explain import explain
 
     built = plan.build_request(json.loads(WINDOW.read_text()), data_root, model_engine)
-    write = built.step("score", plan.Observe).forwards[1].taps[0].writes[0]
-    assert write.at.positions == ((7, 8, 9),) * 4  # -4, -3, -2 of an 11-token row
-    assert "pos=[7:10], [7:10], [7:10], [7:10]" in explain(built)
+    forward = built.step("score", plan.Observe).forwards[1]
+    write = forward.taps[0].writes[0]
+    assert write.at.positions == () and write.at.where == Where(span=(-4, -1))
+    assert "pos={span:[-4, -1]}" in explain(built)
+
+    ready, positions = steps.located(model_engine, forward)
+    assert positions["patch"] == ((7, 8, 9),) * 4
+    assert ready.taps[0].writes[0].at.positions == positions["patch"]
 
 
 # --------------------------------------------------------------------- #

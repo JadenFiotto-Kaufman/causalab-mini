@@ -26,15 +26,16 @@ Two rules hold throughout:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import safetensors.torch
 import torch
 
-from ..ops import featurizer as featurizer_module, intervene, metrics
-from ..plan import Featurizers, Fit, Observe, Plan, Step, Weights
+from ..ops import featurizer as featurizer_module, intervene, locate, metrics
+from ..plan import Featurizers, Fit, Forward, Observe, Plan, PlanError, Step, Weights
 from ..plan import plan as plan_module
+from ..shapes import Positions
 
 
 @dataclass
@@ -109,7 +110,7 @@ def observe(engine: Any, step: Observe, state: State) -> dict[str, Any]:
     the engine cannot tell the difference and does not need to. What this
     pass declares as its own outputs is published at the end.
     """
-    values = passes(engine, step, state)
+    values, positions = passes(engine, step, state)
     # A metric reads one position per row — the compiler refused anything
     # else — so its (rows, 1, vocab) is (rows, vocab) with the unit window off.
     # A metric with excluded rows scores the others: the compiler said which,
@@ -139,12 +140,12 @@ def observe(engine: Any, step: Observe, state: State) -> dict[str, Any]:
             tensor = featurizer_module.pca(tensor, output.k)
         state.outputs[output.name] = tensor.detach()
         if output.reduce == "none":
-            state.layout[output.name] = _positions_of(step, output.read)
+            state.layout[output.name] = positions[output.read]
         step.results[output.name] = tensor.detach().cpu()
     return scored
 
 
-def passes(engine: Any, step: Observe, state: State) -> dict[str, Any]:
+def passes(engine: Any, step: Observe, state: State) -> tuple[dict[str, Any], dict[str, Positions]]:
     """Every forward of a pass, over every row, `batch_size` rows at a time.
 
     A window of rows is a whole small pass: the same forwards in the same
@@ -161,7 +162,8 @@ def passes(engine: Any, step: Observe, state: State) -> dict[str, Any]:
     """
     count = len(step.forwards[0].input_ids) if step.forwards else 0
     size = state.batch_size or count or 1
-    parts = []
+    parts: list[dict[str, Any]] = []
+    windows: list[dict[str, Positions]] = []
     for start in range(0, count, size):
         stop = min(start + size, count)
         values = {
@@ -169,23 +171,100 @@ def passes(engine: Any, step: Observe, state: State) -> dict[str, Any]:
             for name, tensor in state.outputs.items()
         }
         published = set(values)
+        found: dict[str, Positions] = {}
         for forward in step.forwards:
-            engine.forward(plan_module.window(forward, start, stop), values, state.featurizers)
+            ready, resolved = located(engine, plan_module.window(forward, start, stop))
+            found.update(resolved)
+            _writes_land(ready, found, start)
+            engine.forward(ready, values, state.featurizers)
         parts.append({name: value for name, value in values.items() if name not in published})
+        windows.append(found)
     merged = dict(state.outputs)
     for name in parts[0] if parts else ():
         merged[name] = parts[0][name] if len(parts) == 1 else torch.cat([part[name] for part in parts])
-    return merged
+    # each window resolved its own rows; in row order they are the pass's
+    return merged, {
+        name: tuple(one for part in windows for one in part[name]) for name in (windows[0] if windows else {})
+    }
 
 
-def _positions_of(step: Observe, read: str) -> Any:
-    return next(
-        op.at.positions
-        for forward in step.forwards
-        for tap in forward.taps
-        for op in tap.reads
-        if op.name == read
+def located(engine: Any, forward: Forward) -> tuple[Forward, dict[str, Positions]]:
+    """`forward` with every op's positions resolved, and what each one got.
+
+    This is where a spec becomes integers, and it happens here — in the
+    walk, inside the session, with the *model's* tokenizer — rather than on
+    the client, so that a text anchor is looked for in the text the model
+    will actually see. One `Frame` is built per forward and every tap shares
+    it; building one per tap is the one place this could be slow.
+
+    A tap in the continuation frame is not resolved against the prompt at
+    all: it acts at the one position its decode step processes, which is
+    what `intervene.at_step` puts any non-empty window on.
+    """
+    frame = locate.frame_of(engine.tokenizer, forward.input_ids, forward.attention_mask)
+    rows = len(forward.input_ids)
+    found: dict[str, Positions] = {}
+
+    def resolve(op: Any) -> Any:
+        where = op.at.where
+        if where is None or where.frame == "generated":
+            windows: Positions = ((0,),) * rows
+        else:
+            windows, _ = locate.locate(frame, where, op.at.anchors)
+        found[op.name] = windows
+        return replace(op, at=replace(op.at, positions=windows))
+
+    return (
+        replace(
+            forward,
+            taps=tuple(
+                replace(
+                    tap,
+                    writes=tuple(resolve(op) for op in tap.writes),
+                    reads=tuple(resolve(op) for op in tap.reads),
+                )
+                for tap in forward.taps
+            ),
+        ),
+        found,
     )
+
+
+def _writes_land(forward: Forward, located: dict[str, Positions], start: int) -> None:
+    """The ragged write policy, and it is `refuse`.
+
+    A read may have an empty window on a row — the anchor's text was not in
+    that prompt — and that row is simply an excluded measurement. A *write*
+    may not: writing nothing somewhere is not an intervention, and the row
+    would score as if it were. And a ragged write's operand must have, row
+    by row, exactly the width the write covers; the protocol's other
+    landing policies are not implemented.
+
+    Both are checked here, at the write, because here is where the positions
+    are. `start` puts the row numbers back in the pass's own terms, so a
+    batched run names the row an author would count to.
+    """
+    for tap in forward.taps:
+        for write in tap.writes:
+            empty = [start + row for row, window in enumerate(write.at.positions) if not window]
+            if empty:
+                raise PlanError(
+                    f"write {write.name!r} has nothing to write on row(s) {empty}: its "
+                    "position's text is not in those prompts. A read may skip a row; a "
+                    "write may not"
+                )
+            if isinstance(write.operand, str) and write.operand in located:
+                have = [len(window) for window in located[write.operand]]
+                want = [len(window) for window in write.at.positions]
+                mismatched = [start + row for row, (a, b) in enumerate(zip(have, want)) if a != b]
+                if mismatched:
+                    raise PlanError(
+                        f"write {write.name!r} covers {want} positions per row but its "
+                        f"operand {write.operand!r} was read over {have}; rows "
+                        f"{mismatched} differ. Landing a window of one width in another "
+                        "is a policy this slice does not implement — the protocol's "
+                        "`exact_length_buckets` and `padded_masked` — so it refuses"
+                    )
 
 
 def fit(engine: Any, step: Fit, state: State) -> None:

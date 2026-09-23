@@ -92,9 +92,9 @@ class Where:
     def width(self) -> int | None:
         """How many positions this names, knowable without a row — which is
         what lets the compiler check a write against its operand — or None
-        when only the row can say. `None` is exactly the ragged case, so
-        `Selection.flat` is `width is None` and is decided by the form
-        rather than by the data."""
+        when only the row can say. It is the width of the *cut*, so an
+        anchored `{"index": -1}` is 1: whether a row has that one position
+        at all is `ragged`'s question, not this one."""
         if self.index is not None:
             return 1
         if self.last is not None:
@@ -115,8 +115,12 @@ class Where:
         position on the rows that have it and none on the rows that do not.
         The two are different questions, which is why `width` answers the
         first and this the second.
+
+        A continuation-frame spec is never ragged *at the address*: whatever
+        it names, a decode step processes one position, and how much of the
+        continuation the spec keeps is decided afterwards, over the steps.
         """
-        return self.width is None or self.scope is not None
+        return self.frame == "prompt" and (self.width is None or self.scope is not None)
 
 
 @dataclass(frozen=True)
@@ -137,14 +141,24 @@ class Selection:
     and the tensor functions accept it as such.
     """
 
-    positions: Positions
+    #: Where along the sequence, once a run has resolved `where` against its
+    #: own tokenizer. **Empty in a fresh plan**: a spec is what a document
+    #: carries and integers are what a row produces.
+    positions: Positions = ()
     groups: int | None = None
     take: tuple[int, ...] | None = None
     #: Gathered flat, `(total, width)`, because the windows' widths vary by
-    #: row. Decided once, over *every* row of the pass, and carried — not
-    #: re-derived from the positions in hand, because a window of a ragged
-    #: pass's rows can happen to be rectangular and must still come back flat.
+    #: row — or because a row may have none. Decided by the *form*, over
+    #: every row of the pass, and carried: a window of a ragged pass's rows
+    #: can happen to be rectangular and must still come back flat.
     flat: bool = False
+    #: The spec the positions come from. `None` only where a caller hands
+    #: the tensor functions a bare `Positions`.
+    where: Where | None = None
+    #: Per row, the text this row's `where.scope.variable` binds to — the
+    #: one input the resolver cannot find for itself, because it has no
+    #: dataset. Empty for a spec with no variable anchor.
+    anchors: tuple[str, ...] = ()
 
 
 #: One integer per row: a row's content start, a row's content end.

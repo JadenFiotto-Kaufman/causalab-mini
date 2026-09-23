@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..shapes import Where
+
 Json = dict[str, Any]
 
 PROTOCOL_VERSION = "3"
@@ -115,16 +117,20 @@ def _featurizer(raw: Json, where: str) -> str:
     return name
 
 
-def _pos(spec: Any, where: str) -> int:
+def _pos(spec: Any, where: str) -> Where:
     """The only position form this slice runs: `pos: -1`, sugar for
-    {"index": -1} — one token per row, counted from the end of the sequence."""
+    {"index": -1} — one token per row, counted from the end of the sequence.
+
+    The plan-shaped format (`spec.py`) is where the rest of the vocabulary
+    lives; this one carries the protocol's own documents, and every one of
+    them names an index."""
     if isinstance(spec, dict) and set(spec) == {"index"}:
         spec = spec["index"]
     if isinstance(spec, bool) or not isinstance(spec, int):
         raise DocumentError(
             f"{where}: only an integer position (or {{'index': i}}) is implemented"
         )
-    return spec
+    return Where(index=spec)
 
 
 @dataclass(frozen=True)
@@ -250,7 +256,7 @@ class FeaturizerSpec:
 @dataclass(frozen=True)
 class ReadSpec:
     site: str
-    pos: int
+    pos: Where
     model: str  # "original" or an intervened model name
     input: str  # "base" | "counterfactual"
     featurizer: str = IDENTITY
@@ -277,7 +283,7 @@ class ReadSpec:
 @dataclass(frozen=True)
 class WriteSpec:
     site: str
-    pos: int
+    pos: Where
     mechanism: str  # "swap"
     operand: str  # a read name
     featurizer: str = IDENTITY

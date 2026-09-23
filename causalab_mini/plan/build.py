@@ -27,7 +27,7 @@ from ..ops import featurizer as featurizer_module
 from ..ops import intervene as intervene_module
 from ..ops import metrics as metrics_module
 from . import sweep
-from ..shapes import Positions, Selection
+from ..shapes import Selection, TokenRows, Where
 from .document import Document, SaveSpec
 from .plan import (
     FeaturizerOp,
@@ -113,7 +113,7 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
     #: needs the same rows and the same window. The compiler knows all of it;
     #: the block would only find out from a shape error.
     output_rows: dict[str, int | None] = {}
-    output_widths: dict[str, tuple[tuple[int, ...], Any]] = {}  # per-row widths, how reduced
+    output_widths: dict[str, tuple[int | None, Any]] = {}  # the read's width, how reduced
     for name, step in spec.steps.items():
         kind = type(step).__name__
         experiment = (
@@ -132,15 +132,15 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
                             f"{write.operand.ref!r}, which has {have} rows, over {count} "
                             "rows; reduce the output or run over the same rows"
                         )
-                    per_row, reduced = output_widths[write.operand.ref]
+                    per_row, reduced = output_widths[write.operand.ref]  # per_row: None is ragged
                     if reduced == "pca":
                         raise PlanError(
                             f"step {name!r}: write {write_name!r} names {write.operand.ref!r}, a "
                             "pca basis, as its operand; a basis is loaded as a featurizer, "
                             "not written at a site"
                         )
-                    ragged_source = len(set(per_row)) > 1
-                    want = encoding.width_of(write.pos)  # None: the write is ragged
+                    ragged_source = per_row is None
+                    want = write.pos.width  # None: the write is ragged
                     # What an output may land in. A mean over a ragged read is
                     # one vector and broadcasts anywhere; a mean over a
                     # rectangle keeps its window and must match; an unreduced
@@ -149,9 +149,9 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
                     if reduced and ragged_source:
                         fits = True
                     elif reduced:
-                        fits = (want == per_row[0]) or (want is None and per_row[0] == 1)
+                        fits = (want == per_row) or (want is None and per_row == 1)
                     elif not ragged_source:
-                        fits = want == per_row[0]
+                        fits = want == per_row
                     else:
                         fits = False
                     if not fits:
@@ -159,7 +159,8 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
                             f"step {name!r}: write {write_name!r} covers "
                             f"{want if want is not None else 'a varying number of'} "
                             f"position(s) but {write.operand.ref!r} was read over "
-                            f"{sorted(set(per_row))}{'' if reduced else ', unreduced'}; "
+                            f"{[per_row] if per_row is not None else 'a varying number of'}"
+                            f"{'' if reduced else ', unreduced'}; "
                             "the windows must match, or reduce the output"
                         )
         if kind == "Observe":
@@ -170,16 +171,18 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
                 for out_name, out in step.outputs.items()
             )
             observe = _pass(experiment, rows, addresses, engine.tokenizer)
-            read_positions = {
-                read.name: read.at.positions
+            read_widths = {
+                read.name: read.at.where.width if read.at.where is not None else None
                 for forward in observe.forwards for tap in forward.taps for read in tap.reads
             }
             for out in outputs:
-                if out.reduce == "pca":
+                width = read_widths[out.read]
+                if out.reduce == "pca" and width is not None:
                     # k directions need more than k vectors: the rows are
                     # centered first, which costs one rank. Known here, from
-                    # the positions, before any forward.
-                    vectors = sum(len(window) for window in read_positions[out.read])
+                    # the form and the row count, before any forward — a
+                    # text-anchored read has neither until it runs.
+                    vectors = width * len(rows["base"])
                     assert out.k is not None
                     if out.k > vectors - 1:
                         raise PlanError(
@@ -189,7 +192,7 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
                         )
                 output_rows[out.name] = None if out.reduce == "mean" else len(rows["base"])
                 output_widths[out.name] = (
-                    tuple(len(window) for window in read_positions[out.read]),
+                    width,
                     out.reduce if out.reduce == "pca" else out.reduce == "mean",
                 )
             steps[name] = replace(
@@ -623,7 +626,7 @@ def _pass(
         _forward(name, role, experiment, batches[role], addresses, rows[role])
         for name, role in _schedule(experiment)
     )
-    _check_ragged(forwards, experiment)
+    _check_patterns(forwards)
     base_rows = rows["base"]  # base is the schema of the pair: metrics read its columns
     metrics = tuple(
         _metric(name, spec, base_rows, tokenizer) for name, spec in experiment.metrics.items()
@@ -801,45 +804,22 @@ def _fit(
     )
 
 
-def _check_ragged(forwards: tuple[Forward, ...], experiment: _Experiment) -> None:
-    """The ragged write policy, and it is `refuse`.
+def _check_patterns(forwards: tuple[Forward, ...]) -> None:
+    """The one layout question that is about masks rather than positions, and
+    is therefore still the client's: an attention pattern swapped in from
+    another prompt has to line up key for key.
 
-    A read may have an empty window on a row — the column's text was not in
-    that prompt — and that row is simply an excluded measurement. A *write*
-    may not: writing nothing somewhere is not an intervention, and the row
-    would score as if it were. And a ragged write's operand must have, row
-    by row, exactly the width the write covers; the protocol's other
-    landing policies are not implemented. All of it is knowable here, before
-    any forward, because the positions are.
+    The two refusals that used to sit beside this — a write with nothing to
+    write on a row, and a ragged write whose operand is a different width —
+    are about *where* a position lands, so they moved to where positions are
+    resolved (`engine/steps.py`).
     """
-    reads = {
-        read.name: read.at.positions for forward in forwards for tap in forward.taps for read in tap.reads
-    }
     read_in = {read.name: forward for forward in forwards for tap in forward.taps for read in tap.reads}
     for forward in forwards:
         for tap in forward.taps:
             for write in tap.writes:
                 if tap.address.key_axis and isinstance(write.operand, str):
                     _check_keys(write, forward, read_in.get(write.operand))
-                empty = [row for row, window in enumerate(write.at.positions) if not window]
-                if empty:
-                    raise PlanError(
-                        f"write {write.name!r} has nothing to write on row(s) {empty}: its "
-                        "position's text is not in those prompts. A read may skip a row; a "
-                        "write may not"
-                    )
-                if isinstance(write.operand, str) and write.operand in reads:
-                    have = [len(window) for window in reads[write.operand]]
-                    want = [len(window) for window in write.at.positions]
-                    mismatched = [row for row, (a, b) in enumerate(zip(have, want)) if a != b]
-                    if mismatched:
-                        raise PlanError(
-                            f"write {write.name!r} covers {want} positions per row but its "
-                            f"operand {write.operand!r} was read over {have}; rows "
-                            f"{mismatched} differ. Landing a window of one width in another "
-                            "is a policy this slice does not implement — the protocol's "
-                            "`exact_length_buckets` and `padded_masked` — so it refuses"
-                        )
 
 
 def _check_keys(write: Any, forward: Forward, source: Forward | None) -> None:
@@ -919,38 +899,53 @@ def _schedule(experiment: _Experiment) -> list[tuple[str, str]]:
     return ordered
 
 
-def _selection(positions: Positions, features: Any) -> Selection:
-    """Where an op is. Whether it gathers flat is decided here, over every
-    row of the pass, so a window of those rows cannot decide differently."""
+def _firing(pos: Where) -> int | str | None:
+    """Which decode step a tap acts at, derived from its frame. `None` is the
+    prompt frame — the prefill, and the whole of a forward that does not
+    decode. An integer is that decode step; `"all"` is every one of them."""
+    if pos.frame == "prompt":
+        return None
+    return "all" if pos.all else pos.index
+
+
+def _selection(pos: Where, anchors: tuple[str, ...], features: Any) -> Selection:
+    """Where an op is: the spec, the per-row text it anchors to, and which
+    part of the feature axis. Whether it gathers flat is decided *by the
+    form*, over every row of the pass, so a window of those rows cannot
+    decide differently."""
     groups, take = features or (None, None)
-    return Selection(positions, groups, take, flat=intervene_module.is_ragged(positions))
+    return Selection(groups=groups, take=take, flat=pos.ragged, where=pos, anchors=anchors)
 
 
 def _forward(
     name: str,
     role: str,
     experiment: _Experiment,
-    batch: encoding.Batch,
+    batch: tuple[TokenRows, TokenRows],
     addresses: dict[str, Address],
     rows: list[rows_module.Row],
 ) -> Forward:
-    """One model pass: its taps, grouped by address and put in forward order."""
+    """One model pass: its taps, grouped by address and put in forward order.
 
-    def resolve(pos: Any) -> Positions:
-        texts = None
-        if isinstance(pos, dict) and set(pos) == {"column"}:
-            texts = [rows_module.field_text(row, pos["column"]) for row in rows]
-        return encoding.positions(batch, pos, texts)
+    Nothing here resolves a position. What it does compile is the *anchor*: a
+    text-anchored spec names a variable, and which text that is on this row
+    is a fact about the dataset, which only the client has.
+    """
+
+    def anchors(pos: Where) -> tuple[str, ...]:
+        if pos.scope is None or pos.scope.variable is None:
+            return ()
+        return tuple(rows_module.field_text(row, pos.scope.variable) for row in rows)
 
     # a tap is one place: an address, and — when the forward decodes — a step
     writes: dict[tuple[Address, Any], list[WriteOp]] = {}
     if name in experiment.models:
         for write_name in experiment.models[name].writes:
             spec = experiment.writes[write_name]
-            writes.setdefault((addresses[spec.site], encoding.step_of(spec.pos)), []).append(
+            writes.setdefault((addresses[spec.site], _firing(spec.pos)), []).append(
                 WriteOp(
                     name=write_name,
-                    at=_selection(resolve(spec.pos), experiment.features.get(spec.site)),
+                    at=_selection(spec.pos, anchors(spec.pos), experiment.features.get(spec.site)),
                     operand=spec.operand,
                     mechanism=spec.mechanism,
                     featurizer=spec.featurizer,
@@ -962,10 +957,10 @@ def _forward(
     for read_name, spec in experiment.reads.items():
         if (spec.model, spec.input) != (name, role):
             continue
-        reads.setdefault((addresses[spec.site], encoding.step_of(spec.pos)), []).append(
+        reads.setdefault((addresses[spec.site], _firing(spec.pos)), []).append(
             ReadOp(
                 name=read_name,
-                at=_selection(resolve(spec.pos), experiment.features.get(spec.site)),
+                at=_selection(spec.pos, anchors(spec.pos), experiment.features.get(spec.site)),
                 featurizer=spec.featurizer,
                 view=getattr(spec, "view", "raw"),
             )
@@ -991,8 +986,8 @@ def _forward(
     return Forward(
         name=name,
         input=role,
-        input_ids=batch.input_ids,
-        attention_mask=batch.attention_mask,
+        input_ids=batch[0],
+        attention_mask=batch[1],
         taps=tuple(taps),
         decode=experiment.decode,
     )

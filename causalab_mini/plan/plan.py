@@ -111,10 +111,11 @@ class Forward:
 def window(forward: Forward, start: int, stop: int) -> Forward:
     """Rows `start:stop` of a forward: the same taps over fewer rows. Every
     per-row thing a forward holds is a tuple with one entry per row — its
-    token ids, its mask, each op's positions — so a window is a slice of
-    each, and an engine cannot tell it from a forward compiled that small.
-    Positions are absolute indices into the batch's padded width, which the
-    client fixed once for all rows, so they survive the slice unchanged."""
+    token ids, its mask, each op's anchors and, once a run has resolved
+    them, its positions — so a window is a slice of each, and an engine
+    cannot tell it from a forward compiled that small. Positions are
+    absolute indices into the batch's padded width, which the client fixed
+    once for all rows, so they survive the slice unchanged."""
     return replace(
         forward,
         input_ids=forward.input_ids[start:stop],
@@ -122,12 +123,16 @@ def window(forward: Forward, start: int, stop: int) -> Forward:
         taps=tuple(
             replace(
                 tap,
-                writes=tuple(replace(op, at=replace(op.at, positions=op.at.positions[start:stop])) for op in tap.writes),
-                reads=tuple(replace(op, at=replace(op.at, positions=op.at.positions[start:stop])) for op in tap.reads),
+                writes=tuple(replace(op, at=_rows(op.at, start, stop)) for op in tap.writes),
+                reads=tuple(replace(op, at=_rows(op.at, start, stop)) for op in tap.reads),
             )
             for tap in forward.taps
         ),
     )
+
+
+def _rows(at: Selection, start: int, stop: int) -> Selection:
+    return replace(at, positions=at.positions[start:stop], anchors=at.anchors[start:stop])
 
 
 @dataclass(frozen=True)

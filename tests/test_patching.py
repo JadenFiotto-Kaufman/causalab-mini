@@ -9,7 +9,7 @@ import torch
 
 from causalab_mini import cli, ops, plan
 from causalab_mini.plan import document
-from causalab_mini.engine import NNterpEngine
+from causalab_mini.engine import NNterpEngine, steps
 from causalab_mini.engine.engines.nnterp import engine as nnterp
 
 
@@ -45,10 +45,13 @@ def identity_write(raw):
 # --------------------------------------------------------------------- #
 
 
-def test_a_swap_lands_the_source_read_bit_for_bit(model, minimal_plan):
+def test_a_swap_lands_the_source_read_bit_for_bit(model, model_engine, minimal_plan):
     """The whole mechanism in one assertion: after the write, the activation at
     the address *is* the tensor the other forward read, to the bit."""
-    source_forward, patched_forward = minimal_plan.step("observe", plan.Observe).forwards
+    source_forward, patched_forward = (
+        steps.located(model_engine, one)[0]
+        for one in minimal_plan.step("observe", plan.Observe).forwards
+    )
     read = source_forward.taps[0].reads[0]
     tap = patched_forward.taps[0]
     write = tap.writes[0]
@@ -117,10 +120,13 @@ def test_a_swap_moves_the_logits_and_an_identity_write_does_not(minimal_raw, dat
     assert not torch.equal(swapped.result("logit_diff"), clean.result("logit_diff"))
 
 
-def test_a_write_touches_only_the_position_it_declares(model, minimal_plan):
+def test_a_write_touches_only_the_position_it_declares(model, model_engine, minimal_plan):
     """`pos: -1` is one token per row. Every other position at the address comes
     out of the patched forward exactly as it went in."""
-    source, patched = minimal_plan.step("observe", plan.Observe).forwards
+    source, patched = (
+        steps.located(model_engine, one)[0]
+        for one in minimal_plan.step("observe", plan.Observe).forwards
+    )
     tap = patched.taps[0]
     write = tap.writes[0]
     first_token = ((0,), (2,), (0,), (2,))  # the content start of each row, left-padded

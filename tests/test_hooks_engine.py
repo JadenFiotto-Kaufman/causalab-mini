@@ -20,7 +20,7 @@ from conftest import same_numbers
 
 from causalab_mini import plan
 from causalab_mini.address import AddressError
-from causalab_mini.engine import HooksEngine, NNterpEngine
+from causalab_mini.engine import HooksEngine, NNterpEngine, steps
 from causalab_mini.engine.engines.hooks import HooksEngineError
 from causalab_mini.engine.engines.hooks import engine as hooks
 from causalab_mini.engine.engines.hooks.loading import standardized
@@ -110,7 +110,9 @@ def test_a_swap_lands_the_source_read_bit_for_bit(hooks_engine, minimal_raw, dat
     before the reads, so `landed` sees the patched value and not the clean one.
     """
     compiled = _build(minimal_raw, data_root, hooks_engine)
-    source, patched = compiled.step("observe", Observe).forwards
+    source, patched = (
+        steps.located(hooks_engine, one)[0] for one in compiled.step("observe", Observe).forwards
+    )
     tap = patched.taps[0]
     watched = replace(
         patched,
@@ -134,6 +136,7 @@ def test_a_forward_leaves_no_hook_behind(hooks_engine, minimal_raw, data_root):
     not an error — so the count is asserted rather than trusted."""
     compiled = _build(minimal_raw, data_root, hooks_engine)
     source, _ = compiled.step("observe", Observe).forwards
+    source, _ = steps.located(hooks_engine, source)
     layer = hooks.resolve(hooks_engine.locate("block_output", 0), standardized(hooks_engine.model))
 
     before = len(layer._forward_hooks)

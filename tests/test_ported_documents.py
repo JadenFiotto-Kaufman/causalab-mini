@@ -18,7 +18,7 @@ import pytest
 import torch
 
 from causalab_mini import plan
-from causalab_mini.engine import NNterpEngine
+from causalab_mini.engine import NNterpEngine, steps
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.plan import document
 
@@ -53,7 +53,10 @@ def test_three_writes_share_one_address_and_one_tap(multi_raw, data_root, model_
     one site are three legal absolute writes. They compile to one tap,
     because a tap is an address and these share one."""
     built = plan.build_request(multi_raw, data_root, model_engine)
-    source, patched = built.step("observe", plan.Observe).forwards
+    source, patched = (
+        steps.located(model_engine, one)[0]
+        for one in built.step("observe", plan.Observe).forwards
+    )
 
     (tap,) = [one for one in patched.taps if one.writes]
     assert [write.name for write in tap.writes] == ["at_m4", "at_m3", "at_m2"]
