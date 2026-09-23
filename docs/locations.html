@@ -397,26 +397,18 @@ logits                 rank=(2, 1002) io=output  llama=''                       
           <code>torch.equal</code>, which is why every shipped document goes on saying
           <code>lm_head</code>.</p>
 
-          <div class="caution">
-            <span class="label"><code>logits</code> is nnterp-engine only</span>
-            <!-- commit 317ca7f, "The model's logits are not always its head's output":
-                 "Not done, and named: the hooks engine cannot reach `logits`." -->
-            <!-- causalab_mini/engine/engines/hooks/loading.py:96-106 builds the
-                 standardized namespace; it has no entry for the model root -->
-            <p>nnterp's <code>logits</code> row selects a field of the model's output
-            object rather than a module's output, and a forward hook on the root would
-            have to know which field that is. The nnterp engine reads it through
-            <code>model.internals</code> and needs nothing extra; the hooks engine
-            cannot reach it.</p>
-            <p>The refusal is late. <code>locate</code> succeeds on the hooks engine —
-            <code>causalab-mini model … --engine hooks</code> lists <code>logits</code>
-            as <code>ok</code> — and the address's module is the empty string, which is
-            the model root and is not a name the hooks engine's standardized namespace
-            has. Run a document that names <code>logits</code> on
-            <code>--engine nnterp</code>.</p>
-          </div>
+          <!-- causalab_mini/engine/engines/hooks/engine.py:310-320 — selection()
+               asks the shell's row; :193 — an empty path is the model -->
+          <p>Both engines reach it. nnterp's <code>logits</code> row is the model
+          itself — an empty module path — with a <code>Selection</code> saying the
+          tensor is the value's <code>logits</code> field. The nnterp engine reads it
+          through <code>model.internals</code>; the hooks engine hooks the root and
+          applies the same <code>Selection</code>, which is the one rule it uses
+          everywhere, unwrapping a tuple's first element being another
+          <code>Selection</code> (<code>FirstIfTuple</code>) rather than a special
+          case.</p>
 
-          <!-- ran 2026-09-23, CPU, fp32 -->
+          <!-- ran 2026-09-24, CPU, fp32 -->
           <pre><code class="language-python">from causalab_mini.engine.engines.hooks import HooksEngine, engine as hooks
 from causalab_mini.plan.document import ModelSpec
 
@@ -425,15 +417,13 @@ e = HooksEngine.load(ModelSpec("hf-internal-testing/tiny-random-LlamaForCausalLM
 for name in ("lm_head", "logits"):
     a = e.locate(name)
     print(name, "module=", repr(a.module), "io=", a.io)
-    try:
-        print("   resolves to", type(hooks.resolve(a, e._names)).__name__)
-    except Exception as err:
-        print("   --", err)</code></pre>
+    print("   resolves to", type(hooks.resolve(a, e._names)).__name__,
+          "| select", hooks.selection(a, e._names))</code></pre>
 
           <pre><code>lm_head module= 'lm_head' io= output
-   resolves to Linear
+   resolves to Linear | select None
 logits module= '' io= output
-   -- component 'logits': '' does not exist on this model</code></pre>
+   resolves to LlamaForCausalLM | select Index('logits',)</code></pre>
 
           <h2 id="attention">The attention pattern, and the scores under it <a class="anchor" href="#attention" aria-label="Link to this section">#</a></h2>
 

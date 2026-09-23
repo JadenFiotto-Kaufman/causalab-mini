@@ -719,16 +719,12 @@ steered.generated    [4598,  5448, 31926]   'Handler wurden𝓝'</code></pre>
           the <em>prompt</em> frame. <code>eos</code> is a run of the generated frame, and a
           prompt does not have one.</p>
 
-          <!-- causalab_mini/ops/locate.py:64, 155, 222 — the segment vocabulary is system, user, assistant,
-               eos; nothing in the engine locates the first three -->
-          <div class="caution">
-            <span class="label">chat segments are not located</span>
-            <p><code>segment</code> also names <code>system</code>, <code>user</code> and
-            <code>assistant</code>. Only <code>eos</code> is located by a frame today —
-            <code>ops/locate.py</code> builds the <code>eos</code> segment in
-            <code>continuation</code> and no segments at all in <code>frame_of</code>, so a
-            chat-turn scope resolves to nothing on every row.</p>
-          </div>
+          <!-- causalab_mini/shapes.py:97-103 — each frame refuses the other's segment;
+               causalab_mini/data/tokens.py:56-88 fills the prompt frame's -->
+          <p>The other direction is refused too: a chat turn in the
+          <em>generated</em> frame. <code>eos</code> is the one segment name a frame
+          invents; every other one is a turn of the prompt, and a conversation names
+          it — see <a href="../positions.html#chat-turns">chat turns</a>.</p>
 
           <div class="seealso">
             <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>

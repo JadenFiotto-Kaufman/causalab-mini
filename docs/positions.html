@@ -102,11 +102,11 @@
 
           <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
 
-          <!-- ran 2026-09-23, CPU; causalab_mini/shapes.py:91-108 derives these lines off the dataclass -->
+          <!-- ran 2026-09-24, CPU; causalab_mini/shapes.py:107-123 (Where.forms) derives these lines off the dataclass -->
           <pre><code class="language-bash">$ uv run causalab-mini vocab
 …
 position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, all=bool
-                  scope: variable=str, segment=Literal['system', 'user', 'assistant', 'eos']
+                  scope: variable=str, segment=str
                   frame: Literal['prompt', 'generated']; a bare integer is {&quot;index&quot;: i}; -1 is the last token</code></pre>
 
           <p>Three positions out of one shipped document — the same spec on both sides
@@ -202,7 +202,8 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
               <tr><td>the last token of this row's entity</td><td><code>{"index": -1, "scope": {"variable": "entity"}}</code></td></tr>
               <tr><td>every token of this row's entity</td><td><code>{"all": true, "scope": {"variable": "entity"}}</code></td></tr>
               <tr><td>the last three prompt tokens</td><td><code>{"last": 3}</code></td></tr>
-              <tr><td>all tokens of the user turn</td><td><code>{"all": true, "scope": {"segment": "user"}}</code> — accepted, never located; see below</td></tr>
+              <tr><td>all tokens of the user turn</td><td><code>{"all": true, "scope": {"segment": "user"}}</code></td></tr>
+              <tr><td>the last token of the second user turn</td><td><code>{"index": -1, "scope": {"segment": "user[1]"}}</code></td></tr>
               <tr><td>decode step 2</td><td><code>{"frame": "generated", "index": 2}</code></td></tr>
               <tr><td>the last generated token</td><td><code>{"frame": "generated", "index": -1}</code></td></tr>
               <tr><td>where the model said the row's own answer</td><td><code>{"frame": "generated", "index": -1, "scope": {"variable": "said"}}</code></td></tr>
@@ -210,20 +211,71 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
             </tbody>
           </table>
 
-          <div class="caution">
-            <span class="label">chat segments are not implemented</span>
-            <!-- causalab_mini/ops/locate.py:65-67 — Frame.segments: "Empty for a plain prompt, which is every row of every document today" -->
-            <!-- causalab_mini/ops/locate.py:92-107 — frame_of builds starts/ends/texts/offsets and no segments -->
-            <!-- causalab_mini/ops/locate.py:221-224 — a segment the frame did not locate is alignment_missing -->
-            <p><code>"system"</code>, <code>"user"</code> and <code>"assistant"</code>
-            are in the schema, but nothing fills a prompt frame's segments:
-            <code>frame_of</code> builds the content spans, the text and the character
-            map, and no segments at all. A prompt-frame segment anchor therefore
-            reports <code>alignment_missing</code> on every row, and a metric over it
-            is refused with <em>a metric of nothing has no mean</em>.
-            <code>eos</code> is the one segment that is located, and only in the
-            generated frame.</p>
-          </div>
+          <h2 id="chat-turns">Chat turns <a class="anchor" href="#chat-turns" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/data/tokens.py:29-54 (rendered) — a list of
+               {"role", "content"} messages goes through apply_chat_template -->
+          <p>A segment is a run of the row's prompt that the <em>frame</em> located,
+          and in the prompt frame those are the turns of a conversation. What makes a
+          role a chat is its data: a role's field may hold a string, or a list of
+          <code>{"role", "content"}</code> messages, and a list is rendered through
+          the checkpoint's own chat template when the document is compiled. There is
+          no flag — the same shape an anchor already has, where what it looks for is
+          whatever the row carries under that name.</p>
+
+          <figure class="listing">
+            <figcaption><code>documents/data/weekdays/chat.json</code> <span class="what">— one row's <code>chat</code> column</span></figcaption>
+            <pre><code class="language-json">  &quot;chat&quot;: [
+   {
+    &quot;role&quot;: &quot;user&quot;,
+    &quot;content&quot;: &quot;Name a weekday.&quot;
+   },
+   {
+    &quot;role&quot;: &quot;assistant&quot;,
+    &quot;content&quot;: &quot;Thursday.&quot;
+   },
+   {
+    &quot;role&quot;: &quot;user&quot;,
+    &quot;content&quot;: &quot;If today is Thursday, tomorrow is&quot;
+   }
+  ],</code></pre>
+          </figure>
+
+          <!-- causalab_mini/data/tokens.py:56-88 (turns) — the span of each
+               message's content, found forward from the last one, in the
+               coordinates locate.frame_of uses -->
+          <p>The compiler records the character span of each turn's
+          <em>content</em>, in the coordinates the resolver works in, and they
+          travel in the plan. A turn is named by its own role, and by
+          <code>role[k]</code> for the k-th of that role — the bracket a field path
+          already uses for a list. The bare name is recorded only for a role that
+          speaks once; asking for it when two did is
+          <code>alignment_ambiguous</code>, the rule a variable occurring twice
+          already gets.</p>
+
+          <!-- ran 2026-09-24, CPU, fp32 -->
+          <pre><code class="language-python">forward.sample
+'[INST] Name a weekday. [/INST] Thursday. &lt;/s&gt;&lt;s&gt;[INST] If today is Thursday, tomorrow is [/INST]'
+
+forward.segments[0]
+{"user[0]": [7, 22], "assistant[0]": [31, 40], "user[1]": [55, 88], "assistant": [31, 40]}</code></pre>
+
+          <p>The template's own control tokens are between the turns and inside none
+          of them, because each content is found as itself. So a read at the last
+          token of the second user turn is the question's last token, where
+          <code>-1</code> of the whole prompt is the template's closing
+          <code>[/INST]</code>:</p>
+
+          <!-- ran 2026-09-24, CPU, fp32: documents/v2/chat_turn.json, the run's
+               own results["positions"] -->
+          <pre><code class="language-python">{"index": -1, "scope": {"segment": "user[1]"}}   ((32,), (32,), (32,), (32,))   "' is'"
+{"index": -1}                                    ((36,), (36,), (36,), (36,))   "']'"</code></pre>
+
+          <p><code>{"segment": …, "variable": …}</code> composes: the row's entity
+          searched inside the turn that asked the question, which is what makes it
+          unique when the assistant said the same word first. <code>eos</code> is the
+          one segment name a frame invents rather than reads, and it belongs to the
+          continuation; each frame refuses the other's.</p>
 
           <h2 id="anchors-which-text-on-which-row">Anchors: which text, on which row <a class="anchor" href="#anchors-which-text-on-which-row" aria-label="Link to this section">#</a></h2>
 
@@ -475,8 +527,8 @@ out/entity_patch/run.json
 out/entity_patch/iia.json
 out/entity_patch/logit_diff.json</code></pre>
 
-          <p>The whole record is on the plan the run filled in, which is where to
-          look when a number needs an account of itself. Save this as
+          <p>A <em>write's</em> record has no table to live in, and for that the
+          plan the run filled in is where to look. Save this as
           <code>where.py</code>:</p>
 
           <!-- ran 2026-09-23, CPU, fp32 -->
@@ -506,12 +558,13 @@ eligible {'iia': (True, True, True, True), 'logit_diff': (True, True, True, True
           <code>Saturday</code>: the write lands on the piece <code>day</code> where
           the read took <code>' Saturday'</code> whole. Both are at index 6.</p>
 
-          <!-- causalab_mini/plan/write.py:73-95 — positions and reason on every row of a metric table -->
-          <p>Two of those three columns reach disk. Every row of a metric table carries
-          <code>positions</code> — where the number was read — and <code>reason</code>
-          — why it was nowhere. The window is the one the metric's own read resolved
-          to, so on this document it is the <code>logits</code> read at <code>-1</code>
-          and not the entity:</p>
+          <!-- causalab_mini/plan/write.py:84-99 — positions, reason and tokens on every row of a metric table -->
+          <p>All three reach disk. Every row of a metric table carries
+          <code>positions</code> — where the number was read —
+          <code>reason</code> — why it was nowhere — and <code>tokens</code>, what
+          that window says. The window is the one the metric's own read resolved
+          to, so on this document it is the <code>logits</code> read at
+          <code>-1</code> and not the entity:</p>
 
           <figure class="listing">
             <figcaption><code>out/entity_patch/iia.json</code> <span class="what">— row 0 of 4, as written</span></figcaption>
@@ -524,6 +577,7 @@ eligible {'iia': (True, True, True, True), 'logit_diff': (True, True, True, True
   10
  ],
  &quot;reason&quot;: &quot;&quot;,
+ &quot;tokens&quot;: &quot;' is'&quot;,
  &quot;unit&quot;: &quot;fraction&quot;,
  &quot;estimand_version&quot;: &quot;match/v1&quot;,
  &quot;produced_by&quot;: &quot;67d6465731d362667958723aa1faa600aca13bd2e4f78f73b895d38972af260c&quot;

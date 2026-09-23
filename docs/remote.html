@@ -378,7 +378,9 @@ $ diff out/sweep-local/run.json out/sweep-ndif/run.json
           against the default deployment it would be the second field to differ, and
           the only one that would move a number. The whole record:</p>
 
-          <!-- provenance.py:33-41; the versions are read on the client -->
+          <!-- ran 2026-09-23, before run.json recorded the server's own
+               versions; provenance.py:41-54. The `server` block a run against
+               this stack records now is below. -->
           <pre><code class="language-json">{
  &quot;engine&quot;: &quot;NNterpEngine&quot;,
  &quot;remote&quot;: true,
@@ -393,6 +395,33 @@ $ diff out/sweep-local/run.json out/sweep-ndif/run.json
  &quot;causalab_mini&quot;: &quot;76c8c9d0c0d1f3e0b8e2eaeb09564107d1c0a70cb9e8b7d6cecab09fdc92d8a1&quot;,
  &quot;served_dtype&quot;: &quot;torch.float32&quot;
 }</code></pre>
+
+          <!-- causalab_mini/engine/provenance.py:56-77 (_served) — one
+               GET /env through nnsight's per-host cache, at the top of execute -->
+          <p>Those <code>versions</code> are read with
+          <code>importlib.metadata</code>, in the client's process, which on a
+          remote run is an assumption about a machine the record has never
+          spoken to. A remote run asks: nnsight's <code>/env</code> lookup,
+          cached per host, and what comes back is recorded under
+          <code>server</code> beside them, filtered to the same five names so
+          the two compare line for line. A server that will not answer is
+          recorded as not having answered. A local run's record is unchanged —
+          there is no server, so there is no key.</p>
+
+          <!-- ran 2026-09-24, CPU: provenance.record against nnsight's cache
+               seeded with the /env output shown above, since this box has no
+               NDIF deployment of its own -->
+          <pre><code class="language-json"> &quot;server&quot;: {
+  &quot;asked&quot;: &quot;http://localhost:5001&quot;,
+  &quot;python&quot;: &quot;3.12.14&quot;,
+  &quot;versions&quot;: {
+   &quot;torch&quot;: &quot;2.14.0+cu126&quot;,
+   &quot;transformers&quot;: &quot;5.17.0&quot;,
+   &quot;nnsight&quot;: &quot;0.8.1.dev125+g524c33fc&quot;,
+   &quot;nnterp&quot;: &quot;0.5.0.dev0+internalsaccessors&quot;,
+   &quot;pydantic&quot;: &quot;2.13.4&quot;
+  }
+ }</code></pre>
 
           <p>Ragged results come home too, not just tensors. An anchored document's
           <code>positions</code> record — each row's window, its decoded tokens and

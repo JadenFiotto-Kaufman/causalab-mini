@@ -611,32 +611,21 @@ out/logit_diff.json</code></pre>
             the base contract — says so.</li>
           </ul>
 
-          <div class="caution">
-            <span class="label">one component compiles here and cannot be reached</span>
-            <!-- causalab_mini/address.py:220 gives `logits` accessor="logits";
-                 address_module.locate leaves module="" for it, so Address.path is
-                 "" (causalab_mini/address.py:300-316). The nnterp engine reads it
-                 through model.internals (nnterp/engine.py:236-237) and never uses
-                 the path; the hooks engine walks the path
-                 (hooks/engine.py:183-202) and there is nothing to walk to.
-                 Verified 2026-09-23 on tiny-random-LlamaForCausalLM: `model
-                 --engine hooks` reports `logits ok width=32000`, and
-                 hooks.resolve(engine.locate("logits"), standardized(model))
-                 raises AddressError: component 'logits': '' does not exist on
-                 this model. Not recorded in FINDINGS.md. -->
-            <p>The <code>logits</code> component — the model's own output, which
-            on a capping family is not the head's — is addressed by an nnterp
-            accessor and no module path. The nnterp engine reads it through
-            <code>model.internals</code> and never needs the path; the hooks
-            engine walks the path, and there is nothing to walk to. So
-            <code>causalab-mini model --engine hooks</code> reports
-            <code>logits&nbsp;ok&nbsp;width=32000</code> and a document that taps
-            it compiles, but the run raises
-            <code>component 'logits': '' does not exist on this model</code>.
-            <code>lm_head</code> is the one that resolves on both — on a family
-            that caps its logits, not the same tensor. No document in
-            <code>documents/</code> taps <code>logits</code>.</p>
-          </div>
+          <!-- causalab_mini/engine/engines/hooks/engine.py:310-320 — selection()
+               reads the row's Selection off the weightless nnterp shell the
+               engine already holds; :193 — an empty module path is the model.
+               tests/test_components.py: a `logits` read is bit-equal on the two
+               engines, and on tiny-Gemma2 the hooks engine sees the cap. -->
+          <p>Where a tensor sits inside a module's value is nnterp's row to say,
+          as a <code>Selection</code> with <code>get</code> and <code>put</code>,
+          and the hooks engine asks the row rather than deciding once. Unwrapping
+          a tuple's first element is one of those
+          (<code>FirstIfTuple</code>); the model's own output, whose
+          <code>logits</code> field is the tensor, is another
+          (<code>Index("logits")</code>). So <code>logits</code> — the component
+          that on a capping family is not <code>lm_head</code> — reads the same
+          bits on both engines, and the hooks engine sees Gemma-2's cap because
+          it is reading the model's output rather than reproducing it.</p>
 
           <!-- causalab_mini/engine/engines/hooks/engine.py:117-153; FINDINGS.md §6.7 -->
           <p>One thing is harder here than under tracing. The nnterp engine's

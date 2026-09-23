@@ -98,9 +98,9 @@
           the last token of layer 0 of a tiny random-weight Llama.
           <a href="documents.html">Documents</a> is the page for what is in it.</p>
 
-          <!-- ran 2026-09-23, repo root, CPU, fp32, CUDA_VISIBLE_DEVICES= HF_HUB_OFFLINE=1 -->
+          <!-- ran 2026-09-24, repo root, CPU, fp32, CUDA_VISIBLE_DEVICES= HF_HUB_OFFLINE=1 -->
           <pre><code class="language-bash">$ uv run causalab-mini validate documents/v2/patching.json
-ok: documents/v2/patching.json is a valid plan-shaped document
+ok: documents/v2/patching.json is a valid plan-shaped document, 1 step
 
 $ uv run causalab-mini explain documents/v2/patching.json
 &lt;root&gt;: Plan
@@ -134,7 +134,7 @@ out/cli/patch/logit_diff.json</code></pre>
               <tr><td><code>model</code></td><td>a HuggingFace key</td><td>the model's config</td><td>layers, padding side, and which components resolve, with widths</td></tr>
               <tr><td><code>tokens</code></td><td>a key and one or more strings</td><td>the tokenizer</td><td>how many tokens each string is</td></tr>
               <tr><td><code>data</code></td><td>a dataset ref</td><td>the data root</td><td>rows, columns, empty cells, splits, one sample</td></tr>
-              <tr><td><code>validate</code></td><td>a document</td><td>nothing</td><td>whether it parses, and in which of the two formats</td></tr>
+              <tr><td><code>validate</code></td><td>a document</td><td>a meta shell</td><td>whether it compiles, and in which of the two formats</td></tr>
               <tr><td><code>explain</code></td><td>a document</td><td>the model's config</td><td>the compiled plan</td></tr>
               <tr><td><code>run</code></td><td>a document</td><td>the weights</td><td>the paths it wrote</td></tr>
             </tbody>
@@ -275,42 +275,46 @@ weekdays/train: 4 rows
   splits:  all
 …</code></pre>
 
-          <h2 id="checking-a-document-two-different-questions">Checking a document: two different questions <a class="anchor" href="#checking-a-document-two-different-questions" aria-label="Link to this section">#</a></h2>
+          <h2 id="checking-a-document-two-different-questions">Checking a document: one question, printed or not <a class="anchor" href="#checking-a-document-two-different-questions" aria-label="Link to this section">#</a></h2>
 
-          <!-- causalab_mini/cli.py:198-203 — validate calls Spec.model_validate or
-               Document.from_json on each point and nothing else -->
-          <p><code>validate</code> parses. It lowers the sweep wrappers, hands each
-          point to its front end, and says which of the two formats the file is in —
-          plan-shaped if it has <code>steps</code>, protocol otherwise. It loads no
-          model and reads no rows, so <code>--data-root</code> and <code>--engine</code>
-          are accepted and unused.</p>
+          <!-- causalab_mini/cli.py:289-308 — validate calls _compile (:310), the
+               same function explain and run call, with SHAPE_ONLY -->
+          <p><code>validate</code> and <code>explain</code> do the same work.
+          Both load the model as a meta-device shell — the config, the module
+          tree, the tokenizer, no weights — resolve every address, tokenize
+          every prompt and compile the plan. <code>explain</code> prints it;
+          <code>validate</code> says whether it compiled, and in which of the
+          two formats the file is written. Both take <code>--data-root</code>
+          and <code>--engine</code>, and both use them.</p>
 
+          <!-- ran 2026-09-24, CPU, fp32 -->
           <pre><code class="language-bash">$ uv run causalab-mini validate documents/v2/patching.json
-ok: documents/v2/patching.json is a valid plan-shaped document
+ok: documents/v2/patching.json is a valid plan-shaped document, 1 step
 
 $ uv run causalab-mini validate documents/pos_sweep_cpu.json
-ok: documents/pos_sweep_cpu.json is a valid protocol document</code></pre>
+ok: documents/pos_sweep_cpu.json is a valid protocol document, 3 steps</code></pre>
 
-          <!-- causalab_mini/cli.py:217-219 and causalab_mini/plan/explain.py:1-7 -->
-          <p><code>explain</code> compiles. It loads the model as a meta-device shell —
-          the config, the module tree, the tokenizer, no weights — resolves every
-          address, tokenizes every prompt, and prints the plan: each forward with its
-          row and token counts, each tap with its position spec, and what would be
-          saved. It is the verb that catches a document that parses but cannot run.</p>
+          <p>So a misspelled component fails at <code>validate</code>: a
+          component name is a question about a model, and this verb has
+          one.</p>
 
-          <p>A misspelled component passes <code>validate</code> and fails
-          <code>explain</code>, because a component name is a question about a model
-          and <code>validate</code> has not got one:</p>
-
-          <!-- ran 2026-09-23; out/cli/typo.json is documents/v2/patching.json with
+          <!-- ran 2026-09-24; out/cli/typo.json is documents/v2/patching.json with
                sites.target.component changed to "block_ouput" -->
           <pre><code class="language-bash">$ uv run causalab-mini validate out/cli/typo.json
-ok: out/cli/typo.json is a valid plan-shaped document
+AddressError: component 'block_ouput' has no address here, and this model's internals have no accessor of that name either. Mini's are ['attention_input_norm', 'attention_key', 'attention_output', 'attention_premix', 'attention_probs', 'attention_query', 'attention_scores', 'attention_z', 'block_input', 'block_mid', 'block_output', 'embeddings', 'input_ids', 'lm_head', 'ln_final', 'logits', 'mlp_activation', 'mlp_input', 'mlp_input_norm', 'mlp_neuron_output', 'mlp_output']; add one to a model with RenameConfig(addresses={...})</code></pre>
 
-$ uv run causalab-mini explain out/cli/typo.json
-Traceback (most recent call last):
-…
-causalab_mini.address.AddressError: component 'block_ouput' has no address here, and this model's internals have no accessor of that name either. Mini's are ['attention_input_norm', 'attention_key', 'attention_output', 'attention_premix', 'attention_probs', 'attention_query', 'attention_scores', 'attention_z', 'block_input', 'block_mid', 'block_output', 'embeddings', 'input_ids', 'lm_head', 'ln_final', 'logits', 'mlp_activation', 'mlp_input', 'mlp_input_norm', 'mlp_neuron_output', 'mlp_output']; add one to a model with RenameConfig(addresses={...})</code></pre>
+          <!-- causalab_mini/cli.py:56-66 — REFUSALS; caught in main at :106-112 -->
+          <p>A refusal is a message on stderr and exit 1, not a traceback. The
+          entry point catches this package's own error types by name —
+          <code>PlanError</code>, <code>DocumentError</code>,
+          <code>AddressError</code>, <code>TokenError</code>,
+          <code>LocateError</code>, <code>DataError</code>,
+          <code>EngineError</code>, pydantic's
+          <code>ValidationError</code> and nnterp's
+          <code>RenamingError</code> — and prints what they say. Nothing
+          generic is caught, so a missing file is still a traceback.
+          <code>--traceback</code>, before the verb like
+          <code>--json</code>, restores the whole thing.</p>
 
           <h2 id="run"><code>run</code> <a class="anchor" href="#run" aria-label="Link to this section">#</a></h2>
 
@@ -361,12 +365,15 @@ causalab_mini.address.AddressError: component 'block_ouput' has no address here,
           module a tap names. A hook fires at a module's boundary and sees nothing
           inside it, so the four interior components — the query, the key, the scores
           and the attention output before the out-projection — are refused by name
-          rather than approximated. <code>model --engine hooks</code> is how you find
-          that out without running anything:</p>
+          rather than approximated. Everything else it reaches, including
+          <code>logits</code>: a hook is handed the module's whole value and nnterp's
+          row says where the tensor is inside it, which for the model's own output is
+          the <code>logits</code> field. <code>model --engine hooks</code> is how you
+          find out without running anything:</p>
 
-          <!-- ran 2026-09-23, repo root -->
+          <!-- ran 2026-09-24, repo root -->
           <pre><code class="language-bash">$ uv run causalab-mini model hf-internal-testing/tiny-random-LlamaForCausalLM --engine hooks
-hf-internal-testing/tiny-random-LlamaForCausalLM via hooks: 2 layers, padding_side=left
+hf-internal-testing/tiny-random-LlamaForCausalLM via hooks: 2 layers, sdpa attention, padding_side=left
   attention_query    --   component 'attention_query' is an interior — one argument of one call inside a module's forward — and a forward hook only sees the module's boundary. It is addressed through nnsight's `.source`, which has no hooks equivalent; run this document on the nnterp engine.
 …
   block_output       ok   width=16
@@ -603,7 +610,7 @@ out/cli/das/rot.safetensors</code></pre>
           <code>documents/v2/entity_patch.json</code> run against a data root whose row
           1 has no <code>cf_answer</code>:</p>
 
-          <!-- ran 2026-09-23; out/cli/holed/logit_diff.json, its first two rows -->
+          <!-- ran 2026-09-24; out/cli/holed/logit_diff.json, its first two rows -->
           <pre><code class="language-json">{
  "example_id": "0",
  "metric": "logit_diff",
@@ -613,6 +620,7 @@ out/cli/das/rot.safetensors</code></pre>
   10
  ],
  "reason": "",
+ "tokens": "' is'",
  "unit": "logit",
  "estimand_version": "logit_diff/v1",
  "produced_by": "67d6465731d362667958723aa1faa600aca13bd2e4f78f73b895d38972af260c"
@@ -626,6 +634,7 @@ out/cli/das/rot.safetensors</code></pre>
   10
  ],
  "reason": "",
+ "tokens": "' is'",
  "unit": "logit",
  "estimand_version": "logit_diff/v1",
  "produced_by": "67d6465731d362667958723aa1faa600aca13bd2e4f78f73b895d38972af260c"
@@ -647,6 +656,8 @@ out/cli/das/rot.safetensors</code></pre>
               <tr><td><code>positions</code></td><td>the absolute token indices, in the padded batch, that this row's number was read at. <code>null</code> when the pass has no text anchor and no cut of the continuation — then the document already fixed the integers and the run has nothing to report</td></tr>
               <!-- causalab_mini/ops/locate.py:39 (REASONS), :224-236, :267-286 -->
               <tr><td><code>reason</code></td><td>why <code>positions</code> is empty when it is. Three of them: <code>alignment_missing</code>, the anchor text or the segment is not in this row; <code>alignment_ambiguous</code>, it is there more than once, and scoping the anchor is what makes it one; <code>out_of_range</code>, the cut falls outside the run it cuts. <code>""</code> when the window was found</td></tr>
+              <!-- causalab_mini/plan/write.py:96, causalab_mini/ops/locate.py:290-300 (tokens_of) -->
+              <tr><td><code>tokens</code></td><td>what those positions say, decoded — the answer to "of what token?". <code>"'day'"</code> where the window is the last piece of <code>" Thursday"</code>. Empty for a row with no window, and for a pass that reports nothing</td></tr>
               <!-- causalab_mini/ops/metrics.py:75-81 -->
               <tr><td><code>unit</code></td><td><code>fraction</code>, <code>logit</code>, <code>nat</code> or <code>probability</code>, by metric kind</td></tr>
               <tr><td><code>estimand_version</code></td><td>which definition of the metric produced the number: <code>match/v1</code>, <code>logit_diff/v1</code>, and so on</td></tr>
@@ -804,7 +815,8 @@ causalab_mini.plan.plan.PlanError: write 'patch' has nothing to write on row(s) 
               <li><a href="ops.html">Reads, writes, metrics</a> — the metric kinds
                   behind <code>unit</code> and <code>estimand_version</code></li>
               <li><a href="positions.html">Positions</a> — where
-                  <code>positions</code> and <code>reason</code> come from</li>
+                  <code>positions</code>, <code>reason</code> and
+                  <code>tokens</code> come from</li>
             </ul>
           </div>
 

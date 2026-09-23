@@ -259,7 +259,7 @@
         &quot;saves&quot;: [
           {
             &quot;value&quot;: &quot;iia&quot;,
-            &quot;file_path&quot;: &quot;iia.json&quot;
+            &quot;file_path&quot;: &quot;held_out_iia.json&quot;
           }
         ]
       }
@@ -441,7 +441,7 @@ Q = (I − A)⁻¹ (I + A) E  orthonormal by construction</code></pre>
             forward &#x27;patched&#x27; on &#x27;base&#x27;  (10 rows x 8 tokens)
               write &#x27;patch&#x27; at block_output[8] pos={index:-4} swap(v_cf) via &#x27;rot&#x27;
               read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
-        evaluation: Observe  metrics=[&#x27;iia/match&#x27;, &#x27;logit_diff/logit_diff&#x27;, &#x27;ce/cross_entropy&#x27;]  saves=[&#x27;iia.json&#x27;]
+        evaluation: Observe  metrics=[&#x27;iia/match&#x27;, &#x27;logit_diff/logit_diff&#x27;, &#x27;ce/cross_entropy&#x27;]  saves=[&#x27;held_out_iia.json&#x27;]
             forward &#x27;original&#x27; on &#x27;counterfactual&#x27;  (12 rows x 8 tokens)
               read  &#x27;v_cf&#x27; at block_output[8] pos={index:-4} via &#x27;rot&#x27;
             forward &#x27;patched&#x27; on &#x27;base&#x27;  (12 rows x 8 tokens)
@@ -482,30 +482,30 @@ ok: documents/real/weekdays_das.json is a valid plan-shaped document</code></pre
 out/das_real/document.json
 out/das_real/run.json
 out/das_real/k=1/document.json
-out/das_real/k=1/iia.json
+out/das_real/k=1/held_out_iia.json
 out/das_real/k=1/iia.json
 out/das_real/k=1/logit_diff.json
 out/das_real/k=1/rot.safetensors
 …
 out/das_real/k=64/rot.safetensors
 
-real	11m36.546s</code></pre>
+real	10m0.438s</code></pre>
 
           <p>Four fits, 240 updates and 80 eval passes on a 1B-parameter model in
-          fp32, on twelve CPU cores, in twelve minutes. The recorded A100 run of the
+          fp32, on twelve CPU cores, in ten minutes. The recorded A100 run of the
           same document took 61 seconds, and 36 seconds through a self-hosted NDIF
           (<code>documents/real/README.md</code>).</p>
 
           <!-- causalab_mini/plan/write.py:28 — a Plan gets a directory; any other step
                writes into its enclosing plan's -->
           <div class="note">
-            <span class="label"><code>k=1/iia.json</code> is listed twice</span>
-            <p>Both the fit's eval pass and the <code>score</code> step save a table
-            called <code>iia.json</code>, and a fit's eval is a step rather than a plan,
-            so it writes into its enclosing plan's directory rather than one of its own.
-            The two saves collide and the later one — <code>score</code>'s — is what is
-            on disk. Both are the same 12 held-out rows here, so nothing is lost, but
-            two saves in one plan want two file names.</p>
+            <span class="label">two tables, two names</span>
+            <p>A fit's eval pass is a step rather than a plan, so it writes into its
+            enclosing plan's directory rather than one of its own. It and the
+            <code>score</code> step both save a table of <code>iia</code>, so they
+            need two file names: <code>held_out_iia.json</code> and
+            <code>iia.json</code>. Two saves with one name in one plan do not
+            collide loudly — the later one is what is on disk.</p>
           </div>
 
           <h2 id="the-rank-curve">The rank curve <a class="anchor" href="#the-rank-curve" aria-label="Link to this section">#</a></h2>
