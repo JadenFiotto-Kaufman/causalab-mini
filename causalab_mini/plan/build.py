@@ -496,31 +496,11 @@ class _Experiment:
         return cls(
             fields={role: one.field for role, one in spec.roles.items()},
             reads=dict(intervention.reads),
-            writes={
-                # a write's operand is a name whichever way it was written: a
-                # read of this pass, or an output published before it
-                name: _WriteSpec(
-                    site=w.site, pos=w.pos, mechanism=w.mechanism,
-                    operand=w.operand_name, featurizer=w.featurizer, params=dict(w.params),
-                    features=None if w.features is None else tuple(w.features),
-                )
-                for name, w in intervention.writes.items()
-            },
+            writes=dict(intervention.writes),
             models=dict(intervention.models),
             metrics=dict(intervention.metrics),
             decode=intervention.decode,
         )
-
-
-@dataclass(frozen=True)
-class _WriteSpec:
-    site: str
-    pos: Any
-    mechanism: str
-    operand: str | float | None
-    featurizer: str
-    params: dict[str, float]
-    features: tuple[int, ...] | None = None
 
 
 def build_request(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Plan:
@@ -875,6 +855,14 @@ def _take(rows: dict[str, list[rows_module.Row]], picked: list[int]) -> dict[str
     return {role: [table[index] for index in picked] for role, table in rows.items()}
 
 
+def _operand(write: Any) -> str | float | None:
+    """A write's operand as the compiler carries it: a name for a read of
+    this pass or for an output published before it, the number itself for a
+    literal. The plan-shaped format spells a reference as an object and the
+    protocol's as a bare name, and this is the one place that differs."""
+    return getattr(write, "operand_name", None) or write.operand
+
+
 def _schedule(experiment: _Experiment) -> list[tuple[str, str]]:
     """The forwards, as (model, input) pairs, in execution order.
 
@@ -891,7 +879,7 @@ def _schedule(experiment: _Experiment) -> list[tuple[str, str]]:
     for name, spec in experiment.models.items():
         units.setdefault((name, spec.input), set())
         for write in spec.writes:
-            operand = experiment.writes[write].operand
+            operand = _operand(experiment.writes[write])
             if isinstance(operand, str):  # a literal or nothing orders no forward
                 units[(name, spec.input)].add(operand)
 
@@ -1004,11 +992,11 @@ def _forward(
                 WriteOp(
                     name=write_name,
                     at=_selection(spec.pos, anchors(spec.pos), experiment.features.get(spec.site)),
-                    operand=spec.operand,
+                    operand=_operand(spec),
                     mechanism=spec.mechanism,
                     featurizer=spec.featurizer,
                     params=dict(getattr(spec, "params", {})),
-                    features=getattr(spec, "features", None),
+                    features=None if getattr(spec, "features", None) is None else tuple(spec.features),
                 )
             )
     reads: dict[tuple[Address, Any], list[ReadOp]] = {}

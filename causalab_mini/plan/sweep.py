@@ -55,7 +55,7 @@ def points(raw: Json) -> tuple[tuple[str, Json], ...]:
     An unswept document is one point labelled `""`, which is how a caller
     tells the two apart without asking.
     """
-    found = _wrappers(raw)
+    found = wrappers(raw)
     if not found:
         return (("", raw),)
     axes = []
@@ -126,14 +126,19 @@ def _values(spelled: Any, path: Path) -> list[Any]:
     )
 
 
-def _wrappers(node: Any, path: Path = ()) -> list[Path]:
-    """Every `{"sweep": …}` in the document, by path, in reading order."""
+def wrappers(node: Any, path: Path = ()) -> list[Path]:
+    """Every `{"sweep": …}` in the document, by path, in reading order.
+
+    Both front ends call this to refuse a document that still has one: a
+    `Document` and a `Spec` are each one point, so a wrapper reaching either
+    of them has not been lowered.
+    """
     if isinstance(node, dict):
         if "sweep" in node and set(node) <= {"sweep", "as"}:
             return [path]
-        return [one for key, value in node.items() for one in _wrappers(value, (*path, key))]
+        return [one for key, value in node.items() for one in wrappers(value, (*path, key))]
     if isinstance(node, list):
-        return [one for index, value in enumerate(node) for one in _wrappers(value, (*path, index))]
+        return [one for index, value in enumerate(node) for one in wrappers(value, (*path, index))]
     return []
 
 

@@ -188,11 +188,9 @@ Indices = tuple[int, ...]
 #: One vocabulary id, per row of a batch — what a metric column resolved to.
 TokenIds = tuple[int, ...]
 
-#: One encoded prompt: the token ids of a single sequence, padded.
-Tokens = tuple[int, ...]
-
-#: A padded batch of encoded prompts, or its attention mask.
-TokenRows = tuple[Tokens, ...]
+#: A padded batch of encoded prompts, or its attention mask: one row is one
+#: encoded prompt's token ids.
+TokenRows = tuple[tuple[int, ...], ...]
 
 #: One label, per row — the `example_id` column, or the row index as a string.
 ExampleIds = tuple[str, ...]

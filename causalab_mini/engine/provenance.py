@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import hashlib
 import importlib.metadata
-import json
 import pathlib
 from typing import Any
 
@@ -51,14 +50,6 @@ def code_digest() -> str:
         digest.update(str(path.relative_to(root)).encode())
         digest.update(path.read_bytes())
     return digest.hexdigest()
-
-
-def document_digest(source: dict[str, Any]) -> str:
-    """sha256 of the document with authoring metadata dropped."""
-    body = {key: value for key, value in source.items() if key != "header"}
-    return hashlib.sha256(
-        json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
 
 
 def _version(name: str) -> str:

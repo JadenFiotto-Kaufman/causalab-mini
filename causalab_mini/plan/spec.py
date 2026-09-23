@@ -35,7 +35,9 @@ from typing import Annotated, Any, Literal, Union
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
 
 from .. import address
+from ..ops.metrics import COLUMNS as METRIC_COLUMNS
 from ..shapes import Where
+from . import sweep as sweep_module
 
 
 class Node(BaseModel):
@@ -286,35 +288,18 @@ class TokenProb(Node):
     token_form: Literal["space_prefixed"] = "space_prefixed"
 
 
-for _cls, _columns in (
-    (Match, ("expected",)),
-    (LogitDiff, ("a", "b")),
-    (CrossEntropy, ("target",)),
-    (TokenLogit, ("token",)),
-    (TokenProb, ("token",)),
-):
+for _cls in (Match, LogitDiff, CrossEntropy, TokenLogit, TokenProb):
     # The data columns this kind names, in the order `ops.metrics.compute`
-    # takes them — the one thing the compiler needs and the shape of the
-    # class already says.
+    # takes them — read off the one table, so a class and the `compute` it
+    # feeds cannot disagree about which column is which.
     _cls.columns = property(  # type: ignore[attr-defined]
-        lambda self, _columns=_columns: tuple(getattr(self, one) for one in _columns)
+        lambda self: tuple(getattr(self, one) for one in METRIC_COLUMNS[self.kind])
     )
 
 
 Metric = Annotated[
     Union[Match, LogitDiff, CrossEntropy, TokenLogit, TokenProb], Field(discriminator="kind")
 ]
-
-#: Which of a metric's own fields name data columns, in the order
-#: `ops.metrics.compute` takes them.
-METRIC_COLUMNS = {
-    "match": ("expected",),
-    "logit_diff": ("a", "b"),
-    "cross_entropy": ("target",),
-    "token_logit": ("token",),
-    "token_prob": ("token",),
-}
-
 
 class Intervention(Node):
     """The experiment, declared once. Every step runs *this*, over its own
@@ -480,7 +465,7 @@ class Spec(Node):
     @model_validator(mode="before")
     @classmethod
     def _not_swept(cls, raw: Any) -> Any:
-        if _swept(raw):
+        if sweep_module.wrappers(raw):
             raise ValueError(
                 "this document has a {'sweep': …} wrapper in it. A sweep is lowered "
                 "before a document is validated — build_request does this, and "
@@ -762,14 +747,6 @@ class Spec(Node):
                     "deliberate untrained baseline, declare a second featurizer that "
                     "no fit names",
                 )
-
-
-def _swept(node: Any) -> bool:
-    if isinstance(node, dict):
-        return ("sweep" in node and set(node) <= {"sweep", "as"}) or any(_swept(value) for value in node.values())
-    if isinstance(node, list):
-        return any(_swept(value) for value in node)
-    return False
 
 
 def _refuse(condition: object, message: str) -> None:

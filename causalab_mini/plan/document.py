@@ -68,13 +68,8 @@ IDENTITY = "identity"
 # A metric kind's operands, in the order metrics.compute() takes them. The
 # values are *column names*: the answer is per row, so the document names a
 # column and the table carries the string.
-METRIC_COLUMNS = {
-    "match": ("expected",),
-    "logit_diff": ("a", "b"),
-    "cross_entropy": ("target",),
-    "token_logit": ("token",),
-    "token_prob": ("token",),
-}
+from ..ops.metrics import COLUMNS as METRIC_COLUMNS  # noqa: E402
+from . import sweep  # noqa: E402
 
 # Sections that exist in the protocol and that this slice does not implement.
 # Named here so the refusal can say which one.
@@ -570,7 +565,7 @@ class Document:
         )
 
         _check(
-            not _swept(raw),
+            not sweep.wrappers(raw),
             "this document has a {'sweep': …} wrapper in it. A sweep is lowered "
             "before a document is built — use plan.build_request, which compiles "
             "one plan per point",
@@ -639,16 +634,6 @@ class Document:
             saves=saves,
             digest=digest(raw),
         )
-
-
-def _swept(node: Any) -> bool:
-    """Whether a sweep wrapper is anywhere in the raw document. A `Document`
-    is one point, so one reaching here has not been lowered."""
-    if isinstance(node, dict):
-        return ("sweep" in node and set(node) <= {"sweep", "as"}) or any(_swept(value) for value in node.values())
-    if isinstance(node, list):
-        return any(_swept(value) for value in node)
-    return False
 
 
 def digest(raw: Json) -> str:
