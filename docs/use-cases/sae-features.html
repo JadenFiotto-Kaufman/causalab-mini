@@ -75,24 +75,427 @@
           <header>
             <p class="eyebrow">Use case</p>
             <h1>SAE features</h1>
-            <p class="lede">SAE feature ablation: a loaded dictionary, one latent, and the error term.</p>
+            <p class="lede">A loaded dictionary as a featurizer: reading latents, zeroing one
+            of them, and the error term that keeps the rest of the activation intact.</p>
           </header>
 
-          <div class="stub">
-            <span class="label">in progress</span>
-            <p>This page has not been written yet. It is one page of a set being
-            filled in; the rest of the site is live.</p>
-            <p>What it will cover:</p>
+          <!-- causalab_mini/ops/featurizer.py:137 — class Encoder -->
+          <p>An <code>sae</code> featurizer is an encoder/decoder pair loaded from a
+          safetensors bundle. It is the one featurizer in mini with an <strong>error
+          term</strong>: what the dictionary does not explain is carried around the write and
+          put back, so a write changes the features and nothing else.</p>
+
+          <!-- causalab_mini/plan/spec.py:115 — LOADED_ONLY -->
+          <p>Nothing here trains one. <code>sae</code>, <code>linear</code> and
+          <code>pca</code> are loaded-only kinds: a document that declares one without a
+          <code>file_path</code> is refused, and a fit may not name one. The dictionary comes
+          from somewhere else — sae_lens, dictionary_learning, your own training run — and
+          mini's job is to put it in the forward pass and check that it belongs there.</p>
+
+          <h2>At a glance</h2>
+
+          <!-- ran 2026-09-23, CPU, fp32; 37 lines, the first point and the last -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/sae_feature_ablation.json
+&lt;root&gt;: Plan
+  features=0: Plan
+    featurizers: Featurizers
+        dictionary: sae k=32 d=16 loaded from documents/artifacts/sae.safetensors trained=False
+    ablate: Observe  metrics=[&#x27;logit_diff/logit_diff&#x27;, &#x27;p_answer/token_prob&#x27;]  outputs=[&#x27;active=latents&#x27;]  saves=[&#x27;zeroed.json&#x27;, &#x27;p_answer.json&#x27;]
+        forward &#x27;original&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+          read  &#x27;latents&#x27; at block_output[0] pos={index:-1} via &#x27;dictionary&#x27;
+        forward &#x27;zeroed&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+          write &#x27;ablate&#x27; at block_output[0] pos={index:-1} swap(0.0) via &#x27;dictionary&#x27; on its features [0]
+          read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
+  …
+  features=3: Plan
+    featurizers: Featurizers
+        dictionary: sae k=32 d=16 loaded from documents/artifacts/sae.safetensors trained=False
+    ablate: Observe  metrics=[&#x27;logit_diff/logit_diff&#x27;, &#x27;p_answer/token_prob&#x27;]  outputs=[&#x27;active=latents&#x27;]  saves=[&#x27;zeroed.json&#x27;, &#x27;p_answer.json&#x27;]
+        forward &#x27;original&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+          read  &#x27;latents&#x27; at block_output[0] pos={index:-1} via &#x27;dictionary&#x27;
+        forward &#x27;zeroed&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+          write &#x27;ablate&#x27; at block_output[0] pos={index:-1} swap(0.0) via &#x27;dictionary&#x27; on its features [3]
+          read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;</code></pre>
+
+          <p>Four points, one per ablated latent. Two things on those lines are what this page
+          is about: <code>via 'dictionary'</code>, which says the read and the write happen in
+          the dictionary's space rather than the residual stream's, and <code>on its features
+          [0]</code>, which says the write touches one coordinate of that space.</p>
+
+          <h2>The document</h2>
+
+          <figure class="listing">
+            <figcaption><code>documents/v2/sae_feature_ablation.json</code> <span class="what">— the document this page runs, verbatim</span></figcaption>
+            <pre><code class="language-json">{
+  &quot;header&quot;: {
+    &quot;description&quot;: &quot;SAE feature ablation. The residual stream at layer 0 is read through a loaded sparse autoencoder \u2014 an encoder/decoder pair with an ERROR TERM, so what the dictionary does not explain is put back exactly \u2014 and one latent at a time is set to zero (`features: [j]`, swept). The `clean` step is the same model with nothing written; an ablated latent that was already zero on these prompts changes nothing, which is the point of doing this in feature space. The bundle here is a random 16-&gt;32 dictionary, a fixture: the mechanics are real, the latents mean nothing.&quot;
+  },
+  &quot;model&quot;: {
+    &quot;key&quot;: &quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;,
+    &quot;revision&quot;: &quot;9fb191250dd56d0ba7ec9785a025ed29c03d5998&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;
+  },
+  &quot;roles&quot;: {
+    &quot;base&quot;: {
+      &quot;field&quot;: &quot;input&quot;
+    }
+  },
+  &quot;sites&quot;: {
+    &quot;target&quot;: {
+      &quot;component&quot;: &quot;block_output&quot;,
+      &quot;layers&quot;: [
+        0
+      ]
+    },
+    &quot;head&quot;: {
+      &quot;component&quot;: &quot;lm_head&quot;
+    }
+  },
+  &quot;featurizers&quot;: {
+    &quot;dictionary&quot;: {
+      &quot;kind&quot;: &quot;sae&quot;,
+      &quot;file_path&quot;: &quot;documents/artifacts/sae.safetensors&quot;
+    }
+  },
+  &quot;interventions&quot;: {
+    &quot;ablate&quot;: {
+      &quot;reads&quot;: {
+        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;zeroed&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        },
+        &quot;latents&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;original&quot;,
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;featurizer&quot;: &quot;dictionary&quot;
+        }
+      },
+      &quot;writes&quot;: {
+        &quot;ablate&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;mechanism&quot;: &quot;swap&quot;,
+          &quot;operand&quot;: 0.0,
+          &quot;featurizer&quot;: &quot;dictionary&quot;,
+          &quot;features&quot;: {
+            &quot;sweep&quot;: [
+              [
+                0
+              ],
+              [
+                1
+              ],
+              [
+                2
+              ],
+              [
+                3
+              ]
+            ]
+          }
+        }
+      },
+      &quot;models&quot;: {
+        &quot;zeroed&quot;: {
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;writes&quot;: [
+            &quot;ablate&quot;
+          ]
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;logit_diff&quot;: {
+          &quot;kind&quot;: &quot;logit_diff&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;a&quot;: &quot;cf_answer&quot;,
+          &quot;b&quot;: &quot;base_answer&quot;
+        },
+        &quot;p_answer&quot;: {
+          &quot;kind&quot;: &quot;token_prob&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;token&quot;: &quot;cf_answer&quot;
+        }
+      }
+    }
+  },
+  &quot;steps&quot;: {
+    &quot;ablate&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;intervention&quot;: &quot;ablate&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;zeroed.json&quot;
+        },
+        {
+          &quot;value&quot;: &quot;p_answer&quot;,
+          &quot;file_path&quot;: &quot;p_answer.json&quot;
+        }
+      ],
+      &quot;outputs&quot;: {
+        &quot;active&quot;: {
+          &quot;read&quot;: &quot;latents&quot;
+        }
+      }
+    }
+  }
+}</code></pre>
+          </figure>
+
+          <p>The parts that are not in an ordinary patching document:</p>
+
+          <ul>
+            <li><code>featurizers.dictionary</code> declares the parameter set:
+            <code>kind: "sae"</code> and the path to its bundle. No <code>k</code> — for an
+            encoder the rank comes from the bundle's own shapes.</li>
+            <li>the read <code>latents</code> carries <code>"featurizer": "dictionary"</code>,
+            so what it returns is the feature vector, not the activation.</li>
+            <li>the write <code>ablate</code> carries the same featurizer and
+            <code>"features": {"sweep": [[0], [1], [2], [3]]}</code> — which coordinates of
+            that space the mechanism acts on. The mechanism is <code>swap</code> with operand
+            <code>0.0</code>: set those latents to zero.</li>
+            <li><code>steps.ablate.outputs.active</code> publishes the read for any later
+            step in the same plan. This document has one step, so nothing consumes it.</li>
+          </ul>
+
+          <h2>What the bundle has to be</h2>
+
+          <!-- causalab_mini/ops/featurizer.py:151 — SAELens's names and orientations -->
+          <p>The tensor names and orientations are sae_lens's. A missing <code>W_dec</code>
+          means tied weights, <code>W_enc</code> transposed.</p>
+
+          <table>
+            <thead><tr><th>tensor</th><th>shape</th><th></th></tr></thead>
+            <tbody>
+              <tr><td><code>W_enc</code></td><td><code>(d, k)</code></td><td>required</td></tr>
+              <tr><td><code>W_dec</code></td><td><code>(k, d)</code></td><td>required for <code>sae</code>, optional for <code>linear</code></td></tr>
+              <tr><td><code>b_enc</code></td><td><code>(k,)</code></td><td>optional, zeros</td></tr>
+              <tr><td><code>b_dec</code></td><td><code>(d,)</code></td><td>optional, zeros</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/plan/build.py:340 — _load_featurizer; :386 returns
+               safetensors.torch.save(tensors) -->
+          <p><code>d</code> is not read from the file: it is the width of the site the
+          featurizer acts at, worked out on the client from the model, and the bundle's
+          <code>W_enc</code> must match it. <code>k</code> is <code>W_enc.shape[-1]</code>,
+          and it may exceed <code>d</code> — a dictionary is overcomplete. The one in
+          <code>documents/artifacts/</code> is 16 → 32 for a 16-wide tiny Llama.</p>
+
+          <!-- causalab_mini/plan/plan.py:194 — FeaturizerOp.weight: bytes | None -->
+          <p>The compiler reads the file, checks it, and re-serializes the tensors into the
+          plan as <strong>bytes</strong> — <code>safetensors.torch.save(tensors)</code>. That
+          is the only tensor-shaped thing a fresh plan carries, and it is an input of the
+          experiment in the same way the token ids are: it pickles, it compares, it ships to a
+          server, and at four bytes a number it is a format a real dictionary of tens of
+          millions of parameters fits in. The run turns the bytes back into tensors once, when
+          the featurizers for a step are built.</p>
+
+          <h3>The header is checked against the document</h3>
+
+          <!-- causalab_mini/plan/build.py:307 — _identity: the stamp a bundle carries and the
+               expectation a load is checked against, one function so they cannot disagree -->
+          <p>A dictionary is a grid of numbers and nothing in the numbers says which model or
+          which layer it came from. A bundle mini wrote carries that in its safetensors
+          header — model key, revision, dtype, component, layer, kind, <code>k</code>,
+          <code>d</code> — and a load is refused by the key that disagrees:</p>
+
+          <!-- ran 2026-09-23: documents/artifacts/sae.safetensors copied to
+               out/sae_layer1.safetensors with a stamp whose `layer` is "1", and loaded by a
+               copy of the document whose site is still layer 0. Traceback trimmed. -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain out/sae_stamped_mismatch.json
+Traceback (most recent call last):
+  …
+causalab_mini.plan.plan.PlanError: featurizer &#x27;dictionary&#x27;: &#x27;out/sae_layer1.safetensors&#x27; is not this featurizer — layer: bundle says &#x27;1&#x27;, document says &#x27;0&#x27;</code></pre>
+
+          <div class="caution">
+            <span class="label">a published dictionary has no stamp</span>
+            <p>Only keys that are <em>present</em> in the bundle's header are checked. A
+            dictionary from anywhere but mini has none of them, and then the shapes are all
+            there is: its <code>d</code> must be this site's width, and that is the whole
+            check. The fixture used on this page is in that class — its header holds one
+            free-text note — so moving the document's site to layer 1 loads the same bundle
+            without complaint. If you bring your own SAE, the layer it was trained at is
+            yours to get right.</p>
+          </div>
+
+          <h2>Reading feature activations</h2>
+
+          <p>A read with a featurizer returns <code>featurize(x)</code>, the feature vector.
+          The document publishes it as <code>active</code> but does not save it. With one save
+          added — <code>{"value": "active", "file_path": "active.safetensors"}</code> — it
+          lands as a <code>[4, 1, 32]</code> tensor: four rows, one position, thirty-two
+          latents.</p>
+
+          <!-- measured 2026-09-23, CPU, fp32: sae_feature_ablation.json with the writes
+               removed and `active` saved. Row 0; the other three rows agree to two decimals. -->
+          <pre><code>latent    0       1       2       3       4      …   26      …   31
+row 0     0.0512  0.0000  0.0432  0.0587  0.0000     0.4411     0.1295</code></pre>
+
+          <p>Sixteen of the thirty-two are exactly zero on all four prompts, latent 1 among
+          them — a relu encoder, and half its latents never fire here. The four the document
+          sweeps are latents 0 to 3, so one of the four ablations is of a latent that was not
+          on.</p>
+
+          <h2>Writing a feature</h2>
+
+          <!-- causalab_mini/ops/intervene.py:316 — features: the mechanism acts on those
+               coordinates, f.clone(), f[..., index] = acted -->
+          <p>A write with <code>features</code> is the mechanism applied to those coordinates
+          of the feature vector and to nothing else. The vector is cloned, the named columns
+          are replaced by <code>mechanism(f[..., index], operand)</code>, and the rest pass
+          through unchanged. An operand in the same feature space is cut the same way; a bare
+          number — <code>0.0</code> here — is used as it is.</p>
+
+          <p>So <code>swap</code> with operand <code>0.0</code> on <code>features: [j]</code>
+          is: set latent <em>j</em> to zero, keep the other thirty-one, decode, and add the
+          error term back.</p>
+
+          <h2>The error term</h2>
+
+          <!-- causalab_mini/ops/featurizer.py:142 -->
+          <pre><code class="language-python">featurize(x)          = (f, x - decode(f))     f = act((x - b_dec) @ W_enc + b_enc)
+inverse(f', err, x)   = decode(f') + err</code></pre>
+
+          <p>The second element of <code>featurize</code> is the reconstruction residual, and
+          <code>inverse</code> adds it back. What that buys is that the write's effect is the
+          change to <code>f</code> and only that. Without it every SAE intervention would also
+          be "replace the activation with its reconstruction", and the two effects could not
+          be told apart.</p>
+
+          <p>How much that matters depends on how good the dictionary is, and this one is a
+          random fixture. Measured on the four activations this document actually reads,
+          <code>‖x − decode(f)‖ / ‖x‖</code> is <strong>7.12</strong>: the "reconstruction" is
+          seven times the size of the thing it reconstructs. And yet:</p>
+
+          <!-- measured 2026-09-23: x from an identity read at block_output[0] pos -1 on the
+               same four rows, f from the dictionary read; Encoder.featurize / .inverse -->
+          <pre><code class="language-python">&gt;&gt;&gt; f, err = enc.featurize(x)          # x: the four activations, ‖x‖ = 0.1505
+&gt;&gt;&gt; float(err.norm() / x.norm())
+7.123898029327393
+&gt;&gt;&gt; float((enc.inverse(f, err, x) - x).abs().max())
+1.4901161193847656e-08</code></pre>
+
+          <p>With <code>f' = f</code> the write is the identity to 1.5e-08 on an activation
+          whose own norm is 0.15 — fp32 rounding in <code>decode(f) + err</code>, not the
+          dictionary's error. A worthless dictionary and an exact no-op, which is the property
+          the error term exists for.</p>
+
+          <h2>What the run produced</h2>
+
+          <!-- ran 2026-09-23, CPU, fp32, tiny-random-LlamaForCausalLM -->
+          <pre><code class="language-bash">$ uv run causalab-mini run documents/v2/sae_feature_ablation.json --device-map cpu --out out/sae
+out/b-sae/document.json
+out/b-sae/run.json
+out/b-sae/features=0/document.json
+out/b-sae/features=0/zeroed.json
+out/b-sae/features=0/p_answer.json
+out/b-sae/features=1/document.json
+out/b-sae/features=1/zeroed.json
+out/b-sae/features=1/p_answer.json
+out/b-sae/features=2/document.json
+out/b-sae/features=2/zeroed.json
+out/b-sae/features=2/p_answer.json
+out/b-sae/features=3/document.json
+out/b-sae/features=3/zeroed.json
+out/b-sae/features=3/p_answer.json</code></pre>
+
+          <p>One directory per swept feature, named after the field the wrapper sits on. The
+          <code>logit_diff</code> column of each, and — from the same document with the writes
+          removed — the same metric with nothing written:</p>
+
+          <!-- measured 2026-09-23, CPU, fp32. The "no write" row is the same document with
+               the writes and the intervened model removed; everything else unchanged. -->
+          <table>
+            <thead><tr><th>ablated latent</th><th class="num">row 0</th><th class="num">row 1</th><th class="num">row 2</th><th class="num">row 3</th></tr></thead>
+            <tbody>
+              <tr><td>none (no write)</td><td class="num">-0.026651</td><td class="num">+0.184317</td><td class="num">+0.035687</td><td class="num">-0.189690</td></tr>
+              <tr><td><code>features=0</code></td><td class="num">+0.055412</td><td class="num">+0.302852</td><td class="num">-0.043992</td><td class="num">-0.310629</td></tr>
+              <tr><td><code>features=1</code></td><td class="num">-0.026651</td><td class="num">+0.184317</td><td class="num">+0.035687</td><td class="num">-0.189690</td></tr>
+              <tr><td><code>features=2</code></td><td class="num">-0.038333</td><td class="num">+0.089874</td><td class="num">+0.046805</td><td class="num">-0.095583</td></tr>
+              <tr><td><code>features=3</code></td><td class="num">-0.094069</td><td class="num">+0.110702</td><td class="num">+0.100263</td><td class="num">-0.116568</td></tr>
+            </tbody>
+          </table>
+
+          <p><strong>Latent 1 was already zero on every row, and zeroing it changes nothing</strong>
+          — the four numbers agree with the un-written run to six decimals. Measured exactly,
+          the largest difference is 6.0e-08, which is the same fp32 rounding as the round-trip
+          above: the write still runs <code>decode(f) + err</code> where the un-written model
+          runs neither.</p>
+
+          <p>That is what doing this in feature space buys. In the residual stream there is no
+          such thing as zeroing a coordinate that was already off; in the dictionary's space,
+          an ablation of a latent that did not fire is a no-op you can verify.</p>
+
+          <div class="caution">
+            <span class="label">the latents here mean nothing</span>
+            <p>The checkpoint has random weights and the bundle is a random 16 → 32 matrix.
+            Latent 26 is the largest on all four prompts because of how the draw came out, not
+            because it detects anything. Every mechanism on this page is real; every number is
+            a fixture.</p>
+          </div>
+
+          <h2>The <code>linear</code> kind</h2>
+
+          <!-- causalab_mini/ops/featurizer.py:246 — "linear": Encoder(..., activation="none") -->
+          <p><code>linear</code> is the same <code>Encoder</code> with no nonlinearity, so
+          <code>f</code> may be negative and the error term is still there.
+          <code>W_dec</code>, <code>b_enc</code> and <code>b_dec</code> are all optional; with
+          none of them it is <code>x @ W_enc</code> with tied decoding. Use it for a
+          dictionary that is not sparse — a fixed probe basis, a transcoder's input map.</p>
+
+          <p>It is not the same as <code>pca</code>. A <code>pca</code> featurizer is an
+          orthonormal <code>(d, k)</code> basis, its error term is always zero, and its inverse
+          keeps the orthogonal complement of the <em>pre-write</em> activation. An encoder's
+          error term is the reconstruction residual, which is a different quantity and is not
+          zero.</p>
+
+          <h2>What is refused</h2>
+
+          <table>
+            <thead><tr><th>document</th><th>message</th></tr></thead>
+            <tbody>
+              <!-- causalab_mini/plan/spec.py:142 -->
+              <tr><td>an <code>sae</code> with no <code>file_path</code></td>
+                  <td><code>a sae featurizer is loaded from a file; nothing draws or trains one</code></td></tr>
+              <!-- causalab_mini/plan/spec.py:146 -->
+              <tr><td>a <code>file_path</code> and a <code>seed</code></td>
+                  <td><code>a loaded featurizer has no seed: its weights are its bytes</code></td></tr>
+              <!-- causalab_mini/plan/build.py:361 -->
+              <tr><td>a bundle with the wrong tensors</td>
+                  <td><code>'documents/artifacts/pca.safetensors' holds ['weight']; a sae bundle holds ['W_enc', 'W_dec'] and optionally ['b_enc', 'b_dec']</code></td></tr>
+              <!-- causalab_mini/plan/build.py:381 -->
+              <tr><td>a bundle of the wrong width</td>
+                  <td><code>has W_enc (…), not the (d, k) this document and its d-wide site declare</code></td></tr>
+              <!-- causalab_mini/plan/build.py:103 -->
+              <tr><td><code>features</code> outside the dictionary</td>
+                  <td><code>write 'ablate': features [32] of a 32-dimensional feature space; they are distinct indices below 32</code></td></tr>
+            </tbody>
+          </table>
+
+          <p>All five are refused before any weights are loaded — <code>explain</code> reports
+          them, and so does the compile at the top of a run.</p>
+
+          <div class="seealso">
+            <h2>See also</h2>
             <ul>
-            <li><code>documents/v2/sae_feature_ablation.json</code>, verbatim, run end to end.</li>
-            <li>The <code>sae</code> featurizer: an encoder/decoder pair loaded from a safetensors bundle, never trained here.</li>
-            <li>The error term: what the dictionary does not explain is put back exactly.</li>
-            <li><code>features</code> on a write: acting on chosen latents and passing the rest through.</li>
-            <li>The bundle under <code>documents/artifacts/</code> and what its header must match.</li>
-            <li>The <code>linear</code> kind, and how it differs.</li>
+              <li><a href="../ops.html">Reads, writes, metrics</a> — the write seam
+                  <code>inverse(do(featurize(x)), err, x)</code> that every featurizer plugs
+                  into, and the other five mechanisms a feature write can use</li>
+              <li><a href="das-fit.html">DAS fit</a> — the featurizer that <em>is</em> fitted,
+                  and the <code>pca</code> control it is compared against</li>
+              <li><a href="dbm-fit.html">DBM fit</a> — a learned mask over a site's units,
+                  the same seam at the grain of neurons</li>
+              <li><a href="sweeps.html">Sweeps</a> — why <code>features</code> sweeps as
+                  <code>[[0], [1], [2], [3]]</code> and not <code>[0, 1, 2, 3]</code></li>
             </ul>
-            <p>Writing it? Read <code>docs/STYLE.md</code> first — it has the page
-            template, the citation rule and the nav snippet to paste.</p>
           </div>
 
         </article>
