@@ -88,6 +88,26 @@ class Where:
         if self.frame == "prompt" and self.scope is not None and self.scope.segment == "eos":
             raise ValueError("segment 'eos' is a run of the generated frame, not the prompt")
 
+    def spelling(self) -> str:
+        """This position as a document writes it, for a message or a listing.
+
+        `{index:-1}`, `{last:3}`, `{generated index:-1 scope:{variable:said}}`
+        — compact, and in the same order as the fields above, so a refusal
+        and an `explain` line name a position the same way.
+        """
+        cut = (
+            f"index:{self.index}" if self.index is not None
+            else f"last:{self.last}" if self.last is not None
+            else f"span:{list(self.span)}" if self.span is not None
+            else "all"
+        )
+        scope = "" if self.scope is None else " scope:{%s}" % ", ".join(
+            f"{key}:{value}"
+            for key, value in (("segment", self.scope.segment), ("variable", self.scope.variable))
+            if value is not None
+        )
+        return "{%s%s%s}" % ("" if self.frame == "prompt" else f"{self.frame} ", cut, scope)
+
     @property
     def width(self) -> int | None:
         """How many positions this names, knowable without a row — which is

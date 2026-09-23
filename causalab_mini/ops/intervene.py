@@ -248,7 +248,9 @@ def _window(tensor: Any, at: Selection, seq_axis: int) -> Any:
         rows, index = _flat(positions, tensor.device)
         return moved[rows, index]
     rows = torch.arange(tensor.shape[0], device=tensor.device)[:, None]
-    index = torch.as_tensor(positions, device=tensor.device)  # (batch, w)
+    # the dtype is stated for the same reason as in `_flat`: a rectangle of
+    # empty windows is a list of empty lists, and that is a float tensor
+    index = torch.as_tensor(positions, dtype=torch.long, device=tensor.device)  # (batch, w)
     return moved[rows, index]
 
 

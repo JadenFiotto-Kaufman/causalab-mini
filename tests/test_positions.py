@@ -85,18 +85,28 @@ def test_what_a_position_may_not_be(pos, message):
         TypeAdapter(Position).validate_python(pos)
 
 
-def test_a_cut_outside_the_row_is_reported_by_the_run_not_refused_by_the_compiler(
+def test_a_fixed_width_cut_the_row_cannot_fit_is_refused_where_it_is_resolved(
     data_root, model_engine
 ):
-    """`{"index": 40}` is a form of width 1, and whether a row has a
-    fortieth token is a fact about that row. The compiler no longer has the
-    rows' lengths, so this is `out_of_range` where it is resolved."""
+    """`{"index": 40}` names one token on every row, so a row with eleven of
+    them is a document that is wrong about its own prompts. The compiler no
+    longer has the rows' lengths, so the refusal is where they are — naming
+    the op, the rows and the reason."""
     raw = _with(json.loads(WINDOW.read_text()), "logits", {"index": 40})
     built = plan.build_request(raw, data_root, model_engine)
-    forward = built.step("score", plan.Observe).forwards[-1]
-    _, positions = steps.located(model_engine, forward)
-    assert positions["logits"]["rows"] == ((),) * 4
-    assert positions["logits"]["reason"] == ("out_of_range",) * 4
+    with pytest.raises(plan.PlanError, match=r"read 'logits' at .index:40. has no position"):
+        model_engine.execute(built)
+
+
+def test_a_fixed_width_write_the_row_cannot_fit_is_refused_too(data_root, model_engine):
+    """Same rule at a write, and it reaches the run rather than a shape
+    error inside the seam."""
+    raw = json.loads(WINDOW.read_text())
+    raw["interventions"]["window"]["writes"]["patch"]["pos"] = {"last": 12}
+    raw["interventions"]["window"]["reads"]["v_cf"]["pos"] = {"last": 12}
+    built = plan.build_request(raw, data_root, model_engine)
+    with pytest.raises(plan.PlanError, match=r"'v_cf' at .last:12. has no position on row"):
+        model_engine.execute(built)
 
 
 # --------------------------------------------------------------------- #

@@ -294,7 +294,7 @@ def passes(engine: Any, step: Observe, state: State) -> tuple[dict[str, Any], Re
     }
 
 
-def located(engine: Any, forward: Forward) -> tuple[Forward, Record]:
+def located(engine: Any, forward: Forward, start: int = 0) -> tuple[Forward, Record]:
     """`forward` with every op's positions resolved, and what each one got.
 
     This is where a spec becomes integers, and it happens here — in the
@@ -310,28 +310,27 @@ def located(engine: Any, forward: Forward) -> tuple[Forward, Record]:
 
     A tap in the continuation frame is not resolved against the prompt at
     all: it acts at the one position its decode step processes, which is
-    what `intervene.at_step` puts any non-empty window on.
+    what `intervene.at_step` puts any non-empty window on, and *where* in
+    the continuation that was is reported by `_continuation` — which is the
+    only thing that has the right frame to say.
     """
     frame = locate.frame_of(engine.tokenizer, forward.input_ids, forward.attention_mask)
     _same_text(forward, frame)
     rows = len(forward.input_ids)
     found: Record = {}
 
-    def resolve(op: Any) -> Any:
+    def resolve(kind: str, op: Any) -> Any:
         where = op.at.where
         if where is None or where.frame == "generated":
-            windows: Positions = ((0,),) * rows
-            reasons: tuple[str, ...] = ("",) * rows
-        else:
-            windows, reasons = locate.locate(frame, where, op.at.anchors)
-        if not getattr(op, "stack", ""):
-            # one decode step of a continuation read has nothing to report on
-            # its own: what it read is reported once, for the whole stack
-            found[op.name] = {
-                "rows": windows,
-                "reason": reasons,
-                "tokens": tuple(locate.tokens_of(frame, one, row) for row, one in enumerate(windows)),
-            }
+            return replace(op, at=replace(op.at, positions=((0,),) * rows))
+        windows, reasons = locate.locate(frame, where, op.at.anchors)
+        if not where.ragged:
+            _fits_every_row(kind, op, windows, reasons, start)
+        found[op.name] = {
+            "rows": windows,
+            "reason": reasons,
+            "tokens": tuple(locate.tokens_of(frame, one, row) for row, one in enumerate(windows)),
+        }
         return replace(op, at=replace(op.at, positions=windows))
 
     return (
@@ -340,8 +339,8 @@ def located(engine: Any, forward: Forward) -> tuple[Forward, Record]:
             taps=tuple(
                 replace(
                     tap,
-                    writes=tuple(resolve(op) for op in tap.writes),
-                    reads=tuple(resolve(op) for op in tap.reads),
+                    writes=tuple(resolve("write", op) for op in tap.writes),
+                    reads=tuple(resolve("read", op) for op in tap.reads),
                 )
                 for tap in forward.taps
             ),
@@ -360,42 +359,50 @@ STACK_LIMIT = 256 * 1024 * 1024
 
 
 def _continuation(engine: Any, forward: Forward, values: dict[str, Any]) -> Record:
-    """Cut every stacked read against the continuation the decode produced.
+    """What the continuation frame's taps did, once there is a continuation.
+
+    Two jobs, and they need the same `Frame`: the ids the decode produced,
+    cut at each row's first stop token.
 
     A read whose position only the finished text can settle fired at every
-    decode step and left one value per step. Here they become one tensor,
-    the ids the run generated become a `Frame` cut at each row's first stop
-    token, and the spec is resolved against *that* — so `{"index": -1}` is
-    the last token this row generated, `{"scope": {"segment": "eos"}}` is
-    where it stopped, and a row that never stopped says so rather than
-    ending the run.
+    decode step and left one value per step; those become one tensor and the
+    spec is resolved against the continuation to cut it — so `{"index": -1}`
+    is the row's own last generated token, `{"scope": {"segment": "eos"}}` is
+    where it stopped, and a row that never stopped says so rather than ending
+    the run.
+
+    And *every* tap in that frame reports where it was, including the ones
+    that needed no stack. A tap at a named step acts at whatever one position
+    its step processes, which is a fact about the decode and not about the
+    prompt — so the prompt frame has nothing true to say about it, and this
+    is the only place that does.
     """
-    stacked = [
-        (op.stack, tap.step, op)
+    generated = values.get(f"{forward.name}.generated")
+    in_frame = [
+        (tap.step, op)
         for tap in forward.taps
-        for op in tap.reads
-        if op.stack and isinstance(tap.step, int)
+        for op in (*tap.reads, *tap.writes)
+        if op.at.where is not None and op.at.where.frame == "generated"
     ]
-    if not stacked:
+    if not in_frame or generated is None:
         return {}
     frame = locate.continuation(
-        engine.tokenizer,
-        tuple(tuple(int(one) for one in row) for row in values[f"{forward.name}.generated"]),
-        _eos_ids(engine.tokenizer),
+        engine.tokenizer, tuple(tuple(int(one) for one in row) for row in generated)
     )
     found: Record = {}
-    for name in dict.fromkeys(base for base, _, _ in stacked):
-        parts = [op for base, _, op in sorted(stacked, key=lambda one: one[1]) if base == name]
-        steps = [values.pop(op.name) for op in parts]
-        _fits(name, steps)
-        # (rows, steps, width): each step read the one position it processed
-        whole = torch.stack(steps, dim=1).squeeze(2)
+    for name in dict.fromkeys(getattr(op, "stack", "") or op.name for _, op in in_frame):
+        parts = [op for _, op in sorted(in_frame, key=_by_step) if (getattr(op, "stack", "") or op.name) == name]
         where = parts[0].at.where
         assert where is not None
         windows, reasons = locate.locate(frame, where, parts[0].at.anchors)
-        values[name] = intervene.gather(
-            whole, Selection(positions=windows, flat=where.ragged), seq_axis=1
-        )
+        if getattr(parts[0], "stack", ""):
+            steps = [values.pop(op.name) for op in parts]
+            _fits(name, steps)
+            # (rows, steps, width): each step read the one position it processed
+            whole = torch.stack(steps, dim=1).squeeze(2)
+            values[name] = intervene.gather(
+                whole, Selection(positions=windows, flat=where.ragged), seq_axis=1
+            )
         found[name] = {
             "rows": windows,
             "reason": reasons,
@@ -404,10 +411,16 @@ def _continuation(engine: Any, forward: Forward, values: dict[str, Any]) -> Reco
     return found
 
 
+def _by_step(one: tuple[Any, Any]) -> int:
+    """A stack's parts in decode order. A tap at every step (`"all"`) is not
+    one of them, and sorts first."""
+    return one[0] if isinstance(one[0], int) else -1
+
+
 def _fits(name: str, steps: list[Any]) -> None:
     held = len(steps) * steps[0].nelement() * steps[0].element_size()
     if held > STACK_LIMIT:
-        rows, _, width = steps[0].shape
+        rows, width = steps[0].shape[0], steps[0].shape[-1]
         raise PlanError(
             f"read {name!r} keeps every decode step to cut against the continuation: "
             f"{len(steps)} steps x {rows} rows x {width} wide is {held / 2**20:.0f} MiB, over "
@@ -417,12 +430,23 @@ def _fits(name: str, steps: list[Any]) -> None:
         )
 
 
-def _eos_ids(tokenizer: Any) -> tuple[int, ...]:
-    """Which ids stop a row. A tokenizer may name one or several."""
-    found = getattr(tokenizer, "eos_token_id", None)
-    if found is None:
-        return ()
-    return tuple(int(one) for one in found) if isinstance(found, (list, tuple)) else (int(found),)
+def _fits_every_row(kind: str, op: Any, windows: Positions, reasons: tuple[str, ...], start: int) -> None:
+    """A fixed-width cut that does not fit a row is an authoring error.
+
+    `{"last": 12}` on a nine-token row, `{"index": 40}` on any of these —
+    the form names the same number of tokens on every row, so a row it does
+    not fit is a document that is wrong about its own prompts, not a row
+    with nothing to say. An anchored cut is the other case and is reported
+    per row instead: which rows carry a word is data.
+    """
+    missed = {start + row: reasons[row] for row, window in enumerate(windows) if not window}
+    if missed:
+        raise PlanError(
+            f"{kind} {op.name!r} at {op.at.where.spelling()} has no position on row(s) "
+            f"{missed}. A position of a fixed width names the same number of tokens on "
+            "every row, so a row it does not fit is refused rather than skipped; a "
+            "position anchored to the row's own text may skip a row, and says why"
+        )
 
 
 def _same_text(forward: Forward, frame: Frame) -> None:
@@ -466,12 +490,19 @@ def _writes_land(forward: Forward, record: Record, start: int) -> None:
     """
     for tap in forward.taps:
         for write in tap.writes:
-            empty = [start + row for row, window in enumerate(write.at.positions) if not window]
-            if empty:
+            reasons = record.get(write.name, {}).get("reason", ())
+            missed = {
+                start + row: (reasons[row] if row < len(reasons) else "") or "out_of_range"
+                for row, window in enumerate(write.at.positions)
+                if not window
+            }
+            if missed:
                 raise PlanError(
-                    f"write {write.name!r} has nothing to write on row(s) {empty}: its "
-                    "position's text is not in those prompts. A read may skip a row; a "
-                    "write may not"
+                    f"write {write.name!r} has nothing to write on row(s) {missed}. A read "
+                    "may skip a row; a write may not — writing nothing somewhere is not an "
+                    "intervention, and the row would score as if one had happened. "
+                    "`alignment_ambiguous` is a value that is in the prompt more than once, "
+                    "and scoping the anchor is what makes it one"
                 )
             if isinstance(write.operand, str) and write.operand in record:
                 have = [len(window) for window in record[write.operand]["rows"]]

@@ -93,7 +93,7 @@ def frame_of_texts(tokenizer: Any, texts: list[str]) -> tuple[TokenRows, TokenRo
     return ids, mask, frame_of(tokenizer, ids, mask)
 
 
-def continuation(tokenizer: Any, generated: TokenRows, eos_ids: tuple[int, ...]) -> Frame:
+def continuation(tokenizer: Any, generated: TokenRows) -> Frame:
     """The decode's own frame, each row cut at its first stop token.
 
     The decode ran to the bound — mini holds EOS off so the loop is a bound
@@ -105,8 +105,17 @@ def continuation(tokenizer: Any, generated: TokenRows, eos_ids: tuple[int, ...])
 
     The character map is built from the ids the decode produced, never from
     re-encoding the finished text: a tokenizer is free to merge across a
-    boundary the decode never saw.
+    boundary the decode never saw. Which ids stop a row is the tokenizer's
+    to say, and it may name one or several.
     """
+    stop_ids = getattr(tokenizer, "eos_token_id", None)
+    eos_ids = (
+        ()
+        if stop_ids is None
+        else tuple(int(one) for one in stop_ids)
+        if isinstance(stop_ids, (list, tuple))
+        else (int(stop_ids),)
+    )
     starts, ends, texts, offsets, segments = [], [], [], [], []
     for row in generated:
         stop = next((k for k, one in enumerate(row) if one in eos_ids), None)

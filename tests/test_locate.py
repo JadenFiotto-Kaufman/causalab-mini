@@ -152,7 +152,7 @@ def test_the_continuation_stops_at_the_first_eos_and_names_it(model):
     eos = int(model.tokenizer.eos_token_id)
     friday = model.tokenizer.encode(" Friday", add_special_tokens=False)[0]
     generated = ((friday, eos, friday), (friday, friday, friday))
-    frame = locate.continuation(model.tokenizer, generated, (eos,))
+    frame = locate.continuation(model.tokenizer, generated)
 
     assert frame.starts == (0, 0) and frame.ends == (2, 3), "row 0 is cut after its stop token"
     assert "eos" in frame.segments[0] and frame.segments[1] == {}

@@ -236,3 +236,32 @@ def test_the_continuation_frame_prints_as_itself(data_root, model_engine):
     text = explain(plan.build_request(json.loads(ANSWER.read_text()), data_root, model_engine))
     assert "pos={generated index:-1 scope:{variable:said}}" in text
     assert "pos={generated index:-1 scope:{segment:eos}}" in text
+
+
+def test_a_tap_in_the_continuation_frame_reports_where_it_was(
+    probe_raw, data_root, model_engine, tmp_path
+):
+    """The prompt frame has nothing true to say about a tap that acted at a
+    decode step, so it says nothing and the continuation says it instead:
+    the step, and the token the model produced there. The table carries it,
+    which is where a reader asks "of what token" about a number."""
+    raw = _at(probe_raw, {**GENERATED, "index": 2})
+    one = raw["interventions"]["generate"]
+    one["writes"]["patch"]["pos"] = {**GENERATED, "all": True}
+    one["writes"]["patch"].update(mechanism="add_scaled", params={"scale": 4.0})
+    executed = model_engine.execute(plan.build_request(raw, data_root, model_engine))
+    where = executed.step("score", plan.Observe).results["positions"]
+
+    assert where["logits"]["rows"] == ((2,),) * 4, "the decode step, not a prompt index"
+    assert where["patch"]["rows"] == ((0, 1, 2),) * 4, "a steering write is every step"
+    assert set(where["logits"]["reason"]) == {""}
+    # the prompt-frame read is still reported against the prompt
+    assert where["v_cf"]["rows"] == ((10,),) * 4 and where["v_cf"]["tokens"] == ("' is'",) * 4
+    # and what the model said at step 2 is what the provenance shows
+    generated = executed.step("score", plan.Observe).results["patched.generated"]
+    said = model_engine.tokenizer.decode([int(generated[0][2])])
+    assert said in where["logits"]["tokens"][0]
+
+    executed.write(tmp_path)
+    row = json.loads((tmp_path / "p_answer.json").read_text())[0]
+    assert row["positions"] == [2] and row["reason"] == ""

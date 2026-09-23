@@ -247,7 +247,7 @@ def test_a_row_whose_entity_is_not_in_its_prompt_refuses_the_write_by_name(
     scored, because a row is a row of a batch and nothing about the swap
     depended on it."""
     holed = _holed(data_root, tmp_path)
-    with pytest.raises(plan.PlanError, match=r"has nothing to write on row\(s\) \[1\]"):
+    with pytest.raises(plan.PlanError, match=r"has nothing to write on row\(s\) .1: 'alignment_missing'."):
         model_engine.execute(plan.build_request(patch_raw, holed, model_engine))
 
     whole = model_engine.execute(plan.build_request(patch_raw, data_root, model_engine))
@@ -279,3 +279,19 @@ def test_a_text_anchor_resolves_the_same_way_through_the_serialized_path(
     assert a["positions"] == b["positions"] and a["eligible"] == b["eligible"]
     assert b["positions"]["patch"]["tokens"] == ("'day'", "' Friday'", "' Saturday'", "' Sunday'")
     assert torch.equal(a["logit_diff"], b["logit_diff"])
+
+
+def test_a_write_refusal_says_which_reason_each_row_had(patch_raw, data_root, tmp_path, model_engine):
+    """"Nothing to write" has three causes and they want three different
+    fixes. A value that is in the prompt twice is not a value that is
+    missing, and the fix for it — scope the anchor — is the one the message
+    used to hide."""
+    root = tmp_path / "data"
+    shutil.copytree(data_root, root)
+    path = root / "weekdays" / "train.json"
+    table = json.loads(path.read_text())
+    table[1]["entity"] = "day"  # in "today" and in the weekday name: twice over
+    path.write_text(json.dumps(table))
+
+    with pytest.raises(plan.PlanError, match=r"row\(s\) .1: 'alignment_ambiguous'."):
+        model_engine.execute(plan.build_request(patch_raw, root, model_engine))
