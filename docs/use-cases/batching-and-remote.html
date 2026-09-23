@@ -89,7 +89,7 @@
           <p>The document is <code>documents/real/weekdays_layer_sweep.json</code> —
           Llama-3.2-1B, fp32, 32 swept points of 42 rows with two metrics each, so 2688 numbers
           per run. <a href="layer-sweep.html">Layer sweep</a> is that document end to end; here
-          it is just a big enough thing to run three times.</p>
+          it is here because it is big enough to run three times and compare.</p>
 
           <h2>At a glance</h2>
 
@@ -209,7 +209,7 @@ real	0m9.472s</code></pre>
           </table>
 
           <p>171 MiB, on a document whose weights are about 4.6 GiB. Batching is not free —
-          the two wall times above are within a second of each other and the arithmetic moves
+          the two wall times above are the same to a tenth of a second and the arithmetic moves
           — so it is worth reaching for when the rows are what does not fit, and not before.
           The recorded run of <code>weekdays_head_patching</code>, 96 points over the same 42
           rows, used <code>--batch-size 16</code>

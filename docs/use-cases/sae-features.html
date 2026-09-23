@@ -85,7 +85,7 @@
           term</strong>: what the dictionary does not explain is carried around the write and
           put back, so a write changes the features and nothing else.</p>
 
-          <!-- causalab_mini/plan/spec.py:115 — LOADED_ONLY -->
+          <!-- causalab_mini/plan/spec.py:115 — LOADED_ONLY; :142 and :569 enforce it -->
           <p>Nothing here trains one. <code>sae</code>, <code>linear</code> and
           <code>pca</code> are loaded-only kinds: a document that declares one without a
           <code>file_path</code> is refused, and a fit may not name one. The dictionary comes
@@ -474,13 +474,16 @@ out/b-sae/features=3/p_answer.json</code></pre>
               <!-- causalab_mini/plan/build.py:381 -->
               <tr><td>a bundle of the wrong width</td>
                   <td><code>has W_enc (…), not the (d, k) this document and its d-wide site declare</code></td></tr>
+              <!-- causalab_mini/plan/spec.py:569 -->
+              <tr><td>a fit that names one as a parameter</td>
+                  <td><code>trains 'dictionary', a sae, which is fixed by definition — a pca basis can be fine-tuned as a subspace loaded from it</code></td></tr>
               <!-- causalab_mini/plan/build.py:103 -->
               <tr><td><code>features</code> outside the dictionary</td>
                   <td><code>write 'ablate': features [32] of a 32-dimensional feature space; they are distinct indices below 32</code></td></tr>
             </tbody>
           </table>
 
-          <p>All five are refused before any weights are loaded — <code>explain</code> reports
+          <p>All six are refused before any weights are loaded — <code>explain</code> reports
           them, and so does the compile at the top of a run.</p>
 
           <div class="seealso">

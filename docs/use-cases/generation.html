@@ -159,7 +159,9 @@
               <tr><td><code>{"frame": "generated", "index": k}</code>, k ≥ 0</td>
                   <td>decode step k</td><td>yes</td><td>yes</td></tr>
               <tr><td><code>{"frame": "generated", "all": true}</code></td>
-                  <td>every decode step</td><td>yes</td><td>yes</td></tr>
+                  <td>as a write, every decode step; as a read, every token of the finished
+                  continuation — which is a window, so no metric scores it directly</td>
+                  <td>yes</td><td>yes</td></tr>
               <tr><td><code>{"frame": "generated", "index": -1}</code></td>
                   <td>the last token of the finished continuation</td><td>yes</td><td>no</td></tr>
               <tr><td><code>{"frame": "generated", "index": -1, "scope": {"variable": "c"}}</code></td>
@@ -465,9 +467,25 @@ weekdays/said: 4 rows
         read  &#x27;at_said&#x27; at lm_head over 6 steps pos={generated index:-1 scope:{variable:said}} via &#x27;identity&#x27;
         read  &#x27;at_stop&#x27; at lm_head over 6 steps pos={generated index:-1 scope:{segment:eos}} via &#x27;identity&#x27;</code></pre>
 
+          <!-- causalab_mini/engine/steps.py:353 — _continuation: a read whose position only
+               the finished text can settle fired at every step and left one value per step;
+               those become one tensor and the spec is resolved against the continuation -->
           <p><code>over 6 steps</code> is what a cut costs: the read cannot say which step it
-          wants until the decode has finished, so it fires at every one and the stack is cut
-          afterwards.</p>
+          wants until the decode has finished, so it fires at every one, keeps a value per
+          step, and the stack is cut against the continuation afterwards.</p>
+
+          <!-- causalab_mini/plan/build.py:940, 960 — STACK_LIMIT, and the count is the
+               pass's rows whatever --batch-size the run uses -->
+          <div class="caution">
+            <span class="label">a cut has a size, and it is checked before the run</span>
+            <p>Keeping every step is <code>rows × decode × width</code> numbers, which is
+            nothing at <code>decode: 6</code> on a 16-wide site and a gigabyte at
+            <code>decode: 256</code> on a wide one. The compiler knows all three numbers
+            before any weights are loaded and refuses above 256 MiB, naming the three ways
+            out: name the step instead of a cut, decode fewer tokens, or score fewer rows in
+            one pass. <code>--batch-size</code> is not one of them — the count is the whole
+            pass's rows.</p>
+          </div>
 
           <p>Six greedy tokens, and every row of this checkpoint produces the same six:</p>
 
