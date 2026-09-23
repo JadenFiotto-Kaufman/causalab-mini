@@ -78,21 +78,734 @@
             <p class="lede">The command line: the loop an author lives in.</p>
           </header>
 
-          <div class="stub">
-            <span class="label">in progress</span>
-            <p>This page has not been written yet. It is one page of a set being
-            filled in; the rest of the site is live.</p>
-            <p>What it will cover:</p>
+          <!-- causalab_mini/cli.py:1-10 (the module's own statement of the split) -->
+          <p>Two kinds of verb. Seven of them — <code>schema</code>, <code>vocab</code>,
+          <code>model</code>, <code>tokens</code>, <code>data</code>,
+          <code>validate</code> and <code>explain</code> — need no weights. They say
+          what exists, what a document means and whether it would compile, in seconds
+          on a laptop, against a model that may only ever run on someone else's GPU.
+          <code>run</code> is the eighth, and the only one that loads the weights.</p>
+
+          <!-- causalab_mini/cli.py:44 — --json is on the top-level parser -->
+          <p>Every verb takes <code>--json</code>, so an agent parses instead of
+          scraping. Every verb writes to stdout and nothing else; only <code>run</code>
+          touches the disk.</p>
+
+          <h2>At a glance</h2>
+
+          <p>The loop is check, read, run. All three commands below take the same
+          document, the smallest interchange in the repository: four rows, one swap at
+          the last token of layer 0 of a tiny random-weight Llama.
+          <a href="documents.html">Documents</a> is the page for what is in it.</p>
+
+          <!-- ran 2026-09-23, repo root, CPU, fp32, CUDA_VISIBLE_DEVICES= HF_HUB_OFFLINE=1 -->
+          <pre><code class="language-bash">$ uv run causalab-mini validate documents/v2/patching.json
+ok: documents/v2/patching.json is a valid plan-shaped document
+
+$ uv run causalab-mini explain documents/v2/patching.json
+&lt;root&gt;: Plan
+  score: Observe  metrics=['iia/match', 'logit_diff/logit_diff']  saves=['iia.json', 'logit_diff.json']
+      forward 'original' on 'counterfactual'  (4 rows x 11 tokens)
+        read  'v_cf' at block_output[0] pos={index:-1} via 'identity'
+      forward 'patched' on 'base'  (4 rows x 11 tokens)
+        write 'patch' at block_output[0] pos={index:-1} swap(v_cf) via 'identity'
+        read  'logits' at lm_head pos={index:-1} via 'identity'
+
+$ uv run causalab-mini run documents/v2/patching.json --device-map cpu --out out/cli/patch
+out/cli/patch/document.json
+out/cli/patch/run.json
+out/cli/patch/iia.json
+out/cli/patch/logit_diff.json</code></pre>
+
+          <p>The whole <code>run</code> took 7.9 s on twelve CPU cores, model load
+          included. <code>run</code> prints the paths it wrote, in the order it wrote
+          them, and that is its entire output.</p>
+
+          <h2>The verbs</h2>
+
+          <!-- causalab_mini/cli.py:47-79 (the parsers) and :235-244 (the table) -->
+          <table>
+            <thead>
+              <tr><th>verb</th><th>argument</th><th>what it needs</th><th>what it prints</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>schema</code></td><td>—</td><td>nothing</td><td>the JSON Schema of a plan-shaped document</td></tr>
+              <tr><td><code>vocab</code></td><td>—</td><td>nothing</td><td>components, mechanisms, featurizer kinds, metric kinds, position forms</td></tr>
+              <tr><td><code>model</code></td><td>a HuggingFace key</td><td>the model's config</td><td>layers, padding side, and which components resolve, with widths</td></tr>
+              <tr><td><code>tokens</code></td><td>a key and one or more strings</td><td>the tokenizer</td><td>how many tokens each string is</td></tr>
+              <tr><td><code>data</code></td><td>a dataset ref</td><td>the data root</td><td>rows, columns, empty cells, splits, one sample</td></tr>
+              <tr><td><code>validate</code></td><td>a document</td><td>nothing</td><td>whether it parses, and in which of the two formats</td></tr>
+              <tr><td><code>explain</code></td><td>a document</td><td>the model's config</td><td>the compiled plan</td></tr>
+              <tr><td><code>run</code></td><td>a document</td><td>the weights</td><td>the paths it wrote</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/cli.py:52, 59, 63, 72 -->
+          <p>The options are few. <code>model</code> and <code>tokens</code> take
+          <code>--revision</code> (default <code>main</code>); <code>model</code> also
+          takes <code>--dtype</code>, one of <code>fp32</code> and <code>bf16</code>.
+          <code>data</code>, <code>validate</code>, <code>explain</code> and
+          <code>run</code> take <code>--data-root</code>, which defaults to
+          <code>documents/data</code> — a relative path, so these commands expect to be
+          run from the repository root.</p>
+
+          <div class="note">
+            <span class="label">the cost is the import</span>
+            <!-- measured 2026-09-23: `python -c "import causalab_mini.cli"` 6.27 s;
+                 `vocab` 6.19 s; `validate` 6.23 s; `schema` 6.65 s -->
+            <p>Every verb pays about 6.3 s starting up, because importing
+            <code>causalab_mini.cli</code> imports torch and nnsight. That is the whole
+            cost of <code>schema</code>, <code>vocab</code> and <code>validate</code>:
+            measured here, <code>import causalab_mini.cli</code> alone is 6.27 s and
+            <code>validate</code> is 6.23 s. Budget for it in a loop; do not read it as
+            the work.</p>
+          </div>
+
+          <h2>Asking what exists</h2>
+
+          <!-- causalab_mini/cli.py:99-124 -->
+          <p><code>vocab</code> is the vocabulary a document is written in: every
+          component you may name, every write mechanism, every featurizer and metric
+          kind, and the forms a position may take. It loads nothing.</p>
+
+          <!-- ran 2026-09-23, repo root -->
+          <pre><code class="language-bash">$ uv run causalab-mini vocab
+components:
+  attention_query        interior  [heads]
+  attention_key          interior  [heads]
+  attention_scores       interior  [heads]  needs eager attention
+  attention_probs        nnterp attention_probabilities  [heads]  needs eager attention
+  attention_z            interior  [heads]
+  input_ids              nnterp embeddings_input  (read-only)
+…
+  block_output           nnterp layers_output
+  ln_final               nnterp ln_final_output
+  lm_head                nnterp lm_head_output
+  logits                 nnterp logits
+mechanisms:       add_scaled, clamp, gaussian, lerp, renormalize, swap
+featurizer kinds: gate, linear, pca, sae, subspace (plus 'identity', never declared)
+metric kinds:     match(expected), logit_diff(a, b), cross_entropy(target), token_logit(token), token_prob(token)
+position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, all=bool
+                  scope: variable=str, segment=Literal['system', 'user', 'assistant', 'eos']
+                  frame: Literal['prompt', 'generated']; a bare integer is {"index": i}; -1 is the last token</code></pre>
+
+          <!-- causalab_mini/cli.py:94-96 — Spec.model_json_schema() -->
+          <p><code>schema</code> prints the JSON Schema pydantic derives from
+          <code>Spec</code>, which is the plan-shaped format itself: 1,116 lines,
+          22 KB, every field with the docstring that explains it. It is too long to
+          read as text and exactly the right size for a tool. Its definitions are the
+          document's nouns:</p>
+
+          <pre><code class="language-bash">$ uv run causalab-mini schema | jq -r '."$defs" | keys | join(", ")'
+Anchor, Anneal, CrossEntropy, EarlyStop, Evaluation, Featurizer, Fit, Header, IntervenedModel, Intervention, LogitDiff, Match, Model, Observe, Optimizer, Output, Read, Reference, Role, Save, Site, TokenLogit, TokenProb, Weights, Where, Write</code></pre>
+
+          <!-- causalab_mini/cli.py:127-157 -->
+          <p><code>model</code> is the same question asked of a checkpoint: how many
+          layers it has, which side it pads on, and which of the components in
+          <code>vocab</code> actually resolve on it — with each one's width, which is
+          what a featurizer has to match. It needs the config, not the weights.</p>
+
+          <!-- ran 2026-09-23, repo root, HF_HUB_OFFLINE=1 (the config is in the local cache) -->
+          <pre><code class="language-bash">$ uv run causalab-mini model hf-internal-testing/tiny-random-LlamaForCausalLM
+hf-internal-testing/tiny-random-LlamaForCausalLM via nnterp: 2 layers, padding_side=left
+  attention_query    ok   width=16  op=attention_interface_1
+  attention_key      ok   width=16  op=attention_interface_1
+  attention_scores   --   component 'attention_scores' exists only under 'eager' attention, and this model runs 'sdpa': say "attn_implementation": "eager" in the document's model block
+  attention_probs    --   component 'attention_probs' exists only under 'eager' attention, and this model runs 'sdpa': say "attn_implementation": "eager" in the document's model block
+  attention_z        ok   width=16  op=attention_interface_1
+  input_ids          ok   no width (no featurizer here)
+…
+  mlp_activation     ok   width=64
+  mlp_neuron_output  ok   width=64
+  mlp_output         ok   width=16
+  block_output       ok   width=16
+  ln_final           ok   width=16
+  lm_head            ok   width=32000
+  logits             ok   width=32000</code></pre>
+
+          <div class="caution">
+            <span class="label">the verb cannot ask for eager attention</span>
+            <!-- causalab_mini/cli.py:50-54 vs causalab_mini/plan/spec.py:60-68 -->
+            <p><code>model</code> builds its model spec from <code>--dtype</code> and
+            <code>--revision</code> only, so it always asks for the library default
+            (<code>sdpa</code>) and <code>attention_scores</code> and
+            <code>attention_probs</code> always report <code>--</code>. A document can
+            say <code>"attn_implementation": "eager"</code> in its
+            <code>model</code> block and then both resolve; the verb has no flag for
+            it. Use <code>explain</code> on the document to check that case.</p>
+          </div>
+
+          <!-- causalab_mini/cli.py:160-172 -->
+          <p><code>tokens</code> answers one question a metric depends on: is this
+          string one token? A <code>match</code> or <code>logit_diff</code> column is
+          read at a single position, so a two-token answer cannot be scored there.
+          The tiny fixture's tokenizer is a good demonstration of why you ask rather
+          than assume.</p>
+
+          <!-- ran 2026-09-23, repo root -->
+          <pre><code class="language-bash">$ uv run causalab-mini tokens hf-internal-testing/tiny-random-LlamaForCausalLM " Monday" " Tuesday" "Sunday"
+' Monday'                1 token(s)
+' Tuesday'               3 token(s)  &lt;- not usable as a metric column
+'Sunday'                 1 token(s)</code></pre>
+
+          <!-- causalab_mini/cli.py:175-195 -->
+          <p><code>data</code> reads a dataset ref the way a document's
+          <code>rows</code> block does, and reports what is in it. <code>empty</code>
+          is the column that matters most: a null or blank cell is an excluded
+          measurement for any metric naming that column, and it is better to know
+          before the run than after.</p>
+
+          <!-- ran 2026-09-23, repo root -->
+          <pre><code class="language-bash">$ uv run causalab-mini data weekdays/train
+weekdays/train: 4 rows
+  columns: answer, base_answer, cf_answer, counterfactual_inputs, counterfactual_inputs_variables, entity, input, label, split
+  splits:  all
+  sample:  {"answer": " Friday", "base_answer": " Friday", "cf_answer": " Sunday", "counterfactual_inputs": ["If today is Saturday, tomorrow is"], "counterfactual_inputs_variables": [{"entity": "Saturday"}], "entity": "Thursday", "input": "If today is Thursday, tomorrow is", "label": " Sunday", "split": "all"}</code></pre>
+
+          <p>The <code>empty:</code> line appears only when something is empty. The
+          same table with one row's <code>cf_answer</code> removed, under a copied
+          <code>--data-root</code>:</p>
+
+          <!-- ran 2026-09-23; out/cli/holed-data is documents/data copied, with
+               row 1's cf_answer set to null -->
+          <pre><code class="language-bash">$ uv run causalab-mini data weekdays/train --data-root out/cli/holed-data
+weekdays/train: 4 rows
+  columns: answer, base_answer, cf_answer, counterfactual_inputs, counterfactual_inputs_variables, entity, input, label, split
+  empty:   cf_answer (1 rows)
+  splits:  all
+…</code></pre>
+
+          <h2>Checking a document: two different questions</h2>
+
+          <!-- causalab_mini/cli.py:198-203 — validate calls Spec.model_validate or
+               Document.from_json on each point and nothing else -->
+          <p><code>validate</code> parses. It lowers the sweep wrappers, hands each
+          point to its front end, and says which of the two formats the file is in —
+          plan-shaped if it has <code>steps</code>, protocol otherwise. It loads no
+          model and reads no rows, so <code>--data-root</code> and <code>--engine</code>
+          are accepted and unused.</p>
+
+          <pre><code class="language-bash">$ uv run causalab-mini validate documents/v2/patching.json
+ok: documents/v2/patching.json is a valid plan-shaped document
+
+$ uv run causalab-mini validate documents/pos_sweep_cpu.json
+ok: documents/pos_sweep_cpu.json is a valid protocol document</code></pre>
+
+          <!-- causalab_mini/cli.py:217-219 and causalab_mini/plan/explain.py:1-7 -->
+          <p><code>explain</code> compiles. It loads the model as a meta-device shell —
+          the config, the module tree, the tokenizer, no weights — resolves every
+          address, tokenizes every prompt, and prints the plan: each forward with its
+          row and token counts, each tap with its position spec, and what would be
+          saved. It is the verb that catches a document that parses but cannot run.</p>
+
+          <p>A misspelled component passes <code>validate</code> and fails
+          <code>explain</code>, because a component name is a question about a model
+          and <code>validate</code> has not got one:</p>
+
+          <!-- ran 2026-09-23; out/cli/typo.json is documents/v2/patching.json with
+               sites.target.component changed to "block_ouput" -->
+          <pre><code class="language-bash">$ uv run causalab-mini validate out/cli/typo.json
+ok: out/cli/typo.json is a valid plan-shaped document
+
+$ uv run causalab-mini explain out/cli/typo.json
+Traceback (most recent call last):
+…
+causalab_mini.address.AddressError: component 'block_ouput' has no address here, and this model's internals have no accessor of that name either. Mini's are ['attention_input_norm', 'attention_key', 'attention_output', 'attention_premix', 'attention_probs', 'attention_query', 'attention_scores', 'attention_z', 'block_input', 'block_mid', 'block_output', 'embeddings', 'input_ids', 'lm_head', 'ln_final', 'logits', 'mlp_activation', 'mlp_input', 'mlp_input_norm', 'mlp_neuron_output', 'mlp_output']; add one to a model with RenameConfig(addresses={...})</code></pre>
+
+          <h2><code>run</code></h2>
+
+          <!-- causalab_mini/cli.py:74-79, 222-228 -->
+          <table>
+            <thead>
+              <tr><th>flag</th><th>default</th><th>what it does</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>--out</code></td><td><code>out</code></td><td>the directory the save manifest is written under</td></tr>
+              <tr><td><code>--engine</code></td><td><code>nnterp</code></td><td><code>nnterp</code>, <code>ndif</code> or <code>hooks</code></td></tr>
+              <tr><td><code>--device-map</code></td><td><code>auto</code></td><td>passed to the loader; ignored by <code>ndif</code>, whose weights are the server's</td></tr>
+              <tr><td><code>--batch-size</code></td><td>every row at once</td><td>rows per model call</td></tr>
+              <tr><td><code>--data-root</code></td><td><code>documents/data</code></td><td>where a dataset ref is resolved from</td></tr>
+            </tbody>
+          </table>
+
+          <p>There is no <code>--dry-run</code>, no <code>--verbose</code> and no
+          <code>--force</code>. <code>explain</code> is the dry run; the output is
+          the paths; and nothing is ever refused for already existing — see the
+          caution under the output layout.</p>
+
+          <h3><code>--engine</code>: three runtimes, one plan</h3>
+
+          <!-- causalab_mini/cli.py:34-38 -->
+          <table>
+            <thead>
+              <tr><th><code>--engine</code></th><th>class</th><th>weights</th><th>where it runs</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>nnterp</code></td><td><code>NNterpEngine</code></td><td>loaded here, under <code>--device-map</code></td><td>this process, in one nnsight session</td></tr>
+              <tr><td><code>ndif</code></td><td><code>NNterpEngine</code>, <code>dispatch=False</code></td><td>none locally — a meta shell</td><td>an NDIF server, which has the weights</td></tr>
+              <tr><td><code>hooks</code></td><td><code>HooksEngine</code></td><td>loaded here</td><td>this process, one <code>register_forward_hook</code> per tap</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/cli.py:30-33, 39, 206-219: compiling is the weightless
+               shell for every engine; verified 2026-09-23 that explain on
+               documents/v2/patching.json is identical under all three -->
+          <p>Compiling is a weightless shell for all three, so <code>explain</code>
+          prints the same plan whichever engine you name — for
+          <code>documents/v2/patching.json</code> the three outputs are identical here.
+          What differs is which addresses a runtime accepts, and where the forward
+          happens.</p>
+
+          <!-- causalab_mini/engine/engines/hooks/engine.py:64-86 -->
+          <p>The hooks engine is a plain HuggingFace model with a forward hook on each
+          module a tap names. A hook fires at a module's boundary and sees nothing
+          inside it, so the four interior components — the query, the key, the scores
+          and the attention output before the out-projection — are refused by name
+          rather than approximated. <code>model --engine hooks</code> is how you find
+          that out without running anything:</p>
+
+          <!-- ran 2026-09-23, repo root -->
+          <pre><code class="language-bash">$ uv run causalab-mini model hf-internal-testing/tiny-random-LlamaForCausalLM --engine hooks
+hf-internal-testing/tiny-random-LlamaForCausalLM via hooks: 2 layers, padding_side=left
+  attention_query    --   component 'attention_query' is an interior — one argument of one call inside a module's forward — and a forward hook only sees the module's boundary. It is addressed through nnsight's `.source`, which has no hooks equivalent; run this document on the nnterp engine.
+…
+  block_output       ok   width=16
+  ln_final           ok   width=16
+  lm_head            ok   width=32000
+  logits             ok   width=32000</code></pre>
+
+          <!-- measured 2026-09-23: `diff` of out/cli/patch/{iia,logit_diff}.json
+               against out/cli/patch-hooks/ is empty -->
+          <p>Everything a hook can reach, it reaches identically. Running
+          <code>documents/v2/patching.json</code> on both engines here produced
+          byte-identical <code>iia.json</code> and <code>logit_diff.json</code>; the
+          run took 6.7 s on hooks against 7.9 s on nnterp. The two
+          <code>run.json</code> files differ in the <code>engine</code> name, and in
+          that only the nnterp one has a <code>served_dtype</code>: that field is read
+          off the model inside the session, and only the nnterp engine has one.</p>
+
+          <!-- causalab_mini/cli.py:34-38 (hooks is remote=False) and
+               causalab_mini/engine/engines/hooks/engine.py:104-109 -->
+          <p>There is no flag that runs hooks remotely, and the engine refuses one by
+          name if it is asked: a hook is a Python callable registered on a module
+          object in this process, and NDIF runs the model in another one, so there is
+          nothing here to ship.</p>
+
+          <!-- causalab_mini/cli.py:223-226: remote is truthy for ndif, so the
+               device_map is never added to the loader options -->
+          <p><code>--engine ndif</code> loads the same nnterp shell with
+          <code>dispatch=False</code> — module tree and tokenizer, no parameters — and
+          executes the compiled plan inside <code>model.session(remote=True)</code>.
+          <code>--device-map</code> is not passed at all. The model key must name a
+          model the server hosts, and the run record says <code>"remote": true</code>.
+          <a href="remote.html">Remote &amp; NDIF</a> is the page for it.</p>
+
+          <div class="caution">
+            <span class="label">this machine cannot finish a remote run</span>
+            <!-- ran 2026-09-23 against ndif.us from this box, python 3.13 client -->
+            <p>Run here, <code>--engine ndif</code> reaches the service — the job is
+            received, queued, dispatched and started — and then comes back with
+            <code>RemoteError: Your request payload could not be read (AttributeError:
+            Can't get attribute '_replace' on &lt;module 'dataclasses' from
+            '/usr/local/lib/python3.12/dataclasses.py'&gt;)</code>. The server's Python
+            is 3.12 and this client's is 3.13. Everything on this page was therefore
+            run locally, and what <code>--engine ndif</code> does is read off the code
+            rather than demonstrated.</p>
+          </div>
+
+          <h3><code>--batch-size</code></h3>
+
+          <!-- causalab_mini/engine/steps.py:56-60, 245-261 -->
+          <p>A window of rows is a whole small pass: the same forwards in the same
+          order over a slice of the rows, with each published value sliced the same way
+          so a write still meets the operand of its own row. What the windows read is
+          concatenated back in row order, and everything after that — metrics,
+          eligibility, outputs, saves — sees one pass. With no
+          <code>--batch-size</code> there is one window, which is the pass exactly as
+          compiled.</p>
+
+          <!-- causalab_mini/engine/provenance.py:37-38 -->
+          <p>It is a property of the run and not of the experiment, which is why it is
+          absent from <code>document.json</code> and present in <code>run.json</code>.
+          It is not free of consequence: a GEMM over fewer rows rounds differently. The
+          four rows of <code>documents/v2/patching.json</code>, run whole, in twos and
+          in threes:</p>
+
+          <!-- ran 2026-09-23, CPU, fp32; the three values are
+               out/cli/patch{,-b2,-b3}/logit_diff.json row 3 -->
+          <table>
+            <thead>
+              <tr><th><code>--batch-size</code></th><th><code>logit_diff</code>, row 3</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>absent</td><td class="num">-0.19330616295337677</td></tr>
+              <tr><td><code>2</code></td><td class="num">-0.19330616295337677</td></tr>
+              <tr><td><code>3</code></td><td class="num">-0.19330619275569916</td></tr>
+            </tbody>
+          </table>
+
+          <p>At 2 both tables came out byte-identical to the unbatched ones here; at
+          3 — which does not divide the four rows — the last digits of one row move.
+          Do not count on either: <code>FINDINGS.md</code> §18 records the same
+          comparison across patching, windows, the logit lens, generation, heads,
+          neurons, a ragged harvest and a DAS fit, at batch sizes 1 and 3, and what it
+          pins is agreement to 1e-6, not bit-equality.</p>
+
+          <!-- causalab_mini/engine/steps.py, FINDINGS.md §18 "What it does not do" -->
+          <p>What it does not do is bound the memory of a fit's update. The loss is the
+          mean over the concatenated rows, so every window's graph is alive until the
+          backward; a fit's memory knob is its <code>pairs</code>. It does bound the
+          held-out pass, which runs under <code>no_grad</code>.</p>
+
+          <h2>What lands on disk</h2>
+
+          <!-- causalab_mini/plan/write.py:1-13 -->
+          <p>The plan's save manifest, and nothing else. Every file that leaves a run
+          is a <code>saves</code> entry in the document, plus the
+          <code>document.json</code> every plan's directory carries and the
+          <code>run.json</code> the root carries. One document with one plan writes
+          straight into <code>--out</code>:</p>
+
+          <pre><code>out/cli/patch/
+├── document.json      the experiment, verbatim, as it was given
+├── run.json           what ran it
+├── iia.json           a metric table
+└── logit_diff.json</code></pre>
+
+          <!-- causalab_mini/plan/write.py:27-47 — a Plan gets a directory, any other
+               step writes into its enclosing plan's -->
+          <p>A nested plan writes below its parent in a directory named by its step
+          name, so a plan's path in the tree is its path on disk. A sweep is exactly
+          that: one root plan whose children are one plan per point, named for the
+          field and the value it took.</p>
+
+          <!-- ran 2026-09-23, repo root, CPU, fp32; 3 points, 8.8 s including load -->
+          <pre><code class="language-bash">$ uv run causalab-mini run documents/pos_sweep_cpu.json --device-map cpu --out out/cli/sweep
+out/cli/sweep/document.json
+out/cli/sweep/run.json
+out/cli/sweep/pos=-1/document.json
+out/cli/sweep/pos=-1/iia.json
+out/cli/sweep/pos=-1/logit_diff.json
+out/cli/sweep/pos=-2/document.json
+out/cli/sweep/pos=-2/iia.json
+out/cli/sweep/pos=-2/logit_diff.json
+out/cli/sweep/pos=-3/document.json
+out/cli/sweep/pos=-3/iia.json
+out/cli/sweep/pos=-3/logit_diff.json</code></pre>
+
+          <!-- causalab_mini/plan/sweep.py:159-167 (_label) and
+               causalab_mini/plan/build.py:512-535 (the root, and source per point) -->
+          <p>The directory name is the swept field's own name and the value it took, or
+          the axis name when the sweep is a named one. The root's
+          <code>document.json</code> is the document you wrote, sweep wrappers and all
+          — its <code>pos</code> is still <code>{"sweep": [-1, -2, -3]}</code>. Each
+          point's <code>document.json</code> is that point: the wrapper replaced by one
+          value. So each point has its own digest, and each point's metric rows say
+          which one produced them.</p>
+
+          <p><code>run.json</code> is written once, on the root, because the engine
+          records what ran on the plan it was handed.</p>
+
+          <!-- causalab_mini/plan/write.py:55-63 -->
+          <p>A step that trains a featurizer writes it as a safetensors bundle
+          alongside the tables, with its identity stamped into the header — the thing a
+          later document's <code>file_path</code> load checks before trusting the
+          rotation:</p>
+
+          <!-- ran 2026-09-23, repo root, CPU, fp32; 6.7 s including the fit -->
+          <pre><code class="language-bash">$ uv run causalab-mini run documents/v2/das.json --device-map cpu --out out/cli/das
+out/cli/das/document.json
+out/cli/das/run.json
+out/cli/das/held_out_iia.json
+out/cli/das/iia.json
+out/cli/das/ce.json
+out/cli/das/rot.safetensors</code></pre>
+
+          <pre><code class="language-json">{
+ "__metadata__": {
+  "kind": "subspace",
+  "k": "8",
+  "d": "16",
+  "parametrization": "cayley",
+  "site": "target",
+  "component": "block_output",
+  "layer": "0",
+  "model_key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+  "model_revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+  "model_dtype": "fp32",
+  "featurizer_dtype": "fp32",
+  "produced_by": "11703a0d56a047e5d3fa157ef455534c8803e76b2058cc5f469a9358e065ff34",
+  "engine": "causalab-mini"
+ },
+ "weight": {"dtype": "F32", "shape": [16, 8], "data_offsets": [0, 512]}
+}</code></pre>
+
+          <p>That is the safetensors header of <code>rot.safetensors</code>, read back
+          from the file. The keys are grouped here for reading and the
+          <code>weight</code> entry is on one line; the names and the values are the
+          file's.</p>
+
+          <div class="caution">
+            <span class="label">nothing is cleaned</span>
+            <!-- causalab_mini/plan/write.py:35-36: mkdir(parents=True, exist_ok=True),
+                 then each file is written over -->
+            <p><code>--out</code> is created if it is missing and written into if it is
+            not. Files the run produces are overwritten; files from an earlier run that
+            this one does not produce are left where they are. A directory reused
+            across two different documents will hold both, with only
+            <code>document.json</code> and the rows' <code>produced_by</code> to say
+            so. Give each run its own <code>--out</code>.</p>
+          </div>
+
+          <h3><code>run.json</code>, annotated</h3>
+
+          <!-- the file out/cli/patch/run.json, ran 2026-09-23 -->
+          <pre><code class="language-json">{
+ "engine": "NNterpEngine",
+ "remote": false,
+ "batch_size": null,
+ "versions": {
+  "torch": "2.14.0",
+  "transformers": "5.17.0",
+  "nnsight": "0.8.1.dev125+ga8ee93782",
+  "nnterp": "1.3.1.dev64+g0e4b401af",
+  "pydantic": "2.13.5"
+ },
+ "causalab_mini": "76c8c9d0c0d1f3e0b8e2eaeb09564107d1c0a70cb9e8b7d6cecab09fdc92d8a1",
+ "served_dtype": "torch.float32"
+}</code></pre>
+
+          <!-- causalab_mini/engine/provenance.py:33-52 -->
+          <table>
+            <thead>
+              <tr><th>field</th><th>what it is</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>engine</code></td><td>the engine class that ran it: <code>NNterpEngine</code> for <code>--engine nnterp</code> and <code>--engine ndif</code>, <code>HooksEngine</code> for <code>--engine hooks</code></td></tr>
+              <tr><td><code>remote</code></td><td>what the engine was asked for. <code>false</code> here; <code>true</code> under <code>--engine ndif</code></td></tr>
+              <tr><td><code>batch_size</code></td><td><code>--batch-size</code>, <code>null</code> when every row went in one call. Not part of the experiment, but it moves the last bit of every number</td></tr>
+              <tr><td><code>versions</code></td><td>the five packages whose code decides what a block does: torch, transformers, nnsight, nnterp, pydantic. A package that is not installed reads <code>"not installed"</code></td></tr>
+              <tr><td><code>causalab_mini</code></td><td>sha256 over this package's own <code>.py</code> files in path order. Two runs with the same digest ran the same code, whatever git says</td></tr>
+              <tr><td><code>served_dtype</code></td><td>the dtype the model was actually served in, read off <code>lm_head.weight</code> after the session. The document's <code>dtype</code> is a request; a server serves the dtype it chose. Set by the nnterp engine only</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/engine/provenance.py:17-19 -->
+          <p>Deliberately absent: no hostname, no timestamp, no absolute path. A record
+          has to be byte-identical across machines to be worth comparing.</p>
+
+          <h3>A metric table row, annotated</h3>
+
+          <!-- causalab_mini/plan/write.py:65-96 -->
+          <p>A metric table is a JSON array of row objects, one file per metric, with
+          the labels repeated on every row so that <code>jq</code> and a person can
+          both read it. Two rows of one table — the second one excluded — from
+          <code>documents/v2/entity_patch.json</code> run against a data root whose row
+          1 has no <code>cf_answer</code>:</p>
+
+          <!-- ran 2026-09-23; out/cli/holed/logit_diff.json, its first two rows -->
+          <pre><code class="language-json">{
+ "example_id": "0",
+ "metric": "logit_diff",
+ "value": -0.02950894832611084,
+ "eligible": true,
+ "positions": [
+  10
+ ],
+ "reason": "",
+ "unit": "logit",
+ "estimand_version": "logit_diff/v1",
+ "produced_by": "67d6465731d362667958723aa1faa600aca13bd2e4f78f73b895d38972af260c"
+},
+{
+ "example_id": "1",
+ "metric": "logit_diff",
+ "value": null,
+ "eligible": false,
+ "positions": [
+  10
+ ],
+ "reason": "",
+ "unit": "logit",
+ "estimand_version": "logit_diff/v1",
+ "produced_by": "67d6465731d362667958723aa1faa600aca13bd2e4f78f73b895d38972af260c"
+}</code></pre>
+
+          <table>
+            <thead>
+              <tr><th>column</th><th>what it is</th></tr>
+            </thead>
+            <tbody>
+              <!-- causalab_mini/data/rows.py:120-124 -->
+              <tr><td><code>example_id</code></td><td>the row's <code>example_id</code> column if the table has one, else its index as a string</td></tr>
+              <tr><td><code>metric</code></td><td>the result this file holds, by name — the <code>value</code> of the save</td></tr>
+              <!-- causalab_mini/plan/write.py:84-86 -->
+              <tr><td><code>value</code></td><td>the number, or <code>null</code>. JSON has no NaN or Infinity, so a non-finite result is <code>null</code> too</td></tr>
+              <!-- causalab_mini/plan/write.py:66-74 -->
+              <tr><td><code>eligible</code></td><td><code>false</code> when the measurement was excluded. Two halves: the column half, decided from the data — this row had no answer to score — and, for a run that anchored a position to text, the rows it could place. The result holds one value per eligible row; an excluded row is still a row of the table, so it can never be read as a zero or silently shorten a denominator</td></tr>
+              <!-- causalab_mini/engine/steps.py:141, 169-185 -->
+              <tr><td><code>positions</code></td><td>the absolute token indices, in the padded batch, that this row's number was read at. <code>null</code> when the pass has no text anchor and no cut of the continuation — then the document already fixed the integers and the run has nothing to report</td></tr>
+              <!-- causalab_mini/ops/locate.py:39 (REASONS), :224-236, :267-286 -->
+              <tr><td><code>reason</code></td><td>why <code>positions</code> is empty when it is. Three of them: <code>alignment_missing</code>, the anchor text or the segment is not in this row; <code>alignment_ambiguous</code>, it is there more than once, and scoping the anchor is what makes it one; <code>out_of_range</code>, the cut falls outside the run it cuts. <code>""</code> when the window was found</td></tr>
+              <!-- causalab_mini/ops/metrics.py:75-81 -->
+              <tr><td><code>unit</code></td><td><code>fraction</code>, <code>logit</code>, <code>nat</code> or <code>probability</code>, by metric kind</td></tr>
+              <tr><td><code>estimand_version</code></td><td>which definition of the metric produced the number: <code>match/v1</code>, <code>logit_diff/v1</code>, and so on</td></tr>
+              <!-- causalab_mini/plan/spec.py:452-462 -->
+              <tr><td><code>produced_by</code></td><td>sha256 of the experiment: the whole document except <code>header</code>, which is authoring metadata. Two rows with the same digest came from the same experiment</td></tr>
+            </tbody>
+          </table>
+
+          <p>Row 1 above is the column half: its <code>cf_answer</code> is null, so
+          <code>logit_diff</code> has nothing to score, and <code>value</code> is
+          <code>null</code> with <code>eligible: false</code>. Its
+          <code>positions</code> is still <code>[10]</code>, because the position
+          resolved fine — it was the data that was missing, and the two halves are
+          reported separately for that reason.</p>
+
+          <h2><code>--json</code>, for agents</h2>
+
+          <!-- causalab_mini/cli.py:81-85, 89-91 -->
+          <p>Each verb returns one dictionary with a <code>text</code> key.
+          <code>--json</code> prints the dictionary; without it, only
+          <code>text</code> is printed. So the human output and the machine output are
+          the same run, never two code paths that can disagree.</p>
+
+          <p><code>--json</code> is on the top-level parser, so it goes
+          <strong>before</strong> the verb:</p>
+
+          <pre><code class="language-bash">$ uv run causalab-mini --json validate documents/v2/patching.json
+{
+ "text": "ok: documents/v2/patching.json is a valid plan-shaped document",
+ "ok": true,
+ "format": "plan-shaped"
+}
+
+$ uv run causalab-mini validate documents/v2/patching.json --json
+usage: causalab-mini [-h] [--json]
+                     {schema,vocab,model,tokens,data,validate,explain,run} ...
+causalab-mini: error: unrecognized arguments: --json</code></pre>
+
+          <p>The payloads are the answers a document-writing agent needs, in a shape
+          it can query:</p>
+
+          <!-- ran 2026-09-23, repo root -->
+          <pre><code class="language-bash">$ uv run causalab-mini --json tokens hf-internal-testing/tiny-random-LlamaForCausalLM " Monday" " Tuesday" \
+    | jq -c '.texts | to_entries[] | {text: .key, one_token: .value.one_token}'
+{"text":" Monday","one_token":true}
+{"text":" Tuesday","one_token":false}
+
+$ uv run causalab-mini --json model hf-internal-testing/tiny-random-LlamaForCausalLM \
+    | jq -r '.components | to_entries[] | select(.value.resolves | not) | .key'
+attention_scores
+attention_probs
+
+$ uv run causalab-mini --json vocab | jq -c '.metric_kinds, .units.match, .components.block_output'
+{"match":["expected"],"logit_diff":["a","b"],"cross_entropy":["target"],"token_logit":["token"],"token_prob":["token"]}
+{"unit":"fraction","estimand_version":"match/v1"}
+{"accessor":"layers_output","path":null,"side":"output","interior":false,"layered":true,"seq_axis":1,"width":"hidden_size","read_only":false,"heads":false,"needs":null}</code></pre>
+
+          <!-- causalab_mini/cli.py:219, 228 -->
+          <p>Two payloads are thin. <code>explain</code> adds only <code>steps</code>,
+          the names of the root plan's steps — the plan itself is the
+          <code>text</code>, and it is written to be read. On a swept document those
+          names are the points, which is how you learn the directory names before the
+          run makes them:</p>
+
+          <!-- ran 2026-09-23, repo root -->
+          <pre><code class="language-bash">$ uv run causalab-mini --json explain documents/pos_sweep_cpu.json | jq -c '.steps'
+["pos=-1","pos=-2","pos=-3"]</code></pre>
+
+          <p><code>run</code> adds <code>written</code>, the list of paths; the results
+          are in those files, not in the reply.</p>
+
+          <pre><code class="language-bash">$ uv run causalab-mini --json run documents/v2/patching.json --device-map cpu --out out/cli/patch
+{
+ "text": "out/cli/patch/document.json\nout/cli/patch/run.json\nout/cli/patch/iia.json\nout/cli/patch/logit_diff.json",
+ "written": [
+  "out/cli/patch/document.json",
+  "out/cli/patch/run.json",
+  "out/cli/patch/iia.json",
+  "out/cli/patch/logit_diff.json"
+ ]
+}</code></pre>
+
+          <h2>Exit codes, and what an error looks like</h2>
+
+          <!-- causalab_mini/cli.py:80-86 — main returns 0 and catches nothing -->
+          <table>
+            <thead>
+              <tr><th>code</th><th>when</th></tr>
+            </thead>
+            <tbody>
+              <tr><td class="num">0</td><td>the verb ran</td></tr>
+              <tr><td class="num">1</td><td>an uncaught exception. The traceback is the error message</td></tr>
+              <tr><td class="num">2</td><td>argparse: no verb, an unknown verb, an invalid <code>--engine</code>, <code>--json</code> after the verb</td></tr>
+            </tbody>
+          </table>
+
+          <p>There is no error handling in the command line at all: a refusal is an
+          exception, and it arrives with its stack. That is deliberate — the frames say
+          which of the compiler, the address layer, the walk or the engine refused —
+          but it means the sentence you want is the last line. Three real ones, each
+          trimmed to its first line and its last, which is where the sentence is. This
+          one exits 1:</p>
+
+          <!-- ran 2026-09-23; documents/attention_query_cpu.json taps an interior -->
+          <pre><code class="language-bash">$ uv run causalab-mini run documents/attention_query_cpu.json --engine hooks --device-map cpu --out out/cli/q-hooks
+Traceback (most recent call last):
+…
+causalab_mini.address.AddressError: component 'attention_query' is an interior — one argument of one call inside a module's forward — and a forward hook only sees the module's boundary. It is addressed through nnsight's `.source`, which has no hooks equivalent; run this document on the nnterp engine.</code></pre>
+
+          <p>A document that does not match the schema fails in pydantic, which names
+          the field by its path:</p>
+
+          <!-- ran 2026-09-23; out/cli/badmetric.json is documents/v2/patching.json
+               with metrics.iia.expected deleted -->
+          <pre><code class="language-bash">$ uv run causalab-mini validate out/cli/badmetric.json
+Traceback (most recent call last):
+…
+pydantic_core._pydantic_core.ValidationError: 1 validation error for Spec
+interventions.patching.metrics.iia.match.expected
+  Field required [type=missing, input_value={'kind': 'match', 'of': '...form': 'space_prefixed'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing</code></pre>
+
+          <p>And a refusal that only the run can make, because only the run has the
+          rows. A read may skip a row it cannot place; a write may not:</p>
+
+          <!-- ran 2026-09-23; out/cli/neptune-data is documents/data copied, with
+               row 1's entity replaced by "Neptune" -->
+          <pre><code class="language-bash">$ uv run causalab-mini run documents/v2/entity_patch.json --data-root out/cli/neptune-data --device-map cpu --out out/cli/neptune
+Traceback (most recent call last):
+…
+causalab_mini.plan.plan.PlanError: write 'patch' has nothing to write on row(s) {1: 'alignment_missing'}. A read may skip a row; a write may not — writing nothing somewhere is not an intervention, and the row would score as if one had happened. `alignment_ambiguous` is a value that is in the prompt more than once, and scoping the anchor is what makes it one</code></pre>
+
+          <!-- tests/test_eligibility.py:176-195 is the executable statement of this:
+               the same hole, on a read-only anchor, is a row with eligible false,
+               reason alignment_missing, positions [] and value null -->
+          <p>The same hole on a <em>read</em> is not an error. It comes home as a row
+          of the table with <code>eligible: false</code>, <code>positions: []</code>
+          and <code>reason: "alignment_missing"</code> — which is the case
+          <code>tests/test_eligibility.py</code> pins. Whether a row the run cannot
+          place stops the run or is reported depends on whether something was to be
+          written there, not on the data.</p>
+
+          <div class="seealso">
+            <h2>See also</h2>
             <ul>
-            <li>The two kinds of verb: the seven that need no weights, and <code>run</code>.</li>
-            <li><code>schema</code>, <code>vocab</code>, <code>model</code>, <code>tokens</code>, <code>data</code>, <code>validate</code>, <code>explain</code> — each with its real output.</li>
-            <li><code>--json</code> on every verb, and why it exists.</li>
-            <li><code>run</code>: <code>--out</code>, <code>--device-map</code>, <code>--batch-size</code>, <code>--data-root</code>.</li>
-            <li><code>--engine</code>: <code>nnterp</code>, <code>ndif</code>, <code>hooks</code>. <code>causalab_mini/cli.py:34</code>.</li>
-            <li>The output directory: <code>document.json</code>, <code>run.json</code>, the metric tables, a fit's safetensors bundle, and how nesting names directories.</li>
+              <li><a href="documents.html">Documents</a> — the format every verb takes,
+                  field by field, and the schema <code>schema</code> prints</li>
+              <li><a href="remote.html">Remote &amp; NDIF</a> — what
+                  <code>--engine ndif</code> does with the plan, and what a server needs
+                  to accept it</li>
+              <li><a href="engine.html">The engine</a> — what <code>run</code> is doing
+                  between the compile and the files: eight members and one session</li>
+              <li><a href="use-cases/layer-sweep.html">Layer sweep</a> — these commands
+                  on a real model, with results that mean something</li>
+              <li><a href="ops.html">Reads, writes, metrics</a> — the metric kinds
+                  behind <code>unit</code> and <code>estimand_version</code></li>
+              <li><a href="positions.html">Positions</a> — where
+                  <code>positions</code> and <code>reason</code> come from</li>
             </ul>
-            <p>Writing it? Read <code>docs/STYLE.md</code> first — it has the page
-            template, the citation rule and the nav snippet to paste.</p>
           </div>
 
         </article>
