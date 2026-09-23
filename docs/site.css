@@ -103,6 +103,22 @@ h2 { font-size: 1.3rem; margin-top: 2.4em; padding-top: .6em; border-top: 1px so
 h3 { font-size: 1.05rem; margin-top: 1.9em; color: var(--fg); }
 h4 { font-size: .95rem; margin-top: 1.5em; color: var(--fg-muted); }
 
+/* a heading is a link target; the affordance appears when you point at it,
+   and stays visible while it has focus so a keyboard can reach it */
+.anchor {
+  margin-left: .35em;
+  font-weight: 400;
+  font-size: .8em;
+  color: var(--fg-faint);
+  text-decoration: none;
+  opacity: 0;
+}
+h2:hover > .anchor, h3:hover > .anchor, .anchor:focus { opacity: 1; }
+.anchor:hover { color: var(--accent-strong); }
+:target { scroll-margin-top: 1rem; }
+
+sup, sub { line-height: 0; font-size: .75em; }
+
 p, ul, ol, dl { margin: 0 0 1em; }
 li { margin-bottom: .3em; }
 li > ul, li > ol { margin-top: .3em; }
@@ -277,6 +293,10 @@ pre {
   margin: 0 0 1.2em;
   tab-size: 2;
 }
+
+/* A box that scrolls sideways gets a scrollbar from the browser, and a
+   default one is drawn light whatever the page is. Name its colours. */
+pre, table, figure, .sidebar { scrollbar-width: thin; scrollbar-color: var(--rule-strong) transparent; }
 pre code { font-size: inherit; background: none; border: 0; padding: 0; }
 
 /* a block with its source stated above it */
@@ -427,7 +447,9 @@ figure > figcaption {
 .bars { margin: 0 0 1.5em; max-width: 38rem; }
 .bars .row {
   display: grid;
-  grid-template-columns: 3.4rem 1fr 3rem;
+  /* the label and the number are monospace and never break; the bar takes
+     whatever is left, at any width */
+  grid-template-columns: max-content 1fr max-content;
   align-items: center;
   gap: .5rem;
   font-size: .8rem;
@@ -435,6 +457,7 @@ figure > figcaption {
   padding: .08rem 0;
 }
 .bars .key { color: var(--fg-muted); text-align: right; font-family: var(--font-mono); }
+.bars .key, .bars .val { white-space: nowrap; }
 .bars .track { background: var(--bg-sunken); border: 1px solid var(--rule); border-radius: 2px; height: .8rem; }
 .bars .fill { background: var(--accent); height: 100%; border-radius: 1px; }
 .bars .val { color: var(--fg-muted); font-family: var(--font-mono); }
@@ -458,6 +481,7 @@ figure > figcaption {
   text-transform: uppercase;
   color: var(--fg-faint);
 }
+.seealso h2 > .anchor { font-size: 1em; letter-spacing: 0; }
 .seealso ul { margin: 0; padding-left: 1.1rem; }
 
 /* ---------------------------------------------------------------- narrow */
@@ -481,7 +505,16 @@ figure > figcaption {
   main { padding: 1.5rem var(--gutter) 4rem; }
   h1 { font-size: 1.5rem; }
   h2 { font-size: 1.15rem; }
-  .bars .row { grid-template-columns: 2.8rem 1fr 2.6rem; }
+  .anchor { opacity: .5; }
+
+  /* A diagram does not reflow. Shrunk to a phone's column a 640-wide one
+     puts its labels under 6px, so below this width the figure scrolls
+     instead — the same thing a wide table does. 490px keeps the smallest
+     label above 8px. */
+  figure { overflow-x: auto; }
+  figure > svg { min-width: 490px; }
+  :target { scroll-margin-top: 4rem; }   /* clear the sticky topbar */
+  .bars .row { gap: .35rem; font-size: .72rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {
