@@ -252,8 +252,11 @@ means: **no literal colours.** Use the stylesheet's tokens.
   `<marker id="arrow">`, which needs its own `<defs>` per diagram or a
   page-unique id.
 - `role="img"` with `<title>` and `<desc>` is not optional.
-- Font sizes below 10 are unreadable on a phone. Keep the whole thing legible
-  at 360px wide, or do not draw it.
+- Font sizes below 10 are unreadable on a phone. Below 62rem the stylesheet
+  stops shrinking a diagram at `min-width: 490px` and lets the figure scroll
+  sideways, so a label at `font-size="10.5"` lands at about 8px there. A
+  narrower `viewBox` avoids the sideways scroll entirely: 460 fits a phone's
+  column at 0.78x, where 640 would be 0.51x. Draw narrow if you can.
 
 `docs/index.html` and `docs/use-cases/layer-sweep.html` each have one; copy
 their shape.
@@ -364,6 +367,20 @@ purpose.
 cd docs && python -m http.server 8000     # then open http://localhost:8000/
 ```
 
+If you are on a box with no desktop, Firefox renders headless and writes a
+PNG, which is enough to catch an overflowing table or a diagram whose labels
+have gone under 6px:
+
+```bash
+firefox --headless --window-size=1200,2400 --screenshot /tmp/wide.png  http://localhost:8000/ops.html
+firefox --headless --window-size=360,3000  --screenshot /tmp/phone.png http://localhost:8000/ops.html
+```
+
+For the dark theme, a headless render follows `prefers-color-scheme`, so the
+quickest way to see the other one is a wrapper page that frames yours inside
+an `<html data-theme="dark">` — the same attribute `site.js` sets from the
+toggle. Do not commit the wrapper.
+
 - Read the page in both themes. The toggle is in the sidebar footer.
 - Read it at 360px wide. No horizontal scrolling of the page itself; a wide
   code block or table scrolls inside its own box, which is what the stylesheet
@@ -373,3 +390,7 @@ cd docs && python -m http.server 8000     # then open http://localhost:8000/
 - Every code block you added was produced by a command you ran.
 - Exactly one `aria-current="page"` in the file.
 - No `TODO(author)` left that you could have answered by reading the code.
+- Every `<h2>` and `<h3>` you added carries an `id` and the `#` anchor link:
+  `<h2 id="what-a-read-is">What a read is <a class="anchor" href="#what-a-read-is" aria-label="Link to this section">#</a></h2>`.
+  The id is the heading's text, lowercased, with runs of punctuation and
+  spaces turned into single hyphens; it has to be unique in the file.
