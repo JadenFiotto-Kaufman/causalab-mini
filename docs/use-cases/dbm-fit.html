@@ -78,22 +78,490 @@
             <p class="lede">Differentiable binary masking: a learned mask over a site's units.</p>
           </header>
 
-          <div class="stub">
-            <span class="label">in progress</span>
-            <p>This page has not been written yet. It is one page of a set being
-            filled in; the rest of the site is live.</p>
-            <p>What it will cover:</p>
-            <ul>
-            <li><code>documents/v2/dbm.json</code>, verbatim, run end to end.</li>
-            <li>The <code>gate</code> featurizer: no <code>k</code>, no seed, soft while training and hard whenever it is scored.</li>
-            <li><code>anneal</code>: <code>start</code> and <code>end</code> temperature, geometric between.</li>
-            <li>The objective term <code>&lt;gate&gt;.mask</code> — the mean of the soft mask, which is its L1 penalty — and how it trades against the metric.</li>
-            <li>What the three differences from <code>das.json</code> are, exactly.</li>
-            <li>Reading the fitted mask out of the safetensors bundle.</li>
-            </ul>
-            <p>Writing it? Read <code>docs/STYLE.md</code> first — it has the page
-            template, the citation rule and the nav snippet to paste.</p>
+          <p>A DAS fit asks which <em>directions</em> of an activation carry the
+          answer. A DBM fit asks which <em>units</em> — which coordinates of the
+          residual stream, in the basis the model already uses. The parameter is one
+          number per unit, and what a run keeps is a mask: this unit comes from the
+          counterfactual, that one stays.</p>
+
+          <!-- causalab_mini/ops/featurizer.py:181 Gate -->
+          <p>That makes it the same sentence as a subspace swap with "units" for
+          "directions", and the same document with three fields changed. This page runs
+          <code>documents/v2/dbm.json</code>, which sweeps the sparsity pressure, so the
+          document is a sparsity curve.</p>
+
+          <h2>At a glance</h2>
+
+          <!-- causalab_mini/ops/featurizer.py:212 — mask; :220 inverse -->
+          <p>The gate featurizer, in three lines:</p>
+
+          <pre><code class="language-python">featurize(x) = (x, 0)
+inverse(f, 0, x) = m ⊙ f + (1 − m) ⊙ x
+
+m = σ(θ / T)   while the fit is updating θ      (soft, so a gradient reaches it)
+m = [θ &gt; 0]    whenever the mask is scored      (hard, so the score is of a real mask)</code></pre>
+
+          <p>The features <em>are</em> the activation — nothing is projected — which is
+          why a gate needs no <code>k</code>. The parameter is <code>θ</code>, one
+          number per unit of the site, and the two readings of it are the one piece of
+          mode in the library.</p>
+
+          <!-- causalab_mini/plan/spec.py:139 refuses k on a gate; :145 refuses a seed -->
+          <!-- causalab_mini/ops/featurizer.py:262 — a gate starts at θ = 0 -->
+          <div class="note">
+            <span class="label">no <code>k</code>, no seed, and every unit starts off</span>
+            <p>A gate masks every unit of its site, so a <code>k</code> on one is
+            refused; it starts at <code>θ = 0</code> rather than from a draw, so a
+            <code>seed</code> on one is refused too. At <code>θ = 0</code> the soft mask
+            is ½ everywhere and the hard mask — <code>θ &gt; 0</code> — is <em>off</em>
+            everywhere. An unfitted gate is a write that does nothing.</p>
           </div>
+
+          <h2>The document</h2>
+
+          <figure class="listing">
+            <figcaption><code>documents/v2/dbm.json</code> <span class="what">— the document this page runs, verbatim</span></figcaption>
+            <pre><code class="language-json">{
+  &quot;header&quot;: {
+    &quot;description&quot;: &quot;DBM on the tiny CPU Llama: learn WHICH units of layer 0&#x27;s output carry the answer, as a binary mask, rather than which directions (compare das.json \u2014 the only differences are the featurizer&#x27;s kind, one objective term and the anneal). The mask is soft, \u03c3(\u03b8/T), while the fit updates it and hard, \u03b8 &gt; 0, whenever it is scored; `mask.mask` in the objective is the mean of the soft mask, the L1 pressure toward keeping few units. The L1 weight is swept, so the document is the sparsity curve: measured 2026-09-21, 4, 2, 1 and 0 of 16 units kept.&quot;
+  },
+  &quot;model&quot;: {
+    &quot;key&quot;: &quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;,
+    &quot;revision&quot;: &quot;9fb191250dd56d0ba7ec9785a025ed29c03d5998&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;
+  },
+  &quot;roles&quot;: {
+    &quot;base&quot;: {
+      &quot;field&quot;: &quot;input&quot;
+    },
+    &quot;counterfactual&quot;: {
+      &quot;field&quot;: &quot;counterfactual_inputs[0]&quot;
+    }
+  },
+  &quot;sites&quot;: {
+    &quot;target&quot;: {
+      &quot;component&quot;: &quot;block_output&quot;,
+      &quot;layers&quot;: [
+        0
+      ]
+    },
+    &quot;head&quot;: {
+      &quot;component&quot;: &quot;lm_head&quot;
+    }
+  },
+  &quot;featurizers&quot;: {
+    &quot;mask&quot;: {
+      &quot;kind&quot;: &quot;gate&quot;
+    }
+  },
+  &quot;interventions&quot;: {
+    &quot;dbm&quot;: {
+      &quot;reads&quot;: {
+        &quot;v_cf&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;original&quot;,
+          &quot;input&quot;: &quot;counterfactual&quot;,
+          &quot;featurizer&quot;: &quot;mask&quot;
+        },
+        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;patched&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        }
+      },
+      &quot;writes&quot;: {
+        &quot;patch&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;featurizer&quot;: &quot;mask&quot;,
+          &quot;mechanism&quot;: &quot;swap&quot;,
+          &quot;operand&quot;: &quot;v_cf&quot;
+        }
+      },
+      &quot;models&quot;: {
+        &quot;patched&quot;: {
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;writes&quot;: [
+            &quot;patch&quot;
+          ]
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;iia&quot;: {
+          &quot;kind&quot;: &quot;logit_diff&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;a&quot;: &quot;cf_answer&quot;,
+          &quot;b&quot;: &quot;base_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
+        },
+        &quot;ce&quot;: {
+          &quot;kind&quot;: &quot;cross_entropy&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;target&quot;: &quot;cf_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
+        }
+      }
+    }
+  },
+  &quot;steps&quot;: {
+    &quot;fit&quot;: {
+      &quot;kind&quot;: &quot;fit&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/data#train&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays/data#train&quot;
+      },
+      &quot;params&quot;: [
+        &quot;mask&quot;
+      ],
+      &quot;objective&quot;: [
+        [
+          1.0,
+          &quot;ce&quot;
+        ],
+        [
+          {
+            &quot;sweep&quot;: [
+              0.0001,
+              0.002,
+              0.01,
+              0.05
+            ]
+          },
+          &quot;mask.mask&quot;
+        ]
+      ],
+      &quot;epochs&quot;: 20,
+      &quot;pairs&quot;: 16,
+      &quot;seed&quot;: 0,
+      &quot;optimizer&quot;: {
+        &quot;name&quot;: &quot;adamw&quot;,
+        &quot;lr&quot;: 0.05,
+        &quot;weight_decay&quot;: 0.0
+      },
+      &quot;early_stop&quot;: {
+        &quot;metric&quot;: &quot;ce&quot;,
+        &quot;mode&quot;: &quot;min&quot;,
+        &quot;patience&quot;: 20
+      },
+      &quot;eval&quot;: {
+        &quot;rows&quot;: {
+          &quot;base&quot;: &quot;weekdays/data#test&quot;,
+          &quot;counterfactual&quot;: &quot;weekdays/data#test&quot;
+        },
+        &quot;saves&quot;: [
+          {
+            &quot;value&quot;: &quot;iia&quot;,
+            &quot;file_path&quot;: &quot;held_out_iia.json&quot;
+          }
+        ]
+      },
+      &quot;anneal&quot;: {
+        &quot;mask&quot;: {
+          &quot;start&quot;: 1.0,
+          &quot;end&quot;: 0.05
+        }
+      }
+    },
+    &quot;score&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/data#train&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays/data#train&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;iia&quot;,
+          &quot;file_path&quot;: &quot;iia.json&quot;
+        },
+        {
+          &quot;value&quot;: &quot;ce&quot;,
+          &quot;file_path&quot;: &quot;ce.json&quot;
+        }
+      ]
+    },
+    &quot;weights&quot;: {
+      &quot;kind&quot;: &quot;weights&quot;,
+      &quot;names&quot;: [
+        &quot;mask&quot;
+      ],
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;mask&quot;,
+          &quot;file_path&quot;: &quot;mask.safetensors&quot;
+        }
+      ]
+    }
+  }
+}</code></pre>
+          </figure>
+
+          <p>Reading it in the order the compiler does:</p>
+
+          <ul>
+            <li><code>model</code> is the tiny random-weight Llama at layer 0, whose
+            residual stream is 16 wide — so the mask is 16 numbers and you can print
+            it.</li>
+            <li><code>featurizers.mask</code> is <code>{"kind": "gate"}</code> and
+            nothing else. There is nothing else to say.</li>
+            <li><code>interventions.dbm</code> is an interchange: read
+            <code>v_cf</code> through the gate on the counterfactual prompt, write it
+            through the same gate into the base run. Two metrics —
+            <code>ce</code>, the cross entropy of the counterfactual's answer, and
+            <code>iia</code>, which in <em>this</em> document is a
+            <code>logit_diff</code>, the margin between the two answers.</li>
+            <li><code>steps.fit</code> trains <code>mask</code> for 20 epochs, then
+            <code>steps.score</code> scores the fitted mask on the training rows and
+            <code>steps.weights</code> publishes <code>θ</code> for the save.</li>
+          </ul>
+
+          <h3>The three differences from a DAS fit</h3>
+
+          <p>The header says the only differences from <code>documents/v2/das.json</code>
+          are the featurizer's kind, one objective term and the anneal. Renamings aside,
+          that is what <code>diff</code> shows, plus the optimizer settings a different
+          parameter wants:</p>
+
+          <table>
+            <thead><tr><th>field</th><th><code>das.json</code></th><th><code>dbm.json</code></th></tr></thead>
+            <tbody>
+              <tr><td><code>featurizers.*.kind</code></td><td><code>subspace</code>, <code>k: 8</code>, <code>parametrization: cayley</code></td><td><code>gate</code></td></tr>
+              <tr><td><code>steps.fit.objective</code></td><td><code>[[1.0, "ce"]]</code></td><td>that, plus <code>[{sweep: […]}, "mask.mask"]</code></td></tr>
+              <tr><td><code>steps.fit.anneal</code></td><td>absent</td><td><code>{"mask": {"start": 1.0, "end": 0.05}}</code></td></tr>
+              <tr><td><code>steps.fit.epochs</code></td><td class="num">10</td><td class="num">20</td></tr>
+              <tr><td><code>optimizer.lr</code></td><td class="num">0.001</td><td class="num">0.05</td></tr>
+              <tr><td><code>early_stop</code></td><td><code>iia</code>, max, patience 3</td><td><code>ce</code>, min, patience 20</td></tr>
+            </tbody>
+          </table>
+
+          <h2>The two new fields</h2>
+
+          <h3><code>&lt;gate&gt;.mask</code> in the objective</h3>
+
+          <!-- causalab_mini/engine/steps.py:528 — scored gains `<name>.mask` per gate;
+               :569 objective() is Σ wᵢ · termᵢ.mean(), minimized -->
+          <p>An objective is a list of <code>[weight, term]</code> pairs, summed and
+          minimized. The terms are usually metrics. A gate publishes one more under its
+          own name: <code>mask.mask</code> is the <em>soft</em> mask, and the objective
+          takes its mean — so a positive weight on it is L1 pressure toward keeping few
+          units.</p>
+
+          <!-- causalab_mini/engine/steps.py:571 — the sign of the weight is the direction -->
+          <p>There is no <code>maximize</code> flag anywhere: the sign of the weight is
+          the direction. <code>[1.0, "ce"]</code> minimizes a cross entropy;
+          <code>[-1.0, "logit_diff"]</code> would maximize a margin. Here the two terms
+          pull against each other — the cross entropy wants whatever units make the
+          patch work, the mask term wants none of them — and the sweep over
+          <code>0.0001, 0.002, 0.01, 0.05</code> is the trade-off, one point per
+          weight.</p>
+
+          <h3><code>anneal</code></h3>
+
+          <!-- causalab_mini/engine/steps.py:523 — temperature = first · (last/first)^(done/(total-1)) -->
+          <p><code>{"start": 1.0, "end": 0.05}</code> sets <code>T</code> on the first
+          update and on the last, and the updates between get a geometric
+          interpolation. The point is that <code>σ(θ/T)</code> approaches the step
+          function <code>[θ &gt; 0]</code> as <code>T</code> falls, so the soft mask the
+          optimizer differentiates ends up close to the hard mask the score uses. This
+          document has 20 updates — 20 epochs of one minibatch, because the training
+          split is smaller than <code>pairs: 16</code>:</p>
+
+          <!-- the formula above, evaluated for this document's 20 updates; not a measurement -->
+          <table>
+            <thead><tr><th class="num">update</th><th class="num">1</th><th class="num">5</th><th class="num">10</th><th class="num">15</th><th class="num">20</th></tr></thead>
+            <tbody>
+              <tr><td>T</td><td class="num">1.000</td><td class="num">0.532</td><td class="num">0.242</td><td class="num">0.110</td><td class="num">0.050</td></tr>
+            </tbody>
+          </table>
+
+          <p>The eval pass at the end of each epoch runs with <code>training</code>
+          cleared, so every held-out number on this page is of a hard mask, whatever
+          <code>T</code> was.</p>
+
+          <h2>Running it</h2>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/dbm.json
+&lt;root&gt;: Plan
+  objective=0.0001: Plan
+    featurizers: Featurizers
+        mask: gate d=16 θ=0 trained=True
+    fit: Fit  20 epochs x 1 update  lr=0.05 objective=((1.0, &#x27;ce&#x27;), (0.0001, &#x27;mask.mask&#x27;)) params=(&#x27;mask&#x27;,)  early_stop=&#x27;ce&#x27; patience=20 anneal=((&#x27;mask&#x27;, 1.0, 0.05),)
+        epochs[0][0]: Observe  metrics=[&#x27;iia/logit_diff&#x27;, &#x27;ce/cross_entropy&#x27;]
+            forward &#x27;original&#x27; on &#x27;counterfactual&#x27;  (2 rows x 11 tokens)
+              read  &#x27;v_cf&#x27; at block_output[0] pos={index:-1} via &#x27;mask&#x27;
+            forward &#x27;patched&#x27; on &#x27;base&#x27;  (2 rows x 11 tokens)
+              write &#x27;patch&#x27; at block_output[0] pos={index:-1} swap(v_cf) via &#x27;mask&#x27;
+              read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
+        evaluation: Observe  metrics=[&#x27;iia/logit_diff&#x27;, &#x27;ce/cross_entropy&#x27;]  saves=[&#x27;held_out_iia.json&#x27;]
+            forward &#x27;original&#x27; on &#x27;counterfactual&#x27;  (2 rows x 9 tokens)
+              read  &#x27;v_cf&#x27; at block_output[0] pos={index:-1} via &#x27;mask&#x27;
+            forward &#x27;patched&#x27; on &#x27;base&#x27;  (2 rows x 9 tokens)
+              write &#x27;patch&#x27; at block_output[0] pos={index:-1} swap(v_cf) via &#x27;mask&#x27;
+              read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
+    score: Observe  metrics=[&#x27;iia/logit_diff&#x27;, &#x27;ce/cross_entropy&#x27;]  saves=[&#x27;iia.json&#x27;, &#x27;ce.json&#x27;]
+        forward &#x27;original&#x27; on &#x27;counterfactual&#x27;  (2 rows x 11 tokens)
+          read  &#x27;v_cf&#x27; at block_output[0] pos={index:-1} via &#x27;mask&#x27;
+          …
+    weights: Weights  names=[&#x27;mask&#x27;]  saves=[&#x27;mask.safetensors&#x27;]
+  objective=0.002: Plan
+…
+  objective=0.05: Plan
+…</code></pre>
+
+          <!-- causalab_mini/engine/steps.py:499 fit() — an update is `observe` over one
+               minibatch and an optimizer step; nothing here is a second engine -->
+          <p>A fit is not a second engine. An update is an ordinary observation pass
+          over one minibatch, and the only things that happen between updates are an
+          optimizer step and — at the end of an epoch — an eval pass on rows the fit
+          never saw. <code>params</code> is the whole of the trainability declaration:
+          the model is frozen and nothing else in the run carries a gradient.</p>
+
+          <!-- run 2026-09-23 on CPU, fp32, 12-core Ryzen 9 5900X -->
+          <pre><code class="language-bash">$ time uv run causalab-mini run documents/v2/dbm.json --out out/dbm
+out/dbm/document.json
+out/dbm/run.json
+out/dbm/objective=0.0001/document.json
+out/dbm/objective=0.0001/held_out_iia.json
+out/dbm/objective=0.0001/iia.json
+out/dbm/objective=0.0001/ce.json
+out/dbm/objective=0.0001/mask.safetensors
+…
+out/dbm/objective=0.05/mask.safetensors
+
+real	0m10.051s</code></pre>
+
+          <p>Four fits, 80 updates and 80 eval passes, in ten seconds — because the
+          model is 16 wide and the split is two rows.</p>
+
+          <h2>Reading the mask</h2>
+
+          <!-- causalab_mini/engine/steps.py:562 weights() publishes the parameter;
+               causalab_mini/plan/write.py:63 saves it as a one-slot safetensors bundle -->
+          <p>A <code>weights</code> step publishes the fitted parameter as a result, and
+          the save writes it as a safetensors bundle holding one slot,
+          <code>weight</code>, with the featurizer's identity stamped in the header.
+          For a gate that slot is <code>θ</code>, and the mask is
+          <code>θ &gt; 0</code>:</p>
+
+          <figure class="listing">
+            <figcaption><code>mask.py</code> <span class="what">— the fitted masks, out of the four bundles</span></figcaption>
+            <pre><code class="language-python">import glob
+from safetensors import safe_open
+
+for path in sorted(glob.glob(&quot;out/dbm/objective=*/mask.safetensors&quot;)):
+    with safe_open(path, &quot;pt&quot;) as bundle:
+        theta = bundle.get_tensor(&quot;weight&quot;)
+    print(path, int((theta &gt; 0).sum()), &quot;of&quot;, theta.numel(), &quot;kept&quot;)</code></pre>
+          </figure>
+
+          <!-- ran 2026-09-23 against the out/dbm above -->
+          <pre><code class="language-bash">$ python mask.py
+out/dbm/objective=0.0001/mask.safetensors 4 of 16 kept
+out/dbm/objective=0.002/mask.safetensors 2 of 16 kept
+out/dbm/objective=0.01/mask.safetensors 1 of 16 kept
+out/dbm/objective=0.05/mask.safetensors 0 of 16 kept</code></pre>
+
+          <p>Four, two, one, none — the same four numbers
+          <code>documents/v2/dbm.json</code>'s header records from 2026-09-21, from the
+          same seed. That is the curve the sweep exists to draw: turn up the L1 weight
+          and the fit keeps fewer units.</p>
+
+          <div class="bars">
+            <div class="row head"><span class="key">L1 weight</span><span>units kept, of 16</span><span class="val"></span></div>
+            <div class="row"><span class="key">0.0001</span>
+              <span class="track"><span class="fill" style="width:25%"></span></span>
+              <span class="val">4</span></div>
+            <div class="row"><span class="key">0.002</span>
+              <span class="track"><span class="fill" style="width:12.5%"></span></span>
+              <span class="val">2</span></div>
+            <div class="row"><span class="key">0.01</span>
+              <span class="track"><span class="fill" style="width:6.25%"></span></span>
+              <span class="val">1</span></div>
+            <div class="row"><span class="key">0.05</span>
+              <span class="track"><span class="fill" style="width:0%"></span></span>
+              <span class="val">0</span></div>
+          </div>
+
+          <p>The bars are the fraction of the 16 units whose <code>θ</code> came out
+          positive, measured from zero.</p>
+
+          <h2>How to read the result — and this one</h2>
+
+          <p>A mask fit has two numbers, and both are needed. The <strong>size</strong>
+          of the mask is what the sweep moves. The <strong>held-out score</strong> is
+          whether a mask that small still carries the answer. A sparsity curve is only
+          worth reading against the score beside it:</p>
+
+          <table>
+            <thead><tr><th class="num">L1 weight</th><th class="num">units kept</th><th class="num">held-out margin</th><th class="num">train cross entropy</th></tr></thead>
+            <tbody>
+              <tr><td class="num">0.0001</td><td class="num">4</td><td class="num">+0.2250 / −0.2277</td><td class="num">10.4639 / 10.4677</td></tr>
+              <tr><td class="num">0.002</td><td class="num">2</td><td class="num">+0.2259 / −0.2268</td><td class="num">10.4635 / 10.4685</td></tr>
+              <tr><td class="num">0.01</td><td class="num">1</td><td class="num">+0.2249 / −0.2277</td><td class="num">10.4638 / 10.4691</td></tr>
+              <tr><td class="num">0.05</td><td class="num">0</td><td class="num">+0.2239 / −0.2288</td><td class="num">10.4648 / 10.4694</td></tr>
+            </tbody>
+          </table>
+
+          <p>Both splits have two rows, so each cell is both of them —
+          <code>held_out_iia.json</code> and <code>ce.json</code>, row by row.</p>
+
+          <div class="caution">
+            <span class="label">this fit never separated anything</span>
+            <p>Read the middle column down. Keeping four units and keeping none give
+            held-out margins that differ by about 0.001 on a scale where the two rows
+            sit at ±0.22. That is not a mask that got sparser without losing anything —
+            it is a metric that never distinguished the mask from nothing at all.</p>
+            <p>At an L1 weight of 0.05 the mask is empty, and an empty gate is the
+            identity: <code>m ⊙ f + (1 − m) ⊙ x</code> with <code>m = 0</code> returns
+            <code>x</code>. That row is the <em>unpatched</em> model, and the other three
+            are within a thousandth of it. The model has random weights and a 16-wide
+            stream; it does not do the weekday task, so no subset of its units carries
+            the answer and there was nothing for the fit to find.</p>
+            <p>The run is still doing what it says — the sparsity curve is real, and it
+            is reproducible from the seed. What it is not is evidence about a model.
+            Before believing a DBM result, check that the held-out score of the fitted
+            mask is far from the score of an empty one, and that the model does the task
+            at all. <code>documents/real/weekdays_behavior.json</code> is what that check
+            looks like as a document.</p>
+          </div>
+
+          <!-- TODO(author): there is no documents/real/ DBM document, so this page has
+               no mask fit on a model that does the task. If one is added, the sparsity
+               curve and the held-out score belong here side by side. -->
+
+          <h2>The bundle</h2>
+
+          <!-- causalab_mini/plan/build.py:312 _identity — the keys a stamp carries;
+               :340 _load_featurizer checks them, :375 refuses naming the key -->
+          <p>Each point's <code>mask.safetensors</code> carries a header saying what the
+          mask is <em>of</em>, and a later document that loads it is checked against that
+          header key by key — model, revision, dtype, component, layer,
+          <code>kind</code>, <code>d</code>. A mask fitted at one layer loaded at another
+          would run, and would be nonsense, so it is refused naming the key that
+          differs.</p>
+
+          <!-- causalab_mini/ops/featurizer.py:205 — `training` is False on a Gate unless
+               a fit sets it, so a loaded gate is always hard -->
+          <p>A gate nobody is fitting is always hard, including one loaded from a file.
+          A loaded mask is a mask and nothing else: there is no temperature to set and
+          no soft reading to fall into.</p>
+
+          <div class="seealso">
+            <h2>See also</h2>
+            <ul>
+              <li><a href="das-fit.html">DAS fit</a> — the same document with a subspace
+                  in place of the gate, and a fit that does separate, on a real model</li>
+              <li><a href="../ops.html">Reads, writes, metrics</a> — the featurizer kinds,
+                  the write mechanisms, and what each metric kind computes</li>
+              <li><a href="sweeps.html">Sweeps</a> — why an objective <em>weight</em> can
+                  be a sweep axis, and what else can</li>
+              <li><a href="../documents.html">Documents</a> — <code>featurizers</code>,
+                  <code>steps.fit</code> and the rest of the blocks</li>
+            </ul>
+          </div>
+
 
         </article>
       </main>
