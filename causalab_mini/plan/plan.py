@@ -121,6 +121,13 @@ class Forward:
     #: The run decodes the same row with its own and compares before it
     #: looks for any text in it. One row is a sample, not a proof.
     sample: str = ""
+    #: Per row, the character span of each run the *frame* located in this
+    #: prompt — a chat turn, by its own role. Empty for a prompt that is a
+    #: plain string, which is most of them. They are the client's because
+    #: only the client knows the conversation the template rendered; they
+    #: are in the frame's own coordinates, so the run attaches them and
+    #: `locate` reads them exactly as it reads `eos` in the continuation.
+    segments: tuple[dict[str, tuple[int, int]], ...] = ()
 
 
 def window(forward: Forward, start: int, stop: int) -> Forward:
@@ -137,6 +144,7 @@ def window(forward: Forward, start: int, stop: int) -> Forward:
         attention_mask=forward.attention_mask[start:stop],
         # the sample is row 0's, so only the window holding row 0 carries one
         sample=forward.sample if start == 0 else "",
+        segments=forward.segments[start:stop],
         taps=tuple(
             replace(
                 tap,

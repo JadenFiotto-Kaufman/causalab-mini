@@ -614,13 +614,7 @@ def _pass(
     """One execution of the document's forwards over one set of rows. A
     training update, an eval pass and the scored run are all this step, over
     different rows."""
-    batches = {
-        role: tokens.encode(
-            tokenizer,
-            [rows_module.field_text(row, experiment.fields[role]) for row in table],
-        )
-        for role, table in rows.items()
-    }
+    batches = {role: _batch(tokenizer, role, experiment, table) for role, table in rows.items()}
     forwards = tuple(
         _forward(name, role, experiment, batches[role], addresses, rows[role])
         for name, role in _schedule(experiment)
@@ -631,6 +625,28 @@ def _pass(
         _metric(name, spec, base_rows, tokenizer) for name, spec in experiment.metrics.items()
     )
     return Observe(forwards=forwards, metrics=metrics)
+
+
+def _batch(
+    tokenizer: Any, role: str, experiment: _Experiment, table: list[rows_module.Row]
+) -> tuple[TokenRows, TokenRows, str, tuple[dict[str, tuple[int, int]], ...]]:
+    """One role's padded batch, and the runs the frame located in it.
+
+    A role's field may hold a string or a conversation, and which it is, is
+    the row's to say — so a chat prompt costs the document nothing and the
+    dataset one column. What the template rendered has the family's opening
+    token in it already, which is why it is encoded without another.
+    """
+    field = experiment.fields[role]
+    values = [rows_module.field_value(row, field) for row in table]
+    texts = [
+        tokens.rendered(tokenizer, value, f"role {role!r} field {field!r}, row {row}")
+        for row, value in enumerate(values)
+    ]
+    chat = any(not isinstance(value, str) for value in values)
+    ids, mask, sample = tokens.encode(tokenizer, texts, add_special=not chat)
+    spans = tokens.turns(tokenizer, ids, mask, values) if chat else ()
+    return ids, mask, sample, spans
 
 
 def _metric(name: str, spec: Any, base_rows: list[rows_module.Row], tokenizer: Any) -> MetricOp:
@@ -971,7 +987,7 @@ def _forward(
     name: str,
     role: str,
     experiment: _Experiment,
-    batch: tuple[TokenRows, TokenRows, str],
+    batch: tuple[TokenRows, TokenRows, str, tuple[dict[str, tuple[int, int]], ...]],
     addresses: dict[str, Address],
     rows: list[rows_module.Row],
 ) -> Forward:
@@ -1059,6 +1075,7 @@ def _forward(
         input_ids=batch[0],
         attention_mask=batch[1],
         sample=batch[2],
+        segments=batch[3],
         taps=tuple(taps),
         decode=experiment.decode,
     )

@@ -1,0 +1,86 @@
+[
+ {
+  "example_id": "Thursday",
+  "chat": [
+   {
+    "role": "user",
+    "content": "Name a weekday."
+   },
+   {
+    "role": "assistant",
+    "content": "Thursday."
+   },
+   {
+    "role": "user",
+    "content": "If today is Thursday, tomorrow is"
+   }
+  ],
+  "entity": "Thursday",
+  "base_answer": " Friday",
+  "cf_answer": " Sunday",
+  "split": "all"
+ },
+ {
+  "example_id": "Friday",
+  "chat": [
+   {
+    "role": "user",
+    "content": "Name a weekday."
+   },
+   {
+    "role": "assistant",
+    "content": "Thursday."
+   },
+   {
+    "role": "user",
+    "content": "If today is Friday, tomorrow is"
+   }
+  ],
+  "entity": "Friday",
+  "base_answer": " Saturday",
+  "cf_answer": " Monday",
+  "split": "all"
+ },
+ {
+  "example_id": "Saturday",
+  "chat": [
+   {
+    "role": "user",
+    "content": "Name a weekday."
+   },
+   {
+    "role": "assistant",
+    "content": "Thursday."
+   },
+   {
+    "role": "user",
+    "content": "If today is Saturday, tomorrow is"
+   }
+  ],
+  "entity": "Saturday",
+  "base_answer": " Sunday",
+  "cf_answer": " Friday",
+  "split": "all"
+ },
+ {
+  "example_id": "Sunday",
+  "chat": [
+   {
+    "role": "user",
+    "content": "Name a weekday."
+   },
+   {
+    "role": "assistant",
+    "content": "Thursday."
+   },
+   {
+    "role": "user",
+    "content": "If today is Sunday, tomorrow is"
+   }
+  ],
+  "entity": "Sunday",
+  "base_answer": " Monday",
+  "cf_answer": " Saturday",
+  "split": "all"
+ }
+]

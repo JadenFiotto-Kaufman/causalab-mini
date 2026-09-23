@@ -25,8 +25,17 @@ class Anchor:
     `variable` is the row's own value for a name: the `<column>_variables`
     sibling of the role's own field first, a top-level column of that name
     otherwise. That rule is why a pair-native document writes one spec and
-    each role resolves its own text. `segment` is a run the *frame* located:
-    a chat turn in the prompt frame, `eos` in the generated one.
+    each role resolves its own text.
+
+    `segment` is a run the *frame* located, and its name comes from the same
+    place the run does. In the prompt frame that is a chat turn, named by
+    the message's own `role` — `"user"`, `"assistant"`, whatever the
+    conversation says — so nothing here enumerates them. A conversation with
+    two user turns names them `"user[0]"` and `"user[1]"`, the bracket
+    `rows.field_text` already uses for a list, and the bare `"user"` is
+    `alignment_ambiguous`: the same rule a variable occurring twice gets,
+    and the same fix — say which. In the generated frame the one run the
+    frame locates is `eos`.
 
     Both keys together is the composition — the variable's run searched
     *inside* the segment's — which is also how a value occurring twice
@@ -40,7 +49,7 @@ class Anchor:
     __pydantic_config__ = {"extra": "forbid"}
 
     variable: str | None = None
-    segment: Literal["system", "user", "assistant", "eos"] | None = None
+    segment: str | None = None
 
     def __post_init__(self) -> None:
         if self.variable is None and self.segment is None:
@@ -85,8 +94,14 @@ class Where:
             a, b = self.span
             if (a >= 0) == (b >= 0) and b <= a:
                 raise ValueError(f"span {list(self.span)} is not a forward window")
-        if self.frame == "prompt" and self.scope is not None and self.scope.segment == "eos":
+        segment = None if self.scope is None else self.scope.segment
+        if self.frame == "prompt" and segment == "eos":
             raise ValueError("segment 'eos' is a run of the generated frame, not the prompt")
+        if self.frame == "generated" and segment is not None and segment != "eos":
+            raise ValueError(
+                f"segment {segment!r} is a turn of the prompt; the one run the continuation "
+                "frame locates is 'eos'"
+            )
 
     @classmethod
     def forms(cls) -> dict[str, Any]:

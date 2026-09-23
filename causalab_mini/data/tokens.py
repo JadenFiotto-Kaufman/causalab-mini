@@ -15,6 +15,7 @@ refuse when the answer is no, is their business.
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 from ..ops import locate
@@ -25,7 +26,74 @@ class TokenError(ValueError):
     pass
 
 
-def encode(tokenizer: Any, texts: list[str]) -> tuple[TokenRows, TokenRows, str]:
+def rendered(tokenizer: Any, value: Any, where: str) -> str:
+    """One role's prompt text: what the row holds, or what the model's own
+    chat template makes of it.
+
+    A conversation is a list of `{"role", "content"}` messages, which is a
+    thing a dataset column already can be — so a document says "this role is
+    a chat" by *its data being one*, exactly as it says which text an anchor
+    looks for by the row carrying it. There is no flag.
+    """
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, list) or not all(
+        isinstance(one, dict) and isinstance(one.get("role"), str) and isinstance(one.get("content"), str)
+        for one in value
+    ):
+        raise TokenError(
+            f"{where}: a role's text is a string, or a conversation — a list of "
+            f"{{'role': …, 'content': …}} messages. This row has {type(value).__name__}"
+        )
+    if getattr(tokenizer, "chat_template", None) is None:
+        raise TokenError(
+            f"{where}: this row is a conversation and this checkpoint has no chat "
+            "template, so there is no text to run. Give the role a string column"
+        )
+    return tokenizer.apply_chat_template(value, tokenize=False, add_generation_prompt=True)
+
+
+def turns(
+    tokenizer: Any, ids: TokenRows, mask: TokenRows, conversations: list[Any]
+) -> tuple[dict[str, tuple[int, int]], ...]:
+    """Per row, the character span of each turn inside the row's own text.
+
+    The coordinates are the frame's — `locate.frame_of`'s decoded text, the
+    same function the run builds its frame with — so the spans the plan
+    carries and the offsets the run resolves against cannot drift apart.
+    The span is the message's *content*: the template's own control tokens
+    are between the turns and in none of them, because each content is
+    searched for as itself, forward from where the last one ended.
+
+    A turn is named by its own role, plus `role[k]` for the k-th of that
+    role. The bare name is recorded only when that role appears once; a
+    reader asking for it when there are two gets `alignment_ambiguous`.
+    """
+    frame = locate.frame_of(tokenizer, ids, mask)
+    found = []
+    for row, messages in enumerate(conversations):
+        spans: dict[str, tuple[int, int]] = {}
+        if isinstance(messages, list):
+            text, cursor, seen = frame.texts[row], 0, Counter()
+            for one in messages:
+                role, content = one["role"], one["content"]
+                at = text.find(content, cursor)
+                index = seen[role]
+                seen[role] += 1
+                if at == -1:  # the template did not keep it whole
+                    continue
+                spans[f"{role}[{index}]"] = (at, at + len(content))
+                cursor = at + len(content)
+            for role, count in seen.items():
+                if count == 1 and f"{role}[0]" in spans:
+                    spans[role] = spans[f"{role}[0]"]
+        found.append(spans)
+    return tuple(found)
+
+
+def encode(
+    tokenizer: Any, texts: list[str], add_special: bool = True
+) -> tuple[TokenRows, TokenRows, str]:
     """One padded batch of prompts: the ids, their mask, and what one row's
     ids say here.
 
@@ -33,8 +101,12 @@ def encode(tokenizer: Any, texts: list[str]) -> tuple[TokenRows, TokenRows, str]
     the run is, so the two can only disagree if the two tokenizers do. That
     third value is how the run finds out: it decodes the same row with its
     own tokenizer and compares the strings.
+
+    `add_special=False` for text a chat template rendered: the template has
+    already put the family's opening token in, and asking for it again puts
+    it in twice (measured on the tiny Llama: `[1, 1, …]`).
     """
-    ids, mask, frame = locate.frame_of_texts(tokenizer, texts, text=False)
+    ids, mask, frame = locate.frame_of_texts(tokenizer, texts, text=False, add_special=add_special)
     if not ids:
         return ids, mask, ""
     return ids, mask, tokenizer.decode(ids[0][frame.starts[0] : frame.ends[0]])

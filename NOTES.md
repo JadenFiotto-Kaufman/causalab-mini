@@ -848,10 +848,12 @@ surface that **nothing** in `documents/` needs.
 
 - `{"column": "c"}` as a form of its own: a column *is* a variable here, and
   the sibling rule reaches both, so there is one anchor and not two.
-- `{"segment": "s"}` for the chat turns `system` / `user` / `assistant`: the
-  vocabulary takes them and the prompt frame answers `alignment_missing`,
-  because rendering a row through `apply_chat_template` and carrying the
-  per-turn character spans is client-side work no document asks for yet.
+- `segments` as a *named table* on the document. A turn is named by its own
+  role — `{"segment": "user"}`, `{"segment": "user[1]"}` for the second of
+  two — because the conversation already says the names, and a role whose
+  field holds a list of `{"role", "content"}` messages is rendered through
+  the checkpoint's template at compile time. What is not here is a table of
+  spans an author writes by hand.
 - `relative_to` — an offset from an anchor. There is no spelling of "from
   the anchor's last token to the end of the run": a `span` is a half-open
   window of the run it cuts, and `[a, 0]` is empty for every `a` because
