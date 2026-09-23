@@ -1683,12 +1683,39 @@ model stop?" is a reported reason and not an exception — but it means the
 positive case is only reachable in a unit test over `locate.continuation`
 with hand-made ids, which is where it is tested.
 
-### 24.6 An empty ragged gather was a float tensor
+### 24.6 An empty gather is a float tensor, at both of the two sites
 
-`ops.intervene._flat` built its index tensors from Python lists. When
-*every* row's window is empty — which is what "no row's anchor is in its
-prompt" produces — those lists are empty, `torch.as_tensor([])` is
-`float32`, and the gather raises `tensors used as indices must be long`
-instead of the metric's own "a metric of nothing has no mean". Stating the
-dtype fixes it. The bug was reachable before this work only by a
-`{"column": …}` read no row matched, which no document had.
+`ops.intervene` builds its index tensors from Python lists, in `_flat` for
+a ragged window and in `_window` for a rectangular one. When *every* row's
+window is empty, those lists are empty, `torch.as_tensor([])` is `float32`,
+and the gather raises `tensors used as indices must be long` — which is not
+the refusal anyone wants and names nothing. Both sites state the dtype now;
+fixing one and claiming the class was fixed is how the second one survived
+a round of review.
+
+The dtype is not the interesting half. A row with no window means two
+different things, and they want opposite answers. An **anchored** cut that
+found nothing is data — that row is an excluded measurement, and the run
+reports `alignment_missing` and scores the others. A cut of a **fixed
+width** that fits no row is a document that is wrong about its own prompts:
+it names the same number of tokens on every row, so it is refused where it
+is resolved, naming the op, the rows and the reason. Master refused it at
+compile time, against the client's tokenization; moving the resolver moved
+the refusal, and for a while it moved it into a float tensor instead.
+
+
+### 24.7 Report in the frame you resolved in
+
+A tap in the continuation frame is handed a dummy window: whatever the
+spec names, a decode step processes one position, and `intervene.at_step`
+puts any non-empty window on it. Filling the run's record from that window
+against the *prompt* frame produced `rows: (0,)` and, under left padding,
+`tokens` read at a negative offset — and it reached the written table, so a
+number read at decode step 2 was labelled prompt token 0.
+
+Provenance that is confidently wrong is worse than none, and the shape of
+the mistake is general: the record must be written by whatever holds the
+frame the position was resolved against. The prompt frame now says nothing
+about a continuation tap, and `_continuation` — which builds the frame of
+the ids the decode produced — reports every tap in it, stacked or not: the
+decode step, and the token the model produced there.

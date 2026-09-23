@@ -846,8 +846,10 @@ surface that **nothing** in `documents/` needs.
   vocabulary takes them and the prompt frame answers `alignment_missing`,
   because rendering a row through `apply_chat_template` and carrying the
   per-turn character spans is client-side work no document asks for yet.
-- `relative_to` — an offset from an anchor. `{"span": [-1, 0]}` scoped to a
-  neighbouring anchor covers the useful half.
+- `relative_to` — an offset from an anchor. There is no spelling of "from
+  the anchor's last token to the end of the run": a `span` is a half-open
+  window of the run it cuts, and `[a, 0]` is empty for every `a` because
+  `0` is the run's start however it is signed.
 - `{"generated": {"max_new_tokens": n}}` as a *position's* own key: the
   budget is `decode` on the intervention, and the position names the frame.
 - Per-step metric rows with a `step` column, and `matched: false`.

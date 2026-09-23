@@ -36,9 +36,9 @@ It **imports nothing from causalab**. Only the JSON documents were copied.
 
 ## 2. State as of this handoff
 
-`master`, clean tree, pushed to GitHub (private). **470 tests passing**
+`master`, clean tree, pushed to GitHub (private). **480 tests passing**
 (`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~30 s), `uvx pyright` at 0
-errors. **7,102 lines** across 31 files in `causalab_mini/`.
+errors. **7,178 lines** across 31 files in `causalab_mini/`.
 
 The package is five sub-packages and a short spine, each named for what it is
 allowed to know:
@@ -151,7 +151,9 @@ fields and nothing else, and the *run* resolves it:
 
 `{"index": -1}` is the last token; `{"index": -1, "scope": {"variable":
 "entity"}}` is the last token of *this row's* entity; `{"frame": "generated",
-"index": -1}` is the last token this row generated. A bare `-1` is sugar for
+"index": -1}` is the last token of this row's continuation, which is its
+stop token on a row that stopped (the frame is cut *after* it — a stop
+token is a token the model produced). A bare `-1` is sugar for
 `{"index": -1}` and is what every shipped document still writes.
 
 - **One resolver, `ops/locate.py`.** A `Frame` is one padded batch as text —
@@ -172,7 +174,22 @@ fields and nothing else, and the *run* resolves it:
   different width, and a metric none of whose rows could be placed. Which
   rows a text anchor is in is a question about the model's own tokenization,
   and the compiler no longer pretends to know it. A client-side pre-check
-  (`explain --precheck`) is designed and not built.
+  (`explain --precheck`) is designed and not built. Each of those names the
+  row's own reason — `alignment_missing`, `alignment_ambiguous`,
+  `out_of_range` — because the three want different fixes.
+- **A cut of a fixed width that fits no row is refused, not reported.**
+  `{"last": 12}` on a nine-token row names the same number of tokens on
+  every row, so a row it does not fit is a document that is wrong about its
+  own prompts. Only an *anchored* cut reports per row, because which rows
+  carry a word is data.
+- **What a run reports, it reports in the frame it resolved in.** A tap in
+  the continuation frame is given the one position its decode step
+  processes, and where in the *continuation* that was is said by the code
+  that has that frame. The prompt frame says nothing about it.
+- **The character map is built only for a pass that has a position the
+  document does not already fix.** It is O(L) decode calls of O(L) work per
+  row and was built once per forward per pass; a fit whose every position is
+  a bare `-1` built 42 of them and read none.
 - **Eligibility is two halves meeting in the run.** `MetricOp.rows` is still
   the column half, decided where the data is; the position half is what the
   run could place; `results["eligible"]` is the intersection per metric and
@@ -193,7 +210,13 @@ fields and nothing else, and the *run* resolves it:
 - **Not run**: a real NDIF deployment. `remote="local"` pins the whole
   mechanism (it serializes, hides the local modules and resolves the
   persistent objects exactly as a server does) and an anchored document comes
-  back identical, but no request has gone to ndif.us.
+  back identical, but no request has gone to ndif.us — and `remote="local"`
+  does **not** serialize the way home (FINDINGS §19). `results["positions"]`
+  and `results["eligible"]` are the first non-tensor, three-deep payloads to
+  go through `nnsight.save({})`: nested dicts of tuples of ints and strings,
+  with no class of ours in them, so they satisfy §19.6's rule and should be
+  fine — but "should" is the word until a real run says otherwise. A run
+  against the local stack is queued.
 
 ## 5. The step/plan refactor — BUILT
 
