@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Positions — causalab-mini</title>
+    <meta name="description" content="The Where vocabulary: which sequence, which run of it, and how much.">
+    <link rel="stylesheet" href="site.css">
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to content</a>
+
+    <div class="topbar">
+      <button class="iconbutton" data-nav-toggle aria-expanded="false" aria-controls="sidebar">menu</button>
+      <span class="brand">causalab-mini</span>
+      <button class="iconbutton js-only" data-theme-toggle style="margin-left:auto">dark</button>
+    </div>
+
+    <div class="layout">
+      <aside class="sidebar" id="sidebar">
+        <a class="brand" href="index.html">causalab-mini</a>
+        <span class="brand-sub">a plan is pure data; an engine turns it into tensors</span>
+
+        <nav aria-label="Documentation">
+          <ol>
+            <li><a href="index.html">Home</a></li>
+          </ol>
+
+          <h2>The document</h2>
+          <ol>
+            <li><a href="documents.html">Documents</a></li>
+            <li><a href="locations.html">Locations</a></li>
+            <li><a href="positions.html" aria-current="page">Positions</a></li>
+            <li><a href="ops.html">Reads, writes, metrics</a></li>
+          </ol>
+
+          <h2>Use cases</h2>
+          <ol>
+            <li><a href="use-cases/index.html">All use cases</a></li>
+          </ol>
+          <ol class="sub">
+          <li><a href="use-cases/layer-sweep.html">Layer sweep</a></li>
+          <li><a href="use-cases/entity-patching.html">Entity patching</a></li>
+          <li><a href="use-cases/das-fit.html">DAS fit</a></li>
+          <li><a href="use-cases/dbm-fit.html">DBM fit</a></li>
+          <li><a href="use-cases/attention-pattern.html">Attention pattern</a></li>
+          <li><a href="use-cases/logit-lens.html">Logit lens</a></li>
+          <li><a href="use-cases/generation.html">Generation</a></li>
+          <li><a href="use-cases/sae-features.html">SAE features</a></li>
+          <li><a href="use-cases/batching-and-remote.html">Batching &amp; remote</a></li>
+          <li><a href="use-cases/sweeps.html">Sweeps</a></li>
+          </ol>
+
+          <h2>Running</h2>
+          <ol>
+            <li><a href="cli.html">The CLI</a></li>
+          </ol>
+
+          <h2>Understand</h2>
+          <ol>
+            <li><a href="engine.html">The engine</a></li>
+            <li><a href="standardization.html">Standardization</a></li>
+            <li><a href="remote.html">Remote &amp; NDIF</a></li>
+          </ol>
+        </nav>
+
+        <div class="footer">
+          <p><a href="https://github.com/JadenFiotto-Kaufman/causalab-mini">source on GitHub</a></p>
+          <p><button class="iconbutton js-only" data-theme-toggle>dark</button></p>
+        </div>
+      </aside>
+
+      <main id="content">
+        <article class="page">
+          <header>
+            <p class="eyebrow">Reference</p>
+            <h1>Positions</h1>
+            <p class="lede">Where along a sequence a read or a write acts — a spec, resolved per row.</p>
+          </header>
+
+          <div class="stub">
+            <span class="label">in progress</span>
+            <p>This page has not been written yet. It is one page of a set being
+            filled in; the rest of the site is live.</p>
+            <p>What it will cover:</p>
+            <ul>
+            <li>The three independent fields of <code>Where</code>: <code>frame</code>, <code>scope</code>, and exactly one of <code>index</code>/<code>span</code>/<code>last</code>/<code>all</code>. <code>causalab_mini/shapes.py:51</code>.</li>
+            <li>The one sugar: a bare integer is <code>{"index": i}</code>.</li>
+            <li>Anchors: <code>{"variable": …}</code> resolves against <em>this row's</em> text; <code>{"segment": …}</code> against a run the frame located.</li>
+            <li>BOS: a position's run is the prompt's own tokens, so <code>{"index": 0}</code> is the first word on a family that prepends a BOS and on one that does not.</li>
+            <li>The generated frame, and why a write there may only name a step the decode has reached.</li>
+            <li>Eligibility and its three reasons: <code>alignment_missing</code>, <code>alignment_ambiguous</code>, <code>out_of_range</code> — which rows report and which are refused outright.</li>
+            <li>Provenance: <code>results["positions"]</code>, the decoded tokens, and how they reach the metric table.</li>
+            </ul>
+            <p>Writing it? Read <code>docs/STYLE.md</code> first — it has the page
+            template, the citation rule and the nav snippet to paste.</p>
+          </div>
+
+        </article>
+      </main>
+    </div>
+    <script src="site.js"></script>
+  </body>
+</html>

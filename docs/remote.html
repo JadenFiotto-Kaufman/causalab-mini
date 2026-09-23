@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Remote &amp; NDIF — causalab-mini</title>
+    <meta name="description" content="The same document with no local weights: --engine ndif, and what changes.">
+    <link rel="stylesheet" href="site.css">
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to content</a>
+
+    <div class="topbar">
+      <button class="iconbutton" data-nav-toggle aria-expanded="false" aria-controls="sidebar">menu</button>
+      <span class="brand">causalab-mini</span>
+      <button class="iconbutton js-only" data-theme-toggle style="margin-left:auto">dark</button>
+    </div>
+
+    <div class="layout">
+      <aside class="sidebar" id="sidebar">
+        <a class="brand" href="index.html">causalab-mini</a>
+        <span class="brand-sub">a plan is pure data; an engine turns it into tensors</span>
+
+        <nav aria-label="Documentation">
+          <ol>
+            <li><a href="index.html">Home</a></li>
+          </ol>
+
+          <h2>The document</h2>
+          <ol>
+            <li><a href="documents.html">Documents</a></li>
+            <li><a href="locations.html">Locations</a></li>
+            <li><a href="positions.html">Positions</a></li>
+            <li><a href="ops.html">Reads, writes, metrics</a></li>
+          </ol>
+
+          <h2>Use cases</h2>
+          <ol>
+            <li><a href="use-cases/index.html">All use cases</a></li>
+          </ol>
+          <ol class="sub">
+          <li><a href="use-cases/layer-sweep.html">Layer sweep</a></li>
+          <li><a href="use-cases/entity-patching.html">Entity patching</a></li>
+          <li><a href="use-cases/das-fit.html">DAS fit</a></li>
+          <li><a href="use-cases/dbm-fit.html">DBM fit</a></li>
+          <li><a href="use-cases/attention-pattern.html">Attention pattern</a></li>
+          <li><a href="use-cases/logit-lens.html">Logit lens</a></li>
+          <li><a href="use-cases/generation.html">Generation</a></li>
+          <li><a href="use-cases/sae-features.html">SAE features</a></li>
+          <li><a href="use-cases/batching-and-remote.html">Batching &amp; remote</a></li>
+          <li><a href="use-cases/sweeps.html">Sweeps</a></li>
+          </ol>
+
+          <h2>Running</h2>
+          <ol>
+            <li><a href="cli.html">The CLI</a></li>
+          </ol>
+
+          <h2>Understand</h2>
+          <ol>
+            <li><a href="engine.html">The engine</a></li>
+            <li><a href="standardization.html">Standardization</a></li>
+            <li><a href="remote.html" aria-current="page">Remote &amp; NDIF</a></li>
+          </ol>
+        </nav>
+
+        <div class="footer">
+          <p><a href="https://github.com/JadenFiotto-Kaufman/causalab-mini">source on GitHub</a></p>
+          <p><button class="iconbutton js-only" data-theme-toggle>dark</button></p>
+        </div>
+      </aside>
+
+      <main id="content">
+        <article class="page">
+          <header>
+            <p class="eyebrow">Reference</p>
+            <h1>Remote &amp; NDIF</h1>
+            <p class="lede">Running a document on NDIF.</p>
+          </header>
+
+          <div class="stub">
+            <span class="label">in progress</span>
+            <p>This page has not been written yet. It is one page of a set being
+            filled in; the rest of the site is live.</p>
+            <p>What it will cover:</p>
+            <ul>
+            <li><code>--engine ndif</code>: the nnterp engine loaded with <code>dispatch=False</code> and executed remotely. <code>causalab_mini/cli.py:34</code>.</li>
+            <li>What the client still does without weights: compile, resolve widths and addresses, tokenize.</li>
+            <li>What the server does: the session, and <code>model.tokenizer</code> as a persistent object resolved to the served checkpoint's own.</li>
+            <li><code>remote="local"</code>: the serialization path exercised locally, and what it does <em>not</em> cover.</li>
+            <li><code>served_dtype</code> in <code>run.json</code>, and why remote numbers can be close rather than equal.</li>
+            <li>Setup: <code>NDIF_HOST</code>, an API key, and which models are available.</li>
+            <li>What is not supported remotely, and what a refusal looks like.</li>
+            </ul>
+            <p>Writing it? Read <code>docs/STYLE.md</code> first — it has the page
+            template, the citation rule and the nav snippet to paste.</p>
+          </div>
+
+        </article>
+      </main>
+    </div>
+    <script src="site.js"></script>
+  </body>
+</html>

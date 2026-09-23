@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>The engine — causalab-mini</title>
+    <meta name="description" content="How a plan becomes tensors: eight members, one session, and no execute on a plan.">
+    <link rel="stylesheet" href="site.css">
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to content</a>
+
+    <div class="topbar">
+      <button class="iconbutton" data-nav-toggle aria-expanded="false" aria-controls="sidebar">menu</button>
+      <span class="brand">causalab-mini</span>
+      <button class="iconbutton js-only" data-theme-toggle style="margin-left:auto">dark</button>
+    </div>
+
+    <div class="layout">
+      <aside class="sidebar" id="sidebar">
+        <a class="brand" href="index.html">causalab-mini</a>
+        <span class="brand-sub">a plan is pure data; an engine turns it into tensors</span>
+
+        <nav aria-label="Documentation">
+          <ol>
+            <li><a href="index.html">Home</a></li>
+          </ol>
+
+          <h2>The document</h2>
+          <ol>
+            <li><a href="documents.html">Documents</a></li>
+            <li><a href="locations.html">Locations</a></li>
+            <li><a href="positions.html">Positions</a></li>
+            <li><a href="ops.html">Reads, writes, metrics</a></li>
+          </ol>
+
+          <h2>Use cases</h2>
+          <ol>
+            <li><a href="use-cases/index.html">All use cases</a></li>
+          </ol>
+          <ol class="sub">
+          <li><a href="use-cases/layer-sweep.html">Layer sweep</a></li>
+          <li><a href="use-cases/entity-patching.html">Entity patching</a></li>
+          <li><a href="use-cases/das-fit.html">DAS fit</a></li>
+          <li><a href="use-cases/dbm-fit.html">DBM fit</a></li>
+          <li><a href="use-cases/attention-pattern.html">Attention pattern</a></li>
+          <li><a href="use-cases/logit-lens.html">Logit lens</a></li>
+          <li><a href="use-cases/generation.html">Generation</a></li>
+          <li><a href="use-cases/sae-features.html">SAE features</a></li>
+          <li><a href="use-cases/batching-and-remote.html">Batching &amp; remote</a></li>
+          <li><a href="use-cases/sweeps.html">Sweeps</a></li>
+          </ol>
+
+          <h2>Running</h2>
+          <ol>
+            <li><a href="cli.html">The CLI</a></li>
+          </ol>
+
+          <h2>Understand</h2>
+          <ol>
+            <li><a href="engine.html" aria-current="page">The engine</a></li>
+            <li><a href="standardization.html">Standardization</a></li>
+            <li><a href="remote.html">Remote &amp; NDIF</a></li>
+          </ol>
+        </nav>
+
+        <div class="footer">
+          <p><a href="https://github.com/JadenFiotto-Kaufman/causalab-mini">source on GitHub</a></p>
+          <p><button class="iconbutton js-only" data-theme-toggle>dark</button></p>
+        </div>
+      </aside>
+
+      <main id="content">
+        <article class="page">
+          <header>
+            <p class="eyebrow">Reference</p>
+            <h1>The engine</h1>
+            <p class="lede">How the engine turns a plan into tensors.</p>
+          </header>
+
+          <div class="stub">
+            <span class="label">in progress</span>
+            <p>This page has not been written yet. It is one page of a set being
+            filled in; the rest of the site is live.</p>
+            <p>What it will cover:</p>
+            <ul>
+            <li>The contract: the eight members of <code>Engine</code>, five asked by the compiler and three by the run. <code>causalab_mini/engine/base.py</code>.</li>
+            <li>Why a plan has no <code>execute</code>, and why an <code>Engine</code> has no implementation.</li>
+            <li>One session for the whole request — <code>model.session()</code> opened once, at <code>engine/engines/nnterp/engine.py:89</code> — and why <code>remote=True</code> on that session is the only difference between local and remote.</li>
+            <li><code>engine/steps.py</code>: what a plan <em>means</em>, shared by every runtime — the walk over steps, the fit loop, the metrics, the write algebra.</li>
+            <li>The second engine: plain <code>AutoModelForCausalLM</code> and <code>register_forward_hook</code>, what it had to supply by hand, and what it refuses.</li>
+            <li>The rule about trace bodies: no client object may be referenced, and the AST tripwire that enforces it.</li>
+            <li>How results come home: <code>nnsight.save(plan)</code> at the top of the session.</li>
+            </ul>
+            <p>Writing it? Read <code>docs/STYLE.md</code> first — it has the page
+            template, the citation rule and the nav snippet to paste.</p>
+          </div>
+
+        </article>
+      </main>
+    </div>
+    <script src="site.js"></script>
+  </body>
+</html>

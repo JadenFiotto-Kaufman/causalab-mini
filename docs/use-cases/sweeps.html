@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sweeps — causalab-mini</title>
+    <meta name="description" content="One document that is many experiments, and what a sweep may not touch.">
+    <link rel="stylesheet" href="../site.css">
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to content</a>
+
+    <div class="topbar">
+      <button class="iconbutton" data-nav-toggle aria-expanded="false" aria-controls="sidebar">menu</button>
+      <span class="brand">causalab-mini</span>
+      <button class="iconbutton js-only" data-theme-toggle style="margin-left:auto">dark</button>
+    </div>
+
+    <div class="layout">
+      <aside class="sidebar" id="sidebar">
+        <a class="brand" href="../index.html">causalab-mini</a>
+        <span class="brand-sub">a plan is pure data; an engine turns it into tensors</span>
+
+        <nav aria-label="Documentation">
+          <ol>
+            <li><a href="../index.html">Home</a></li>
+          </ol>
+
+          <h2>The document</h2>
+          <ol>
+            <li><a href="../documents.html">Documents</a></li>
+            <li><a href="../locations.html">Locations</a></li>
+            <li><a href="../positions.html">Positions</a></li>
+            <li><a href="../ops.html">Reads, writes, metrics</a></li>
+          </ol>
+
+          <h2>Use cases</h2>
+          <ol>
+            <li><a href="../use-cases/index.html">All use cases</a></li>
+          </ol>
+          <ol class="sub">
+          <li><a href="../use-cases/layer-sweep.html">Layer sweep</a></li>
+          <li><a href="../use-cases/entity-patching.html">Entity patching</a></li>
+          <li><a href="../use-cases/das-fit.html">DAS fit</a></li>
+          <li><a href="../use-cases/dbm-fit.html">DBM fit</a></li>
+          <li><a href="../use-cases/attention-pattern.html">Attention pattern</a></li>
+          <li><a href="../use-cases/logit-lens.html">Logit lens</a></li>
+          <li><a href="../use-cases/generation.html">Generation</a></li>
+          <li><a href="../use-cases/sae-features.html">SAE features</a></li>
+          <li><a href="../use-cases/batching-and-remote.html">Batching &amp; remote</a></li>
+          <li><a href="../use-cases/sweeps.html" aria-current="page">Sweeps</a></li>
+          </ol>
+
+          <h2>Running</h2>
+          <ol>
+            <li><a href="../cli.html">The CLI</a></li>
+          </ol>
+
+          <h2>Understand</h2>
+          <ol>
+            <li><a href="../engine.html">The engine</a></li>
+            <li><a href="../standardization.html">Standardization</a></li>
+            <li><a href="../remote.html">Remote &amp; NDIF</a></li>
+          </ol>
+        </nav>
+
+        <div class="footer">
+          <p><a href="https://github.com/JadenFiotto-Kaufman/causalab-mini">source on GitHub</a></p>
+          <p><button class="iconbutton js-only" data-theme-toggle>dark</button></p>
+        </div>
+      </aside>
+
+      <main id="content">
+        <article class="page">
+          <header>
+            <p class="eyebrow">Use case</p>
+            <h1>Sweeps</h1>
+            <p class="lede">Sweeps: named axes, the cross product, and one plan per point.</p>
+          </header>
+
+          <div class="stub">
+            <span class="label">in progress</span>
+            <p>This page has not been written yet. It is one page of a set being
+            filled in; the rest of the site is live.</p>
+            <p>What it will cover:</p>
+            <ul>
+            <li>The wrapper: <code>{"sweep": [...]}</code> at one field, holding a literal list; and the <code>{"range": [a, b]}</code> form.</li>
+            <li><code>"as": "name"</code> — a named axis moves several fields together, instead of taking their cross product.</li>
+            <li>A sweep is lowered on the raw JSON before anything is compiled: each point is an ordinary document with its own addresses, tokenization and digest.</li>
+            <li>Where the points land on disk, and why a point's directory is named the way it is.</li>
+            <li><code>root.result(name)</code> refusing when a name means several things.</li>
+            <li>What is refused: a swept <code>model</code> or <code>header</code>, several swept fields in one wrapper.</li>
+            <li><code>documents/pos_sweep_cpu.json</code> and <code>documents/v2/neuron_patching.json</code>, run.</li>
+            </ul>
+            <p>Writing it? Read <code>docs/STYLE.md</code> first — it has the page
+            template, the citation rule and the nav snippet to paste.</p>
+          </div>
+
+        </article>
+      </main>
+    </div>
+    <script src="../site.js"></script>
+  </body>
+</html>

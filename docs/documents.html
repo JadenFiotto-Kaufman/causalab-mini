@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Documents — causalab-mini</title>
+    <meta name="description" content="The protocol, field by field: what a document declares and what each block means.">
+    <link rel="stylesheet" href="site.css">
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to content</a>
+
+    <div class="topbar">
+      <button class="iconbutton" data-nav-toggle aria-expanded="false" aria-controls="sidebar">menu</button>
+      <span class="brand">causalab-mini</span>
+      <button class="iconbutton js-only" data-theme-toggle style="margin-left:auto">dark</button>
+    </div>
+
+    <div class="layout">
+      <aside class="sidebar" id="sidebar">
+        <a class="brand" href="index.html">causalab-mini</a>
+        <span class="brand-sub">a plan is pure data; an engine turns it into tensors</span>
+
+        <nav aria-label="Documentation">
+          <ol>
+            <li><a href="index.html">Home</a></li>
+          </ol>
+
+          <h2>The document</h2>
+          <ol>
+            <li><a href="documents.html" aria-current="page">Documents</a></li>
+            <li><a href="locations.html">Locations</a></li>
+            <li><a href="positions.html">Positions</a></li>
+            <li><a href="ops.html">Reads, writes, metrics</a></li>
+          </ol>
+
+          <h2>Use cases</h2>
+          <ol>
+            <li><a href="use-cases/index.html">All use cases</a></li>
+          </ol>
+          <ol class="sub">
+          <li><a href="use-cases/layer-sweep.html">Layer sweep</a></li>
+          <li><a href="use-cases/entity-patching.html">Entity patching</a></li>
+          <li><a href="use-cases/das-fit.html">DAS fit</a></li>
+          <li><a href="use-cases/dbm-fit.html">DBM fit</a></li>
+          <li><a href="use-cases/attention-pattern.html">Attention pattern</a></li>
+          <li><a href="use-cases/logit-lens.html">Logit lens</a></li>
+          <li><a href="use-cases/generation.html">Generation</a></li>
+          <li><a href="use-cases/sae-features.html">SAE features</a></li>
+          <li><a href="use-cases/batching-and-remote.html">Batching &amp; remote</a></li>
+          <li><a href="use-cases/sweeps.html">Sweeps</a></li>
+          </ol>
+
+          <h2>Running</h2>
+          <ol>
+            <li><a href="cli.html">The CLI</a></li>
+          </ol>
+
+          <h2>Understand</h2>
+          <ol>
+            <li><a href="engine.html">The engine</a></li>
+            <li><a href="standardization.html">Standardization</a></li>
+            <li><a href="remote.html">Remote &amp; NDIF</a></li>
+          </ol>
+        </nav>
+
+        <div class="footer">
+          <p><a href="https://github.com/JadenFiotto-Kaufman/causalab-mini">source on GitHub</a></p>
+          <p><button class="iconbutton js-only" data-theme-toggle>dark</button></p>
+        </div>
+      </aside>
+
+      <main id="content">
+        <article class="page">
+          <header>
+            <p class="eyebrow">Reference</p>
+            <h1>Documents</h1>
+            <p class="lede">The document format field by field, with the JSON Schema.</p>
+          </header>
+
+          <div class="stub">
+            <span class="label">in progress</span>
+            <p>This page has not been written yet. It is one page of a set being
+            filled in; the rest of the site is live.</p>
+            <p>What it will cover:</p>
+            <ul>
+            <li>The two authoring formats — the plan-shaped one (<code>steps</code>) and the protocol's — and which files use which. <code>causalab_mini/plan/spec.py</code> and <code>causalab_mini/plan/document.py</code>.</li>
+            <li><code>header</code>, <code>model</code> (key, revision, dtype, <code>attn_implementation</code>), <code>roles</code>, <code>sites</code>, <code>featurizers</code>, <code>interventions</code>, <code>steps</code> — a table per block.</li>
+            <li>The three step kinds: <code>observe</code>, <code>fit</code>, <code>weights</code>; <code>outputs</code>, <code>saves</code>, and a fit's <code>eval</code>.</li>
+            <li>The JSON Schema, from <code>causalab-mini schema</code> — the thing an agent reads.</li>
+            <li><code>digest</code>: what identifies an experiment, and why <code>header</code> is excluded.</li>
+            <li>The cross-checks a document is refused for, with the real refusal text.</li>
+            </ul>
+            <p>Writing it? Read <code>docs/STYLE.md</code> first — it has the page
+            template, the citation rule and the nav snippet to paste.</p>
+          </div>
+
+        </article>
+      </main>
+    </div>
+    <script src="site.js"></script>
+  </body>
+</html>
