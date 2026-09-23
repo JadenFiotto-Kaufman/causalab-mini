@@ -78,24 +78,548 @@
             <p class="lede">Distributed alignment search: fitting a subspace, then scoring it held out.</p>
           </header>
 
-          <div class="stub">
-            <span class="label">in progress</span>
-            <p>This page has not been written yet. It is one page of a set being
-            filled in; the rest of the site is live.</p>
-            <p>What it will cover:</p>
-            <ul>
-            <li><code>documents/v2/das.json</code> (tiny, CPU, seconds) and <code>documents/real/weekdays_das.json</code> (Llama-3.2-1B, k swept).</li>
-            <li>The three steps: <code>fit</code>, <code>score</code>, <code>weights</code> — and why the held-out score is a result of a place, not a name.</li>
-            <li>The <code>subspace</code> featurizer: Cayley parametrization, <code>k</code>, seeds, and <code>d</code> derived from (model, site).</li>
-            <li>The fit block: <code>objective</code>, <code>optimizer</code>, <code>epochs</code>, <code>pairs</code>, <code>early_stop</code>, <code>eval</code>.</li>
-            <li>The fit happens inside the same single session as the run.</li>
-            <li>The safetensors bundle, its stamped header, and <code>documents/v2/das_apply.json</code> loading it back.</li>
-            <li>The controls: <code>documents/random_subspace_cpu.json</code> (matched-k, untrained) and <code>documents/v2/pca_control.json</code>.</li>
-            <li>Recorded: held-out IIA 0.00 / 0.83 / 1.00 / 1.00 at k = 1 / 4 / 16 / 64 (<code>documents/real/README.md</code>).</li>
-            </ul>
-            <p>Writing it? Read <code>docs/STYLE.md</code> first — it has the page
-            template, the citation rule and the nav snippet to paste.</p>
+          <p>The layer sweep found <em>where</em> "today" lives: the day token's
+          residual stream, through layer 11. That is 2048 numbers. This page asks how
+          many of them it takes — not which coordinates, but which
+          <strong>directions</strong>.</p>
+
+          <p>Distributed alignment search answers it by learning the directions. Fit an
+          orthonormal <code>k</code>-dimensional basis <code>Q</code> of the activation,
+          swap the counterfactual's component <em>in that subspace</em> and leave the
+          orthogonal complement alone; train <code>Q</code> so that the swap makes the
+          model answer the counterfactual's day. Score it on pairs the fit never saw.
+          Sweep <code>k</code> and the document is a rank curve.</p>
+
+          <h2>At a glance</h2>
+
+          <!-- measured here 2026-09-23, CPU, fp32, from out/das_real/k=*/iia.json -->
+          <figure>
+            <svg viewBox="0 0 640 250" role="img" aria-labelledby="rank-t rank-d" width="640">
+              <title id="rank-t">Held-out interchange accuracy against subspace rank</title>
+              <desc id="rank-d">A rank-1 subspace carries nothing: held-out accuracy
+              0.00. Rank 4 carries most of it, 0.83. Rank 16 and rank 64 both carry all
+              of it, 1.00. The curve is flat from 16 onward.</desc>
+              <g stroke="var(--rule)" stroke-width="1"><line x1="60" y1="196.0" x2="600" y2="196.0"/><line x1="60" y1="155.0" x2="600" y2="155.0"/><line x1="60" y1="114.0" x2="600" y2="114.0"/><line x1="60" y1="73.0" x2="600" y2="73.0"/><line x1="60" y1="32.0" x2="600" y2="32.0"/></g>
+              <g fill="var(--fg-faint)" font-size="10.5" font-family="ui-monospace, monospace" text-anchor="end"><text x="52" y="200.0">0.00</text><text x="52" y="159.0">0.25</text><text x="52" y="118.0">0.50</text><text x="52" y="77.0">0.75</text><text x="52" y="36.0">1.00</text></g>
+              <g fill="var(--fg-faint)" font-size="11" font-family="ui-monospace, monospace" text-anchor="middle"><text x="60" y="216">1</text><text x="240" y="216">4</text><text x="420" y="216">16</text><text x="600" y="216">64</text></g>
+              <text x="330" y="238" fill="var(--fg-muted)" font-size="11" text-anchor="middle"
+                    font-family="ui-sans-serif, system-ui, sans-serif">k, the rank of the subspace (log scale)</text>
+              <polyline points="60,196.0 240,59.8 420,32.0 600,32.0" fill="none"
+                        stroke="var(--accent)" stroke-width="2"/>
+              <g fill="var(--accent)"><circle cx="60" cy="196.0" r="3.2"/><circle cx="240" cy="59.8" r="3.2"/><circle cx="420" cy="32.0" r="3.2"/><circle cx="600" cy="32.0" r="3.2"/></g>
+              <g fill="var(--fg-muted)" font-size="11.5" font-family="ui-sans-serif, system-ui, sans-serif" text-anchor="middle">
+                <text x="60" y="187">0.00</text><text x="240" y="51">0.83</text><text x="420" y="24">1.00</text><text x="600" y="24">1.00</text>
+              </g>
+            </svg>
+            <figcaption>Held-out interchange accuracy of a fitted subspace of the day
+            token's residual stream at layer 8 of Llama-3.2-1B, against its rank. 30
+            training pairs, 12 held-out. Run on CPU, fp32, 2026-09-23.</figcaption>
+          </figure>
+
+          <p>One direction carries nothing. Four carry most of it. Sixteen carry all of
+          it, and sixty-four carry no more. "Today" is a roughly 16-dimensional subspace
+          of a 2048-wide stream.</p>
+
+          <h2>The document</h2>
+
+          <figure class="listing">
+            <figcaption><code>documents/real/weekdays_das.json</code> <span class="what">— the document this page runs, verbatim</span></figcaption>
+            <pre><code class="language-json">{
+  &quot;header&quot;: {
+    &quot;description&quot;: &quot;DAS on a real model: a k-dimensional subspace of the day token&#x27;s residual stream that, swapped alone, carries &#x27;today&#x27; from the counterfactual. Fit on 30 pairs, scored on 12 held-out pairs; k is swept, so the document is the rank curve.&quot;
+  },
+  &quot;model&quot;: {
+    &quot;key&quot;: &quot;meta-llama/Llama-3.2-1B&quot;,
+    &quot;revision&quot;: &quot;4e20de362430cd3b72f300e6b0f18e50e7166e08&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;
+  },
+  &quot;roles&quot;: {
+    &quot;base&quot;: {
+      &quot;field&quot;: &quot;input&quot;
+    },
+    &quot;counterfactual&quot;: {
+      &quot;field&quot;: &quot;counterfactual_inputs[0]&quot;
+    }
+  },
+  &quot;sites&quot;: {
+    &quot;target&quot;: {
+      &quot;component&quot;: &quot;block_output&quot;,
+      &quot;layers&quot;: [
+        8
+      ]
+    },
+    &quot;head&quot;: {
+      &quot;component&quot;: &quot;lm_head&quot;
+    }
+  },
+  &quot;featurizers&quot;: {
+    &quot;rot&quot;: {
+      &quot;kind&quot;: &quot;subspace&quot;,
+      &quot;k&quot;: {
+        &quot;sweep&quot;: [
+          1,
+          4,
+          16,
+          64
+        ]
+      }
+    }
+  },
+  &quot;interventions&quot;: {
+    &quot;das&quot;: {
+      &quot;reads&quot;: {
+        &quot;v_cf&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -4,
+          &quot;model&quot;: &quot;original&quot;,
+          &quot;input&quot;: &quot;counterfactual&quot;,
+          &quot;featurizer&quot;: &quot;rot&quot;
+        },
+        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;patched&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        }
+      },
+      &quot;writes&quot;: {
+        &quot;patch&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -4,
+          &quot;mechanism&quot;: &quot;swap&quot;,
+          &quot;operand&quot;: &quot;v_cf&quot;,
+          &quot;featurizer&quot;: &quot;rot&quot;
+        }
+      },
+      &quot;models&quot;: {
+        &quot;patched&quot;: {
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;writes&quot;: [
+            &quot;patch&quot;
+          ]
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;iia&quot;: {
+          &quot;kind&quot;: &quot;match&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;,
+          &quot;expected&quot;: &quot;cf_answer&quot;
+        },
+        &quot;logit_diff&quot;: {
+          &quot;kind&quot;: &quot;logit_diff&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;,
+          &quot;a&quot;: &quot;cf_answer&quot;,
+          &quot;b&quot;: &quot;base_answer&quot;
+        },
+        &quot;ce&quot;: {
+          &quot;kind&quot;: &quot;cross_entropy&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;,
+          &quot;target&quot;: &quot;cf_answer&quot;
+        }
+      }
+    }
+  },
+  &quot;steps&quot;: {
+    &quot;fit&quot;: {
+      &quot;kind&quot;: &quot;fit&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays_full/data#train&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays_full/data#train&quot;
+      },
+      &quot;params&quot;: [
+        &quot;rot&quot;
+      ],
+      &quot;objective&quot;: [
+        [
+          1.0,
+          &quot;ce&quot;
+        ]
+      ],
+      &quot;epochs&quot;: 20,
+      &quot;pairs&quot;: 10,
+      &quot;seed&quot;: 0,
+      &quot;optimizer&quot;: {
+        &quot;name&quot;: &quot;adamw&quot;,
+        &quot;lr&quot;: 0.003,
+        &quot;weight_decay&quot;: 0.0
+      },
+      &quot;early_stop&quot;: {
+        &quot;metric&quot;: &quot;iia&quot;,
+        &quot;mode&quot;: &quot;max&quot;,
+        &quot;patience&quot;: 20
+      },
+      &quot;eval&quot;: {
+        &quot;rows&quot;: {
+          &quot;base&quot;: &quot;weekdays_full/data#test&quot;,
+          &quot;counterfactual&quot;: &quot;weekdays_full/data#test&quot;
+        },
+        &quot;saves&quot;: [
+          {
+            &quot;value&quot;: &quot;iia&quot;,
+            &quot;file_path&quot;: &quot;iia.json&quot;
+          }
+        ]
+      }
+    },
+    &quot;score&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays_full/data#test&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays_full/data#test&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;iia&quot;,
+          &quot;file_path&quot;: &quot;iia.json&quot;
+        },
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;logit_diff.json&quot;
+        }
+      ]
+    },
+    &quot;weights&quot;: {
+      &quot;kind&quot;: &quot;weights&quot;,
+      &quot;names&quot;: [
+        &quot;rot&quot;
+      ],
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;rot&quot;,
+          &quot;file_path&quot;: &quot;rot.safetensors&quot;
+        }
+      ]
+    }
+  }
+}</code></pre>
+          </figure>
+
+          <p>Reading it in the order the compiler does:</p>
+
+          <ul>
+            <li><code>model</code> pins Llama-3.2-1B by revision, fp32.</li>
+            <li><code>roles</code> and <code>sites</code> are the layer sweep's:
+            <code>block_output</code>, here fixed at layer 8, and
+            <code>lm_head</code>.</li>
+            <li><code>featurizers.rot</code> is the new block. <code>kind:
+            "subspace"</code>, and <code>k</code> is a sweep over 1, 4, 16, 64 — so this
+            one document is four independent fits.</li>
+            <li><code>interventions.das</code> is the layer sweep's interchange with one
+            field added on each side: <code>"featurizer": "rot"</code> on the read and
+            on the write. Three metrics now, because a fit needs a differentiable one
+            and a report wants a legible one.</li>
+            <li><code>steps</code> has three. <code>fit</code> trains
+            <code>rot</code>; <code>score</code> measures it on the held-out split;
+            <code>weights</code> publishes the parameter so the save can write it.</li>
+          </ul>
+
+          <h3>What the featurizer does</h3>
+
+          <!-- causalab_mini/ops/featurizer.py:3-12 — featurize/inverse, and the error
+               term being zero for a subspace -->
+          <pre><code class="language-python">featurize(x)      = (Qᵀx, 0)
+inverse(f, 0, x)  = Q f + (x − Q Qᵀ x)</code></pre>
+
+          <p>A write is <code>inverse(do(featurize(x)), err, x)</code> for every
+          featurizer, so with <code>do</code> a swap this reads: take the subspace from
+          the counterfactual, keep everything else from here. The complement comes from
+          <code>x</code>, the pre-write activation, which is why the whole activation has
+          to reach the featurizer. Nothing is discarded that <code>inverse</code> could
+          not recover, so the error term is zero.</p>
+
+          <h3><code>k</code>, <code>d</code>, and the Cayley parametrization</h3>
+
+          <!-- causalab_mini/ops/featurizer.py:49 cayley; :19-27 why parametrize -->
+          <p><code>Q</code> is never stored. The stored parameter is <code>weight</code>,
+          an ordinary <code>(d, k)</code> tensor, and <code>Q</code> is the Cayley
+          transform of the skew matrix it names, applied to the first <code>k</code>
+          columns of the identity:</p>
+
+          <pre><code class="language-python">A = W Eᵀ − E Wᵀ          skew by construction
+Q = (I − A)⁻¹ (I + A) E  orthonormal by construction</code></pre>
+
+          <p><code>(I − A)⁻¹(I + A)</code> is orthogonal whenever <code>A</code> is skew,
+          so <code>QᵀQ = I</code> for <em>every</em> value of the parameter. That is the
+          reason to parametrize rather than constrain: the optimizer is a plain AdamW
+          over an unconstrained tensor, with no retraction step, no penalty term and no
+          projection after the update, and the rotation cannot drift off the manifold
+          however long the fit runs.</p>
+
+          <!-- causalab_mini/ops/featurizer.py:58 start_weight; the 1/√d scale and its
+               measurement are FINDINGS.md §19, "The Cayley start did not train" -->
+          <div class="note">
+            <span class="label">the start matters, and only at a real width</span>
+            <p>An unfitted subspace is a reproducible random rank-<code>k</code> basis
+            drawn from <code>seed</code> — not the first <code>k</code> coordinate axes,
+            which is what a zero parameter would give. The draw is scaled by
+            <code>1/√d</code>, and that scale is load-bearing: unscaled, the skew
+            matrix's singular values grow like <code>√d</code> and the Cayley transform
+            saturates, its derivative falling off like <code>1/σ²</code>, so at
+            <code>d = 2048</code> the basis stops responding to its parameter.</p>
+            <p><code>FINDINGS.md</code> §19 records the measurement: at unit variance,
+            loss 3.23 → 3.29 over 60 updates and held-out IIA 0.00 at every
+            <code>k</code>; scaled, 3.22 → 0.11 and IIA 1.00. At <code>d = 16</code>,
+            where the tiny fixture lives, the two are indistinguishable. A whole class
+            of defect is invisible until a real width runs.</p>
           </div>
+
+          <!-- causalab_mini/plan/build.py:280 — d = engine.width(addresses[site]) -->
+          <p><code>d</code> is not in the document. It is the width of the site, which
+          the engine reports for the address the site resolves to — 2048 for
+          <code>block_output</code> on this model, 16 on the tiny fixture. The document
+          says <code>k</code>; the model says <code>d</code>.</p>
+
+          <h3>What the fit block says</h3>
+
+          <table>
+            <thead><tr><th>field</th><th>in this document</th><th>what it is</th></tr></thead>
+            <tbody>
+              <tr><td><code>rows</code></td><td><code>weekdays_full/data#train</code></td><td>the pairs the fit sees, per role</td></tr>
+              <tr><td><code>params</code></td><td><code>["rot"]</code></td><td>the optimizer's parameter list, and the only trainability declaration in the format</td></tr>
+              <tr><td><code>objective</code></td><td><code>[[1.0, "ce"]]</code></td><td><code>Σ wᵢ · termᵢ</code>, minimized; the sign of the weight is the direction</td></tr>
+              <tr><td><code>epochs</code></td><td class="num">20</td><td>passes over the training rows</td></tr>
+              <tr><td><code>pairs</code></td><td class="num">10</td><td>rows per minibatch — 30 training pairs give 3 updates an epoch</td></tr>
+              <tr><td><code>seed</code></td><td class="num">0</td><td>the draw the parameter starts from, and the minibatch order</td></tr>
+              <tr><td><code>optimizer</code></td><td><code>adamw</code>, lr 0.003</td><td>weight decay 0, over the one parameter</td></tr>
+              <tr><td><code>early_stop</code></td><td><code>iia</code>, max, patience 20</td><td>stop after 20 epochs without a better eval; at 20 epochs, never</td></tr>
+              <tr><td><code>eval</code></td><td><code>…#test</code></td><td>the pass at the end of each epoch, and what it saves</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/engine/steps.py:499 fit() -->
+          <p>A fit is not a second engine. An update is an ordinary observation pass over
+          one minibatch, and the only things between updates are an optimizer step and,
+          at the end of an epoch, an eval pass with the gradients off and on rows the fit
+          never saw. The model is frozen: <code>params</code> is the whole of it.</p>
+
+          <!-- causalab_mini/engine/steps.py:543 — the watched number is the eval mean;
+               :547 improved/waited/patience -->
+          <p>Early stopping watches the mean of one eval metric. <code>mode</code> says
+          which direction counts as better, <code>patience</code> how many epochs without
+          an improvement to tolerate. Patience 20 with 20 epochs means the fit runs to
+          the end and the field is there to be turned down.</p>
+
+          <h3>What <code>iia</code> means here</h3>
+
+          <!-- causalab_mini/ops/metrics.py:23 match — 1.0 when the argmax is the
+               expected token; :35 cross_entropy -->
+          <p><code>iia</code> is a name this document chose; the kind is what it
+          computes. Here it is <code>match</code> against the <code>cf_answer</code>
+          column: 1.0 when the patched model's top token at the last position <em>is</em>
+          the counterfactual's answer, 0.0 otherwise. Averaged over rows, that is
+          interchange intervention accuracy — the fraction of pairs on which swapping
+          the subspace moved the answer all the way.</p>
+
+          <p>It is not the objective. The objective is <code>ce</code>, the cross entropy
+          of the counterfactual answer, because an argmax has no gradient. So the fit
+          minimizes a soft target and is scored on a hard one, and early stopping
+          watches the hard one.</p>
+
+          <div class="note">
+            <span class="label">the same name in another document</span>
+            <p>In <code>documents/v2/das.json</code> the metric called <code>iia</code>
+            is a <code>logit_diff</code>. Read the <code>kind</code>, not the name — and
+            <code>explain</code> prints both, as <code>iia/match</code> or
+            <code>iia/logit_diff</code>.</p>
+          </div>
+
+          <h2>What it compiles to</h2>
+
+          <!-- ran 2026-09-23; 96 lines, the first point shown -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/real/weekdays_das.json
+&lt;root&gt;: Plan
+  k=1: Plan
+    featurizers: Featurizers
+        rot: subspace k=1 d=2048 cayley seed=0 trained=True
+    fit: Fit  20 epochs x 3 update  lr=0.003 objective=((1.0, &#x27;ce&#x27;),) params=(&#x27;rot&#x27;,)  early_stop=&#x27;iia&#x27; patience=20
+        epochs[0][0]: Observe  metrics=[&#x27;iia/match&#x27;, &#x27;logit_diff/logit_diff&#x27;, &#x27;ce/cross_entropy&#x27;]
+            forward &#x27;original&#x27; on &#x27;counterfactual&#x27;  (10 rows x 8 tokens)
+              read  &#x27;v_cf&#x27; at block_output[8] pos={index:-4} via &#x27;rot&#x27;
+            forward &#x27;patched&#x27; on &#x27;base&#x27;  (10 rows x 8 tokens)
+              write &#x27;patch&#x27; at block_output[8] pos={index:-4} swap(v_cf) via &#x27;rot&#x27;
+              read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
+        evaluation: Observe  metrics=[&#x27;iia/match&#x27;, &#x27;logit_diff/logit_diff&#x27;, &#x27;ce/cross_entropy&#x27;]  saves=[&#x27;iia.json&#x27;]
+            forward &#x27;original&#x27; on &#x27;counterfactual&#x27;  (12 rows x 8 tokens)
+              read  &#x27;v_cf&#x27; at block_output[8] pos={index:-4} via &#x27;rot&#x27;
+            forward &#x27;patched&#x27; on &#x27;base&#x27;  (12 rows x 8 tokens)
+              write &#x27;patch&#x27; at block_output[8] pos={index:-4} swap(v_cf) via &#x27;rot&#x27;
+              read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
+    score: Observe  metrics=[&#x27;iia/match&#x27;, &#x27;logit_diff/logit_diff&#x27;, &#x27;ce/cross_entropy&#x27;]  saves=[&#x27;iia.json&#x27;, &#x27;logit_diff.json&#x27;]
+        forward &#x27;original&#x27; on &#x27;counterfactual&#x27;  (12 rows x 8 tokens)
+          read  &#x27;v_cf&#x27; at block_output[8] pos={index:-4} via &#x27;rot&#x27;
+        forward &#x27;patched&#x27; on &#x27;base&#x27;  (12 rows x 8 tokens)
+          write &#x27;patch&#x27; at block_output[8] pos={index:-4} swap(v_cf) via &#x27;rot&#x27;
+          read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
+    weights: Weights  names=[&#x27;rot&#x27;]  saves=[&#x27;rot.safetensors&#x27;]
+  k=4: Plan
+    featurizers: Featurizers
+        rot: subspace k=4 d=2048 cayley seed=0 trained=True
+…</code></pre>
+
+          <p>Four points, each a complete experiment with its own parameter, its own
+          optimizer and its own digest. <code>d=2048</code> is printed because the
+          compiler has already asked the model; the document never said it.</p>
+
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:89 — one
+               `with model.session(...)` around steps.run over the whole plan tree -->
+          <p>The fit, the score and the weights step of one point all run inside the
+          <em>same session</em> as every other point — one model load, one traced
+          context, 240 optimizer steps. That is what makes a swept fit a single
+          document rather than a shell loop.</p>
+
+          <h2>Running it</h2>
+
+          <pre><code class="language-bash">$ uv run causalab-mini validate documents/real/weekdays_das.json
+ok: documents/real/weekdays_das.json is a valid plan-shaped document</code></pre>
+
+          <!-- run 2026-09-23 on CPU, fp32, 12-core Ryzen 9 5900X, weights from the
+               local HF cache -->
+          <pre><code class="language-bash">$ time uv run causalab-mini run documents/real/weekdays_das.json \
+      --device-map cpu --out out/das_real
+out/das_real/document.json
+out/das_real/run.json
+out/das_real/k=1/document.json
+out/das_real/k=1/iia.json
+out/das_real/k=1/iia.json
+out/das_real/k=1/logit_diff.json
+out/das_real/k=1/rot.safetensors
+…
+out/das_real/k=64/rot.safetensors
+
+real	11m36.546s</code></pre>
+
+          <p>Four fits, 240 updates and 80 eval passes on a 1B-parameter model in
+          fp32, on twelve CPU cores, in twelve minutes. The recorded A100 run of the
+          same document took 61 seconds, and 36 seconds through a self-hosted NDIF
+          (<code>documents/real/README.md</code>).</p>
+
+          <!-- causalab_mini/plan/write.py:28 — a Plan gets a directory; any other step
+               writes into its enclosing plan's -->
+          <div class="note">
+            <span class="label"><code>k=1/iia.json</code> is listed twice</span>
+            <p>Both the fit's eval pass and the <code>score</code> step save a table
+            called <code>iia.json</code>, and a fit's eval is a step rather than a plan,
+            so it writes into its enclosing plan's directory rather than one of its own.
+            The two saves collide and the later one — <code>score</code>'s — is what is
+            on disk. Both are the same 12 held-out rows here, so nothing is lost, but
+            two saves in one plan want two file names.</p>
+          </div>
+
+          <h2>The rank curve</h2>
+
+          <p>The mean of <code>score</code>'s table over the 12 held-out pairs, per
+          point:</p>
+
+          <table>
+            <thead><tr><th class="num">k</th><th class="num">held-out IIA</th><th class="num">rows moved</th><th class="num">held-out logit diff</th></tr></thead>
+            <tbody>
+              <tr><td class="num">1</td><td class="num">0.00</td><td class="num">0 / 12</td><td class="num">−0.81</td></tr>
+              <tr><td class="num">4</td><td class="num">0.83</td><td class="num">10 / 12</td><td class="num">+1.52</td></tr>
+              <tr><td class="num">16</td><td class="num">1.00</td><td class="num">12 / 12</td><td class="num">+3.40</td></tr>
+              <tr><td class="num">64</td><td class="num">1.00</td><td class="num">12 / 12</td><td class="num">+3.48</td></tr>
+            </tbody>
+          </table>
+
+          <p>The IIA column is the same 0.00 / 0.83 / 1.00 / 1.00 that
+          <code>documents/real/README.md</code> records from the A100 run — a fit, on a
+          different device, in a different month, landing on the same four numbers from
+          the same seed.</p>
+
+          <p>The logit-difference column is what the accuracy column hides. At
+          <code>k = 16</code> the answer has not merely flipped; the counterfactual's
+          day beats the base's by 3.4 logits. At <code>k = 64</code> it is 3.48 — four
+          times the rank buys 0.08. Whatever "today" is, sixteen directions hold it.</p>
+
+          <h2>The bundle</h2>
+
+          <!-- causalab_mini/plan/build.py:312 _identity — the stamp's keys;
+               :340 _load_featurizer checks them; :375 refuses naming the key -->
+          <p><code>steps.weights</code> publishes the parameter and the save writes it as
+          a safetensors bundle with one slot, <code>weight</code>, and the featurizer's
+          identity in the header:</p>
+
+          <pre><code class="language-json">$ python -c "…"   # safe_open('out/das_real/k=16/rot.safetensors').metadata()
+{
+ &quot;engine&quot;: &quot;causalab-mini&quot;,
+ &quot;site&quot;: &quot;target&quot;,
+ &quot;kind&quot;: &quot;subspace&quot;,
+ &quot;produced_by&quot;: &quot;67ce7ff4200b70dfe8e3947c68a01c17f84240be49e699548fea293930203231&quot;,
+ &quot;layer&quot;: &quot;8&quot;,
+ &quot;featurizer_dtype&quot;: &quot;fp32&quot;,
+ &quot;k&quot;: &quot;16&quot;,
+ &quot;model_revision&quot;: &quot;4e20de362430cd3b72f300e6b0f18e50e7166e08&quot;,
+ &quot;component&quot;: &quot;block_output&quot;,
+ &quot;model_key&quot;: &quot;meta-llama/Llama-3.2-1B&quot;,
+ &quot;d&quot;: &quot;2048&quot;,
+ &quot;model_dtype&quot;: &quot;fp32&quot;,
+ &quot;parametrization&quot;: &quot;cayley&quot;
+}
+weight (2048, 16)</code></pre>
+
+          <p>A rotation is a grid of numbers and nothing in the numbers says which model
+          or which layer it came from. The header does, and a document that loads one
+          with <code>file_path</code> is checked against it key by key before anything
+          runs. A mismatch is refused naming the key:</p>
+
+          <!-- ran 2026-09-23; documents/v2/das_apply.json copied aside with
+               sites.target.layers changed from [0] to [1] -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain das_apply_at_layer_1.json
+…
+causalab_mini.plan.plan.PlanError: featurizer &#x27;rot&#x27;: &#x27;documents/artifacts/rot.safetensors&#x27; is not this featurizer — layer: bundle says &#x27;0&#x27;, document says &#x27;1&#x27;</code></pre>
+
+          <p>A rotation fitted at layer 0 and loaded at layer 1 would run, and would be
+          nonsense. <code>documents/v2/das_apply.json</code> is the honest form of that
+          load: the same experiment with <code>file_path</code> on the featurizer, no
+          <code>fit</code> step and no <code>weights</code> step — a subspace scored,
+          not trained.</p>
+
+          <h2>What the rank curve does not say</h2>
+
+          <div class="caution">
+            <span class="label">read against a control</span>
+            <p>A high held-out IIA at <code>k = 64</code> is less impressive than the
+            same number at <code>k = 4</code>, and at large enough <code>k</code> it
+            stops being evidence at all: swap enough of a 2048-wide activation and you
+            have swapped the activation. The comparison that makes a rank meaningful is
+            an <em>untrained</em> subspace of the same rank —
+            <code>documents/random_subspace_cpu.json</code> is that control — and a
+            principal-component basis of the same rank, which
+            <code>documents/v2/pca_harvest.json</code> and
+            <code>pca_control.json</code> are.</p>
+            <p>And a subspace that carries the answer is still a place, not a mechanism.
+            The fit shows that swapping those 16 directions at layer 8 of the day token
+            suffices to change the answer. It does not show that the model computes the
+            answer there, nor that the 16 directions mean anything individually — a
+            rotation is fitted to a task, and another task would fit another
+            rotation.</p>
+          </div>
+
+          <div class="caution">
+            <span class="label">twelve held-out pairs</span>
+            <p>The split is 30 train, 12 test out of 42 ordered pairs of weekdays. One
+            row is 8 percentage points of the IIA column, which is why <code>k = 4</code>
+            reads 0.83 — ten rows moved and two did not. A curve this shape on twelve
+            rows is worth believing about the gap between 1 and 16; it is not worth
+            reading between 16 and 64.</p>
+          </div>
+
+          <div class="seealso">
+            <h2>See also</h2>
+            <ul>
+              <li><a href="../ops.html">Reads, writes, metrics</a> — the featurizer kinds,
+                  the write mechanisms, and what each metric kind computes</li>
+              <li><a href="layer-sweep.html">Layer sweep</a> — how layer 8 and position
+                  −4 were chosen, on the same model and corpus</li>
+              <li><a href="dbm-fit.html">DBM fit</a> — the same fit with a learned mask
+                  over units in place of a learned basis of directions</li>
+              <li><a href="sweeps.html">Sweeps</a> — why <code>k</code> can be a sweep
+                  axis, and what a sweep may not touch</li>
+            </ul>
+          </div>
+
 
         </article>
       </main>

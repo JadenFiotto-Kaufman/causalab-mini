@@ -78,21 +78,541 @@
             <p class="lede">The pair-native interchange: patch <em>this row's</em> entity, whatever it is.</p>
           </header>
 
-          <div class="stub">
-            <span class="label">in progress</span>
-            <p>This page has not been written yet. It is one page of a set being
-            filled in; the rest of the site is live.</p>
-            <p>What it will cover:</p>
-            <ul>
-            <li><code>documents/v2/entity_patch.json</code>, verbatim, run end to end.</li>
-            <li><code>{"index": -1, "scope": {"variable": "entity"}}</code> — the last token of this row's entity, resolved per row against the model's tokenizer.</li>
-            <li>Why one spec works for both roles: the <code>&lt;column&gt;_variables</code> sibling rule.</li>
-            <li>Rows whose anchor is not in their prompt: <code>alignment_missing</code>, and what the metric table says about them.</li>
-            <li><code>documents/v2/entity_mean_ablation.json</code>: the same anchor with <code>{"all": true}</code>, a ragged read.</li>
-            </ul>
-            <p>Writing it? Read <code>docs/STYLE.md</code> first — it has the page
-            template, the citation rule and the nav snippet to paste.</p>
+          <p>An interchange intervention has to say <em>where</em>. A layer sweep says
+          <code>-4</code>, and that works because every prompt in its corpus is the
+          same shape. This document says something else: the last token of
+          <strong>this row's entity</strong>, whatever text that is and wherever it
+          falls. The base row's entity is <em>Thursday</em>; the counterfactual's is
+          <em>Saturday</em>; one spec addresses both.</p>
+
+          <!-- causalab_mini/shapes.py:22 — Anchor(variable=…) is the row's own value for a name -->
+          <p>The spec is <code>{"index": -1, "scope": {"variable": "entity"}}</code>.
+          <code>scope</code> picks the run of tokens the position is <em>about</em> —
+          here, the tokens of this row's <code>entity</code> text, found in its prompt.
+          <code>index: -1</code> then cuts the last one of that run. Two independent
+          questions, two fields.</p>
+
+          <h2>At a glance</h2>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/entity_patch.json
+&lt;root&gt;: Plan
+  score: Observe  metrics=[&#x27;iia/match&#x27;, &#x27;logit_diff/logit_diff&#x27;]  saves=[&#x27;iia.json&#x27;, &#x27;logit_diff.json&#x27;]
+      forward &#x27;original&#x27; on &#x27;counterfactual&#x27;  (4 rows x 11 tokens)
+        read  &#x27;v_cf&#x27; at block_output[0] pos={index:-1 scope:{variable:entity}} via &#x27;identity&#x27;
+      forward &#x27;patched&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+        write &#x27;patch&#x27; at block_output[0] pos={index:-1 scope:{variable:entity}} swap(v_cf) via &#x27;identity&#x27;
+        read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;</code></pre>
+
+          <p>The compiled plan still carries the spec, not an integer. Nothing here
+          could be resolved without the tokenizer and the row, so nothing is: the plan
+          carries the anchor text per row and the run turns each one into indices.</p>
+
+          <h2>The data</h2>
+
+          <!-- ran 2026-09-23 in the repo root -->
+          <pre><code class="language-bash">$ uv run causalab-mini data weekdays/train
+weekdays/train: 4 rows
+  columns: answer, base_answer, cf_answer, counterfactual_inputs, counterfactual_inputs_variables, entity, input, label, split
+  splits:  all
+  sample:  {&quot;answer&quot;: &quot; Friday&quot;, &quot;base_answer&quot;: &quot; Friday&quot;, &quot;cf_answer&quot;: &quot; Sunday&quot;, &quot;counterfactual_inputs&quot;: [&quot;If today is Saturday, tomorrow is&quot;], &quot;counterfactual_inputs_variables&quot;: [{&quot;entity&quot;: &quot;Saturday&quot;}], &quot;entity&quot;: &quot;Thursday&quot;, &quot;input&quot;: &quot;If today is Thursday, tomorrow is&quot;, &quot;label&quot;: &quot; Sunday&quot;, &quot;split&quot;: &quot;all&quot;}</code></pre>
+
+          <p>Two columns matter for the anchor. <code>entity</code> is the base row's
+          entity text; <code>counterfactual_inputs_variables</code> holds the
+          counterfactual's. That pairing is what lets one spec serve two roles, and it
+          is a naming rule rather than a second field:</p>
+
+          <!-- causalab_mini/data/rows.py:69 variable_text; :86 builds the sibling path -->
+          <div class="note">
+            <span class="label">the <code>&lt;column&gt;_variables</code> sibling</span>
+            <p>A role's text comes from a field — <code>input</code>, or
+            <code>counterfactual_inputs[0]</code>. Asked for the variable
+            <code>entity</code>, the row is searched at that field's
+            <code>_variables</code> sibling first:
+            <code>counterfactual_inputs[0]</code> and <code>entity</code> give
+            <code>counterfactual_inputs_variables[0].entity</code>. A top-level column
+            of the name is the fallback, which is what <code>base</code> hits. A name
+            that is neither is refused on the client, naming both places it looked.</p>
           </div>
+
+          <p>On this tokenizer the entities are not the same length, which is the
+          point:</p>
+
+          <!-- ran 2026-09-23 -->
+          <pre><code class="language-bash">$ uv run causalab-mini tokens hf-internal-testing/tiny-random-LlamaForCausalLM &quot; Thursday&quot; &quot; Friday&quot; &quot; Saturday&quot; &quot; Sunday&quot;
+&#x27; Thursday&#x27;              3 token(s)  &lt;- not usable as a metric column
+&#x27; Friday&#x27;                1 token(s)
+&#x27; Saturday&#x27;              1 token(s)
+&#x27; Sunday&#x27;                1 token(s)</code></pre>
+
+          <p>The warning is about metric columns — a metric scores one token — and it
+          does not apply to an anchor. An anchor of three tokens is fine; the
+          <code>index: -1</code> inside it is what makes the window one token wide on
+          every row.</p>
+
+          <h2>The document</h2>
+
+          <figure class="listing">
+            <figcaption><code>documents/v2/entity_patch.json</code> <span class="what">— the document this page runs, verbatim</span></figcaption>
+            <pre><code class="language-json">{
+  &quot;header&quot;: {
+    &quot;description&quot;: &quot;The pair-native interchange: one position spec, two roles, and each row&#x27;s entity is different text. `{&#x27;index&#x27;: -1, &#x27;scope&#x27;: {&#x27;variable&#x27;: &#x27;entity&#x27;}}` is the last token of THIS row&#x27;s entity \u2014 &#x27; Thursday&#x27; is three tokens on this tokenizer and &#x27; Friday&#x27; one, so the base and the counterfactual are addressed by what they say rather than by a number counted off the end. The window is one token on every row, because &#x27;the last token of&#x27; is a question about tokens, which is what makes the swap land where documents/v2/entity_mean_ablation.json&#x27;s whole-entity read cannot. A row whose entity text is not in its prompt has nothing to write, and the run refuses it by name.&quot;
+  },
+  &quot;model&quot;: {
+    &quot;key&quot;: &quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;,
+    &quot;revision&quot;: &quot;9fb191250dd56d0ba7ec9785a025ed29c03d5998&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;
+  },
+  &quot;roles&quot;: {
+    &quot;base&quot;: {
+      &quot;field&quot;: &quot;input&quot;
+    },
+    &quot;counterfactual&quot;: {
+      &quot;field&quot;: &quot;counterfactual_inputs[0]&quot;
+    }
+  },
+  &quot;sites&quot;: {
+    &quot;target&quot;: {
+      &quot;component&quot;: &quot;block_output&quot;,
+      &quot;layers&quot;: [
+        0
+      ]
+    },
+    &quot;head&quot;: {
+      &quot;component&quot;: &quot;lm_head&quot;
+    }
+  },
+  &quot;interventions&quot;: {
+    &quot;patching&quot;: {
+      &quot;reads&quot;: {
+        &quot;v_cf&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: {
+            &quot;index&quot;: -1,
+            &quot;scope&quot;: {
+              &quot;variable&quot;: &quot;entity&quot;
+            }
+          },
+          &quot;model&quot;: &quot;original&quot;,
+          &quot;input&quot;: &quot;counterfactual&quot;
+        },
+        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;patched&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        }
+      },
+      &quot;writes&quot;: {
+        &quot;patch&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: {
+            &quot;index&quot;: -1,
+            &quot;scope&quot;: {
+              &quot;variable&quot;: &quot;entity&quot;
+            }
+          },
+          &quot;mechanism&quot;: &quot;swap&quot;,
+          &quot;operand&quot;: &quot;v_cf&quot;
+        }
+      },
+      &quot;models&quot;: {
+        &quot;patched&quot;: {
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;writes&quot;: [
+            &quot;patch&quot;
+          ]
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;iia&quot;: {
+          &quot;kind&quot;: &quot;match&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;expected&quot;: &quot;cf_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
+        },
+        &quot;logit_diff&quot;: {
+          &quot;kind&quot;: &quot;logit_diff&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;a&quot;: &quot;cf_answer&quot;,
+          &quot;b&quot;: &quot;base_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
+        }
+      }
+    }
+  },
+  &quot;steps&quot;: {
+    &quot;score&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;iia&quot;,
+          &quot;file_path&quot;: &quot;iia.json&quot;
+        },
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;logit_diff.json&quot;
+        }
+      ]
+    }
+  }
+}</code></pre>
+          </figure>
+
+          <p>Reading it in the order the compiler does:</p>
+
+          <ul>
+            <li><code>model</code> is the tiny random-weight Llama, pinned by revision.
+            It runs on a CPU in seconds, and its <em>numbers</em> mean nothing — this
+            page is about where the swap lands, not about what the swap does.</li>
+            <li><code>roles</code> gives <code>base</code> the <code>input</code> column
+            and <code>counterfactual</code> the first entry of
+            <code>counterfactual_inputs</code>.</li>
+            <li><code>sites.target</code> is <code>block_output</code> at layer 0;
+            <code>sites.head</code> is <code>lm_head</code>.</li>
+            <li><code>interventions.patching</code> reads <code>v_cf</code> from the
+            unmodified model on the counterfactual prompt, at the anchored position,
+            and writes it into the base run at the <em>same spec</em> — which resolves
+            to a different token, because it is a different row's text.</li>
+            <li><code>metrics</code> scores the <code>logits</code> read at the last
+            token: <code>iia</code> against <code>cf_answer</code>,
+            <code>logit_diff</code> between the two answers.</li>
+            <li><code>steps.score</code> is one observation pass over the four rows of
+            <code>weekdays/train</code>.</li>
+          </ul>
+
+          <h2>Running it</h2>
+
+          <!-- run 2026-09-23 on CPU, fp32, 12-core Ryzen 9 5900X -->
+          <pre><code class="language-bash">$ time uv run causalab-mini run documents/v2/entity_patch.json --out out/entity
+out/entity/document.json
+out/entity/run.json
+out/entity/iia.json
+out/entity/logit_diff.json
+
+real	0m8.971s</code></pre>
+
+          <p>Nine seconds, most of it the model load. One plan and no sweep, so the
+          saves land straight in <code>out/entity</code>.</p>
+
+          <h2>Where it landed</h2>
+
+          <!-- causalab_mini/plan/write.py:89 — a metric table's `positions` is the
+               positions of the read the metric scores -->
+          <p>A metric table row carries the positions of the read it scores — here
+          <code>logits</code>, at a plain <code>-1</code>:</p>
+
+          <pre><code class="language-json">$ head -12 out/entity/iia.json
+[
+ {
+  &quot;example_id&quot;: &quot;0&quot;,
+  &quot;metric&quot;: &quot;iia&quot;,
+  &quot;value&quot;: 0.0,
+  &quot;eligible&quot;: true,
+  &quot;positions&quot;: [
+   10
+  ],
+  &quot;reason&quot;: &quot;&quot;,
+  &quot;unit&quot;: &quot;fraction&quot;,
+  &quot;estimand_version&quot;: &quot;match/v1&quot;,
+…</code></pre>
+
+          <!-- causalab_mini/engine/steps.py:169 _dynamic -->
+          <div class="note">
+            <span class="label">why there are positions at all</span>
+            <p>A pass whose every position is a fixed integer resolves the same indices
+            on every row and every run, and the document already says so — that table
+            gets <code>"positions": null</code>, as the layer sweep's does. This pass
+            has an anchored position in it, so the whole pass reports where it read and
+            wrote, and which rows it could place.</p>
+          </div>
+
+          <!-- causalab_mini/engine/steps.py:333 — `rows` and `tokens`, per read and write -->
+          <p>The provenance that matters here is the anchored read and write, which the
+          run keeps in the plan beside the metrics: the indices, and what those indices
+          decode back to.</p>
+
+          <pre><code class="language-python">$ python resolve.py
+v_cf ((6,), (6,), (6,), (6,)) (&quot;&#x27; Saturday&#x27;&quot;, &quot;&#x27; Sunday&#x27;&quot;, &quot;&#x27;day&#x27;&quot;, &quot;&#x27; Friday&#x27;&quot;)
+patch ((6,), (6,), (6,), (6,)) (&quot;&#x27;day&#x27;&quot;, &quot;&#x27; Friday&#x27;&quot;, &quot;&#x27; Saturday&#x27;&quot;, &quot;&#x27; Sunday&#x27;&quot;)</code></pre>
+
+          <figure class="listing">
+            <figcaption><code>resolve.py</code> <span class="what">— what produced the two lines above</span></figcaption>
+            <pre><code class="language-python">import json
+from causalab_mini import plan
+from causalab_mini.engine.engines.nnterp import NNterpEngine
+from causalab_mini.plan.spec import Spec
+
+raw = json.loads(open(&quot;documents/v2/entity_patch.json&quot;).read())
+engine = NNterpEngine.load(Spec.model_validate(raw).model, device_map=&quot;cpu&quot;)
+done = engine.execute(plan.build_request(raw, &quot;documents/data&quot;, engine))
+where = done.step(&quot;score&quot;, plan.Observe).results[&quot;positions&quot;]
+for name in (&quot;v_cf&quot;, &quot;patch&quot;):
+    print(name, where[name][&quot;rows&quot;], where[name][&quot;tokens&quot;])</code></pre>
+          </figure>
+
+          <table>
+            <thead><tr><th class="num">row</th><th>base entity</th><th class="num">write index</th><th>token written</th><th>counterfactual entity</th><th class="num">read index</th><th>token read</th></tr></thead>
+            <tbody>
+              <tr><td class="num">0</td><td>Thursday</td><td class="num">6</td><td><code>'day'</code></td><td>Saturday</td><td class="num">6</td><td><code>' Saturday'</code></td></tr>
+              <tr><td class="num">1</td><td>Friday</td><td class="num">6</td><td><code>' Friday'</code></td><td>Sunday</td><td class="num">6</td><td><code>' Sunday'</code></td></tr>
+              <tr><td class="num">2</td><td>Saturday</td><td class="num">6</td><td><code>' Saturday'</code></td><td>Thursday</td><td class="num">6</td><td><code>'day'</code></td></tr>
+              <tr><td class="num">3</td><td>Sunday</td><td class="num">6</td><td><code>' Sunday'</code></td><td>Friday</td><td class="num">6</td><td><code>' Friday'</code></td></tr>
+            </tbody>
+          </table>
+
+          <p>Every index is 6, and no two rows addressed the same token. Row 0's entity
+          is <em>Thursday</em>, three tokens, and the last of them is the piece
+          <code>'day'</code>; row 1's is <em>Friday</em>, one token, addressed whole.
+          Read the two halves together and you have the swap: the piece
+          <code>'day'</code> of the base's <em>Thursday</em> receives what the
+          counterfactual's <em>Saturday</em> held.</p>
+
+          <!-- causalab_mini/ops/locate.py:244 — the window is the tokens that OVERLAP
+               the character span, so a value starting mid-piece brings its whole piece -->
+          <div class="note">
+            <span class="label">why the index is equal and the token is not</span>
+            <p>Rows are padded on the left, so the last token of the batch is index 10
+            on every row whatever the prompt's length. Counting back from there, the
+            suffix <code>, tomorrow is</code> is the same tokens everywhere, which puts
+            the entity's final token at index 6 on all four rows. What sits <em>at</em>
+            index 6 differs, because the entity does.</p>
+            <p>The window is the tokens that overlap the entity's character span, so a
+            value starting in the middle of a piece brings that whole piece: the thing
+            being addressed is a token.</p>
+          </div>
+
+          <h2>A row whose entity is not in its prompt</h2>
+
+          <!-- causalab_mini/ops/locate.py:234 no hits -> alignment_missing;
+               :236 more than one -> alignment_ambiguous; locate.py:39 the three -->
+          <p>An anchor is a search in the decoded text. If the text is not there, the
+          window is empty and the run says which of three reasons it was:
+          <code>alignment_missing</code>, <code>alignment_ambiguous</code> — the value
+          occurs more than once, and no occurrence index is minted — or
+          <code>out_of_range</code>.</p>
+
+          <!-- ran 2026-09-23; /tmp/holed is documents/data copied aside with row 1's
+               `entity` column set to "Neptune", which is not in its prompt -->
+          <pre><code class="language-bash">$ uv run causalab-mini run documents/v2/entity_patch.json --data-root /tmp/holed --out /tmp/out
+…
+causalab_mini.plan.plan.PlanError: write &#x27;patch&#x27; has nothing to write on row(s) {1: &#x27;alignment_missing&#x27;}. A read may skip a row; a write may not — writing nothing somewhere is not an intervention, and the row would score as if one had happened. `alignment_ambiguous` is a value that is in the prompt more than once, and scoping the anchor is what makes it one</code></pre>
+
+          <p><code>/tmp/holed</code> is a copy of <code>documents/data</code> with row
+          1's <code>entity</code> column set to <code>"Neptune"</code>. Nothing else
+          changed, and the run stops before a number is written.</p>
+
+          <!-- causalab_mini/engine/steps.py:478 -->
+          <div class="caution">
+            <span class="label">a read may skip a row; a write may not</span>
+            <p>The asymmetry is deliberate. A read with an empty window is an excluded
+            measurement: the row stays in the table with <code>eligible: false</code>,
+            no value and the reason, so it can never be read as a zero or silently
+            shorten a denominator. A write with an empty window would give a row that
+            scores as if it had been intervened on when it had not, so it is refused by
+            name — at the write, where the positions are.</p>
+            <p>Taking that row out of the data is all it takes: the others score what
+            they scored, because a row is a row of a batch and nothing about the swap
+            depended on it.</p>
+          </div>
+
+          <h2>The same anchor, every token of it</h2>
+
+          <p><code>index: -1</code> is not the only cut. <code>{"all": true}</code>
+          over the same scope reads every token of the row's entity — one for
+          <em>Friday</em>, three for <em>Thursday</em> — which makes the read
+          <strong>ragged</strong>: a different width per row.</p>
+
+          <details class="listing">
+            <summary><code>documents/v2/entity_mean_ablation.json</code> <span class="what">— the ragged read, verbatim</span></summary>
+            <pre><code class="language-json">{
+  &quot;header&quot;: {
+    &quot;description&quot;: &quot;Mean ablation where the mean is taken over a RAGGED read: the tokens of each row&#x27;s entity (`{&#x27;all&#x27;: true, &#x27;scope&#x27;: {&#x27;variable&#x27;: &#x27;entity&#x27;}}` \u2014 the row&#x27;s own entity text, located in its prompt \u2014 one token for Friday, three for Thursday), averaged over every entity token in the corpus, then swapped in at the answer position. A row whose entity text is not in its prompt would contribute nothing and stay a row; here every row has one.&quot;
+  },
+  &quot;model&quot;: {
+    &quot;key&quot;: &quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;,
+    &quot;revision&quot;: &quot;9fb191250dd56d0ba7ec9785a025ed29c03d5998&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;
+  },
+  &quot;roles&quot;: {
+    &quot;base&quot;: {
+      &quot;field&quot;: &quot;input&quot;
+    }
+  },
+  &quot;sites&quot;: {
+    &quot;target&quot;: {
+      &quot;component&quot;: &quot;block_output&quot;,
+      &quot;layers&quot;: [
+        0
+      ]
+    },
+    &quot;head&quot;: {
+      &quot;component&quot;: &quot;lm_head&quot;
+    }
+  },
+  &quot;interventions&quot;: {
+    &quot;harvest&quot;: {
+      &quot;reads&quot;: {
+        &quot;acts&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: {
+            &quot;all&quot;: true,
+            &quot;scope&quot;: {
+              &quot;variable&quot;: &quot;entity&quot;
+            }
+          },
+          &quot;input&quot;: &quot;base&quot;
+        }
+      }
+    },
+    &quot;clean&quot;: {
+      &quot;reads&quot;: {
+        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;input&quot;: &quot;base&quot;
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;logit_diff&quot;: {
+          &quot;kind&quot;: &quot;logit_diff&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;a&quot;: &quot;cf_answer&quot;,
+          &quot;b&quot;: &quot;base_answer&quot;
+        }
+      }
+    },
+    &quot;ablated&quot;: {
+      &quot;reads&quot;: {
+        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;ablated&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        }
+      },
+      &quot;writes&quot;: {
+        &quot;ablate&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;mechanism&quot;: &quot;swap&quot;,
+          &quot;operand&quot;: {
+            &quot;ref&quot;: &quot;mean&quot;
+          }
+        }
+      },
+      &quot;models&quot;: {
+        &quot;ablated&quot;: {
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;writes&quot;: [
+            &quot;ablate&quot;
+          ]
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;logit_diff&quot;: {
+          &quot;kind&quot;: &quot;logit_diff&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;a&quot;: &quot;cf_answer&quot;,
+          &quot;b&quot;: &quot;base_answer&quot;
+        }
+      }
+    }
+  },
+  &quot;steps&quot;: {
+    &quot;harvest&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;intervention&quot;: &quot;harvest&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;outputs&quot;: {
+        &quot;mean&quot;: {
+          &quot;read&quot;: &quot;acts&quot;,
+          &quot;reduce&quot;: &quot;mean&quot;
+        }
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;mean&quot;,
+          &quot;file_path&quot;: &quot;entity_mean.safetensors&quot;
+        }
+      ]
+    },
+    &quot;clean&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;intervention&quot;: &quot;clean&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;clean.json&quot;
+        }
+      ]
+    },
+    &quot;ablated&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;intervention&quot;: &quot;ablated&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;ablated.json&quot;
+        }
+      ]
+    }
+  }
+}</code></pre>
+          </details>
+
+          <p>It harvests <code>acts</code> over every entity token in the corpus,
+          averages them and swaps that mean in at the answer position — so the mean is
+          over entity tokens rather than over a fixed slot. A ragged read comes home
+          flat, with the run's own positions saying where each row's tokens were. A
+          ragged <em>write</em> is a different matter: its operand has to be the same
+          width per row, and a mismatch is refused naming the rows that differ.</p>
+
+          <!-- causalab_mini/engine/steps.py:490 — "covers N positions per row but its
+               operand was read over M; rows … differ" -->
+
+          <h2>What this page does not show</h2>
+
+          <div class="caution">
+            <span class="label">the numbers here are noise</span>
+            <p><code>hf-internal-testing/tiny-random-LlamaForCausalLM</code> has random
+            weights and a 16-wide residual stream. It does not do the weekday task at
+            all: the IIA above is 0.0 on every row, and it would be 0.0 whatever you
+            patched. What the run shows is that the anchored spec resolved, per row, to
+            the token it claimed — a fact about the resolver, which holds on any model.
+            For an interchange result that means something, see the layer sweep, whose
+            corpus is uniform enough to use a plain integer.</p>
+          </div>
+
+          <div class="seealso">
+            <h2>See also</h2>
+            <ul>
+              <li><a href="../positions.html">Positions</a> — the three independent
+                  questions a position asks, the other anchor kind
+                  (<code>segment</code>), and every reason a window comes back empty</li>
+              <li><a href="layer-sweep.html">Layer sweep</a> — the same interchange with
+                  a fixed integer, on a real model, and what it finds</li>
+              <li><a href="../ops.html">Reads, writes, metrics</a> — <code>swap</code>
+                  and the other write mechanisms, and what <code>eligible</code> means
+                  in a metric table</li>
+              <li><a href="../documents.html">Documents</a> — <code>roles</code>,
+                  <code>sites</code> and the rest of the blocks this document is made
+                  of</li>
+            </ul>
+          </div>
+
 
         </article>
       </main>
