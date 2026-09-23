@@ -36,9 +36,9 @@ It **imports nothing from causalab**. Only the JSON documents were copied.
 
 ## 2. State as of this handoff
 
-`master`, clean tree, pushed to GitHub (private). **444 tests passing**
-(`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~8 s), `uvx pyright` at 0
-errors. **4,381 source lines** across 30 files in `causalab_mini/`.
+`master`, clean tree, pushed to GitHub (private). **470 tests passing**
+(`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~30 s), `uvx pyright` at 0
+errors. **7,102 lines** across 31 files in `causalab_mini/`.
 
 The package is five sub-packages and a short spine, each named for what it is
 allowed to know:
@@ -49,6 +49,7 @@ allowed to know:
             build.py    write.py  sweep.py         (two authoring formats)
     data/   rows.py     encoding.py                the corpus -> padded tokens
     ops/    intervene.py metrics.py featurizer.py  agnostic: tensors only
+            locate.py                              a position spec -> indices
     engine/ base.py     steps.py                   the contract, and what a
                                                    plan means on any runtime
       engines/nnterp/   engine.py  loading.py      one directory per runtime
@@ -131,11 +132,70 @@ These are load-bearing. Several tests enforce them.
    against the engine, not against a handle — because what a tokenizer is,
    how a site is located and how wide it is are all runtime questions.
 9. **The client never decides anything from a tensor.** The plan carries a
-   spec; the block resolves it, including any dynamic case. (Nothing here needs
-   a dynamic case yet. In the real engine this is how the generated frame and
-   the DeltaNet fire count work.)
+   spec; the block resolves it, including any dynamic case. **Positions are
+   the standing example**: a plan carries the `Where` a document wrote and
+   the per-row text a text anchor names, and `engine/steps.py` turns those
+   into integers against the model's own tokenizer, per row, inside the
+   session. See §5.
 
-## 4. The step/plan refactor — BUILT
+## 4. Positions are a spec, resolved where the model is — BUILT
+
+A position used to be an integer the compiler worked out against a tokenizer
+the client happened to have. It is now one `shapes.Where`, three independent
+fields and nothing else, and the *run* resolves it:
+
+    frame                 which sequence: "prompt", or "generated"
+    scope                 which run of it: an `Anchor` — a variable's text,
+                          a segment the frame located, or both
+    index/span/last/all   how much of that run
+
+`{"index": -1}` is the last token; `{"index": -1, "scope": {"variable":
+"entity"}}` is the last token of *this row's* entity; `{"frame": "generated",
+"index": -1}` is the last token this row generated. A bare `-1` is sugar for
+`{"index": -1}` and is what every shipped document still writes.
+
+- **One resolver, `ops/locate.py`.** A `Frame` is one padded batch as text —
+  each row's content span, what it decodes to, and the character each token
+  starts at, built by decoding growing prefixes, so no fast tokenizer is
+  needed. `locate(frame, where, anchors)` is three steps: find the run, cut
+  the run, bounds-check. An integer position is the scope-free case of those
+  same three steps, which is why there is one resolver and not two. It
+  imports the standard library, `torch` and `shapes.py` and nothing else, so
+  it ships by value to a stock NDIF server.
+- **`engine/steps.py` calls it**, once per forward per window of rows, with
+  `engine.tokenizer` — which is `model.tokenizer`, one of nnsight's
+  persistent objects, so on a server it is the *served checkpoint's own*.
+  `Selection.positions` is filled in on a copy; the plan stays fresh. **The
+  engine contract did not change**: an engine is still handed integers.
+- **Three refusals moved to run time**, and this is the design's real cost: a
+  write with nothing to write on a row, a ragged write whose operand is a
+  different width, and a metric none of whose rows could be placed. Which
+  rows a text anchor is in is a question about the model's own tokenization,
+  and the compiler no longer pretends to know it. A client-side pre-check
+  (`explain --precheck`) is designed and not built.
+- **Eligibility is two halves meeting in the run.** `MetricOp.rows` is still
+  the column half, decided where the data is; the position half is what the
+  run could place; `results["eligible"]` is the intersection per metric and
+  `results["positions"]` the window, the reason and the decoded tokens per
+  op. A pass with no dynamic position and nothing out of range reports
+  neither, so an older document writes the table it always wrote.
+- **The continuation frame is cut per row at its first stop token.** A read
+  whose cut only the finished text can settle (`{"index": -1}`, a scope)
+  compiles to one ordinary read per decode step carrying a `stack` name, and
+  the run puts them back together and cuts them — so neither engine needed a
+  line. A write may only name a step the decode has reached.
+- **Deferred, deliberately**: the client-side pre-check and the CLI work
+  around it (`--precheck`, `validate` warnings, `vocab` learning the forms);
+  chat segments — `Anchor.segment` takes `system`/`user`/`assistant` in the
+  vocabulary and the prompt frame answers `alignment_missing` for them,
+  because rendering a chat template is client-side work nobody has asked for
+  yet. Only `eos` is implemented, in the generated frame.
+- **Not run**: a real NDIF deployment. `remote="local"` pins the whole
+  mechanism (it serializes, hides the local modules and resolves the
+  persistent objects exactly as a server does) and an anchored document comes
+  back identical, but no request has gone to ndif.us.
+
+## 5. The step/plan refactor — BUILT
 
 What §4 used to describe as decided-but-unbuilt is in. How it landed, and
 where it differs from the plan written here before it was built:
@@ -190,7 +250,7 @@ because `iia` means three things now, and the three points write into
 `pos=-1/`, `pos=-2/` and `pos=-3/` because a plan's path in the tree is its
 path on disk.
 
-## 5. Findings from this project worth carrying
+## 6. Findings from this project worth carrying
 
 Full detail in `FINDINGS.md`; these are the ones that reach past mini.
 
@@ -251,7 +311,7 @@ Full detail in `FINDINGS.md`; these are the ones that reach past mini.
 - **There is no machine-readable protocol schema.** `docs/intervention_protocol.md`
   is 372 KB of authoritative prose and the Python implements it.
 
-## 6. Environment
+## 7. Environment
 
 - `uv` (0.12.1). `CONTRIBUTING.md` has the commands.
 - Tests: `CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`. Type check:
@@ -266,7 +326,7 @@ Full detail in `FINDINGS.md`; these are the ones that reach past mini.
   weekdays documents — `" Friday"` is four tokens there — hence
   `documents/data/counting` and `gpt2_cpu.json`.
 
-## 7. The wider context this sits in
+## 8. The wider context this sits in
 
 Three other pieces of work are in flight. None of them blocks mini, but mini
 produces evidence for the second.
@@ -295,7 +355,7 @@ produces evidence for the second.
 - **nnsight**: PR <https://github.com/ndif-team/nnsight/pull/729>, a per-host
   cache for the remote environment lookup.
 
-## 8. How the owner works
+## 9. How the owner works
 
 - They want to be **grilled before a project starts** so the two sides are
   aligned, and they answer numbered questions directly.

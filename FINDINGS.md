@@ -967,18 +967,21 @@ are three. So "swap the counterfactual's entity into the base's entity" —
 the most natural ragged interchange there is — has rows where the source
 window is three tokens and the target is one. There is no way to land that
 without a policy, and the protocol has two (`exact_length_buckets`,
-`padded_masked`); mini implements `refuse`, naming the rows, before any
-forward. This is not an edge case: it is the *default* outcome of an entity
-patch on real text.
+`padded_masked`); mini implements `refuse`, naming the rows, at the write.
+This is not an edge case: it is the *default* outcome of an entity patch on
+real text — and scoping the cut (`{"index": -1, "scope": {"variable":
+"entity"}}`) is what makes the same interchange land, because "the last
+token of" is a question about tokens. §24.
 
 ### 11.3 A read may skip a row; a write may not
 
-A row whose column text is not in its prompt gets an empty window. For a
+A row whose anchor text is not in its prompt gets an empty window. For a
 read that is an excluded measurement — the row contributes no positions to
-a harvest, `explain` prints `-` for it, and it stays a row. For a write it
-is refused: writing nothing somewhere is not an intervention, and the row
-would score as if one had happened. That asymmetry is causalab's, and it is
-correct.
+a harvest, the run reports `alignment_missing` for it, and it stays a row.
+For a write it is refused: writing nothing somewhere is not an
+intervention, and the row would score as if one had happened. That
+asymmetry is causalab's, and it is correct. The refusal is at the write,
+because that is where the positions are (§24).
 
 What did **not** need to change: `apply_write`. A ragged read gathers flat,
 `(total, width)`; featurizers are pointwise; a mean over it is one vector
@@ -1164,10 +1167,11 @@ a pass (including one minibatch of a fit — its loss would be the mean of
 nothing), and a column **no** row has, which is a misspelling and not an
 exclusion. `causalab-mini data <ref>` now reports which columns have holes.
 
-Not done: a *position's* ineligibility (a `{"column": …}` window the row
-does not contain) reaching a metric. A metric reads a unit window, so that
-case cannot be authored yet; when a metric over a located position exists,
-its `rows` is this same field.
+A *position's* ineligibility reaches a metric the same way, and the two
+meet in the run: `MetricOp.rows` is the column half, the run reports which
+rows it could place, and `results["eligible"]` is the intersection. A
+metric over a text-anchored unit window — `{"index": -1, "scope":
+{"variable": "entity"}}` — is what made that authorable. §24.
 
 
 ## 16. Where the activation is inside the boundary's value
@@ -1586,3 +1590,86 @@ Checked through mini after the port: Gemma-2 `block_input + attention_output
 compile time, citing the parallel block; Qwen3's premix width equals the
 tensor's; BLOOM's boundaries are right and only its interiors refuse. Mini's
 own suite: 435 (the `select` tests went with the mechanism, to nnterp).
+
+
+## 24. A position is a spec, and the tokenizer that answers it is the model's
+
+Resolving a position on the client means resolving it against a tokenizer
+the client happens to have, and carrying the answer as integers. Moving the
+resolver into the block — `ops/locate.py`, called from `engine/steps.py`
+inside the session — is what makes `{"index": -1, "scope": {"variable":
+"entity"}}` mean *this row's* entity, and it is also what makes the same
+document run on a model whose tokenizer the client never loads. Six things
+came out of doing it.
+
+### 24.1 The block gets the served checkpoint's own tokenizer, for free
+
+Traced through nnsight at `524c33fc` and then measured. `TransformersModel`
+lists `tokenizer` in `_PERSISTENT`; `__getstate__` tags it with an id;
+`CustomCloudPickler.persistent_id` writes the id instead of the object; and
+the server's `_remoteable_persistent_objects` puts its *live* tokenizer
+under that id. So `engine.tokenizer` -> `self.model.tokenizer` resolves
+server-side to the served checkpoint's own, no bytes travel, and nothing
+had to be added to NDIF. `remote="local"` exercises exactly that path — it
+serializes, hides the local modules and deserializes against the same map —
+and an anchored document comes back with identical positions, identical
+decoded tokens and identical numbers.
+
+The rule that makes it hold is about *names*: a bare `tokenizer` local
+closed over by a block would be pickled by value, a few megabytes and a
+different object. `tests/test_structure.py` already banned the name; only
+its reason changed.
+
+### 24.2 Re-encoding one row is a cheap guard against the failure that is silent
+
+If the two tokenizers ever disagree, every position is in range and in the
+wrong place — no shape error, no exception, just different numbers.
+`frame_of` re-encodes what row 0's ids decode to and compares, once per
+frame, one call. It round-trips exactly on both fixtures here, BOS included
+(`encode(decode(ids), add_special_tokens=False) == ids`), so the guard
+costs nothing and refuses by naming both spellings.
+
+### 24.3 Left padding makes "the index differs per row" quietly false
+
+The obvious demonstration of a dynamic position — patch each row's entity,
+watch the index differ — does not work on prompts that differ only in the
+entity. They are padded on the left and share a suffix, so the entity's
+last token is at the *same* absolute index on every row; what differs is
+which piece of text is there (`'day'` for ` Thursday`, `' Saturday'` for
+` Saturday`). The index only moves when the tokens *after* the anchor
+differ, as in `natural_domains_arithmetic`, where ` Tuesday` is three
+tokens and ` Monday` one and the `number` anchor lands at 8 on some rows and
+6 on others. Both facts are worth knowing: the provenance (`tokens`) is what
+shows an entity patch is doing something per row, and an assertion that the
+integers differ needs a corpus where they do.
+
+### 24.4 The continuation frame cost the engines nothing, by fanning out
+
+A read that cannot say which decode step it wants until the decode has
+finished — `{"index": -1}`, `{"scope": {"segment": "eos"}}` — needs every
+step's value. Rather than teach both engines to buffer, the compiler emits
+one ordinary read per decode step, each carrying the same spec and the name
+of the stack it belongs to, and the shared walk stacks them and cuts them
+against the continuation afterwards. The seven-member engine contract is
+untouched and `test_engine.py`'s assertion did not move. The cost is stated
+where it is paid: `rows x decode x width` numbers, refused above a limit.
+
+### 24.5 EOS held off means no row ever stops, and that is a result
+
+Mini decodes with `min_new_tokens == max_new_tokens` so the loop is a bound
+and the batch stays rectangular. EOS is therefore never generated, so
+`{"scope": {"segment": "eos"}}` reports `alignment_missing` on every row of
+every document here. That is the right shape for the answer — "did the
+model stop?" is a reported reason and not an exception — but it means the
+positive case is only reachable in a unit test over `locate.continuation`
+with hand-made ids, which is where it is tested.
+
+### 24.6 An empty ragged gather was a float tensor
+
+`ops.intervene._flat` built its index tensors from Python lists. When
+*every* row's window is empty — which is what "no row's anchor is in its
+prompt" produces — those lists are empty, `torch.as_tensor([])` is
+`float32`, and the gather raises `tensors used as indices must be long`
+instead of the metric's own "a metric of nothing has no mean". Stating the
+dtype fixes it. The bug was reachable before this work only by a
+`{"column": …}` read no row matched, which no document had.

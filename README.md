@@ -7,10 +7,18 @@ it into tensors.**
 A document is a tree of steps. Each step says which rows it runs over and what
 it writes out; the experiment it runs — reads, writes, intervened models,
 metrics — is declared once and shared. The compiler resolves everything that
-needs a model (positions against the tokenizer's padding, widths, an
-interior's operation) on the client, without weights, and hands the engine a
+needs a model but not a row — the widths, an interior's operation, the
+prompts' token ids — on the client, without weights, and hands the engine a
 plan of strings and integers. The engine walks it in one session; the results
 land on the nodes that produced them.
+
+**Where** along a sequence a read or a write acts is the one thing the plan
+does not carry as an integer. It carries the spec — `-1`, `{"last": 3}`,
+`{"index": -1, "scope": {"variable": "entity"}}`, `{"frame": "generated",
+"index": -1}` — and the run resolves it per row against the model's own
+tokenizer, so "the last token of this row's entity" is a different index on
+every row and the same document on every model. What it resolved to, and why
+a row had nowhere, comes home beside the numbers.
 
 ```bash
 uv sync
