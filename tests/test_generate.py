@@ -185,13 +185,17 @@ def test_a_read_over_a_stack_is_refused_when_it_would_hold_too_much(
 ):
     """The one cost of buffering every step, stated: `rows x decode x width`
     numbers. It is nothing here and a gigabyte on a long decode over a wide
-    site, so there is a line and it is drawn by name."""
-    from causalab_mini.engine import steps
+    site, so there is a line — and the three numbers are the compiler's, so
+    it is drawn before a model is loaded rather than after the memory has
+    been held."""
+    import sys
 
-    monkeypatch.setattr(steps, "STACK_LIMIT", 1024)
-    built = plan.build_request(_at(probe_raw, {**GENERATED, "index": -1}), data_root, model_engine)
+    # `plan.build` is the compiler *function* — the package re-exports it over
+    # the module's own name, which is the trap test_structure.py names as
+    # `write_module`. So the module is fetched by its import path.
+    monkeypatch.setattr(sys.modules["causalab_mini.plan.build"], "STACK_LIMIT", 1024)
     with pytest.raises(plan.PlanError, match="keeps every decode step"):
-        model_engine.execute(built)
+        plan.build_request(_at(probe_raw, {**GENERATED, "index": -1}), data_root, model_engine)
 
 
 # --------------------------------------------------------------------- #

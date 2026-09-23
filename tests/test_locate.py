@@ -261,3 +261,23 @@ def test_a_multibyte_prompt_compiles(model, gpt2_tokenizer, which):
     ids, mask, sample = encoding.encode(tokenizer, ["Alice 🙂 lives in Paris", "東京 is large"])
     assert len(ids) == 2 and sample.endswith("lives in Paris")
     assert locate.frame_of(tokenizer, ids, mask).texts[0] == sample
+
+
+def test_a_pass_with_no_anchor_never_builds_a_character_map(
+    model_engine, data_root, minimal_raw, monkeypatch
+):
+    """The character map is O(L) decode calls of O(L) work per row, built
+    once per forward per pass — 840 ms for 64 rows of 260 tokens, and 42
+    times over in a fit whose every position is a bare `-1`. A pass with
+    nothing to look up in text does not build one, and this asserts it by
+    making the attempt fail."""
+    from causalab_mini import plan
+    from causalab_mini.ops import locate as locate_module
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("a character map was built for a pass that reads no text")
+
+    monkeypatch.setattr(locate_module, "_chars", refuse)
+    executed = model_engine.execute(plan.build_request(minimal_raw, data_root, model_engine))
+    assert executed.result("logit_diff").shape == (4,)
+    assert "positions" not in executed.step("observe", plan.Observe).results

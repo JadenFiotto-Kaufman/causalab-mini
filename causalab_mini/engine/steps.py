@@ -138,7 +138,7 @@ def observe(engine: Any, step: Observe, state: State) -> dict[str, Any]:
         for metric in step.metrics
     }
     step.results.update({name: value.detach().cpu() for name, value in scored.items()})
-    if _reports(step, positions):
+    if positions and _dynamic(step):
         # Where this pass read and wrote, and which rows it could score.
         # Plain tuples of integers and strings, so they come home in the plan
         # like a metric does and a table can print them beside a number.
@@ -166,24 +166,22 @@ def observe(engine: Any, step: Observe, state: State) -> dict[str, Any]:
     return scored
 
 
-def _reports(step: Observe, positions: Record) -> bool:
-    """Whether this pass has anything to say about *where* it acted.
+def _dynamic(step: Observe) -> bool:
+    """Whether this pass has a position the document does not already fix.
 
-    A pass whose positions are all fixed forms resolves the same integers on
-    every row and every run, and the document already says so — so it reports
-    nothing, and a plan compiled before any of this existed still writes the
-    table it used to. A pass with a position only the run could settle, or
-    one that could not place a row, reports both halves: the window per row
-    and why it is empty.
+    A text anchor is one — which rows carry a word is data — and so is any
+    cut of the continuation, because the continuation is what the decode
+    turned out to produce. A pass with neither resolves the same integers on
+    every row and every run, and the document already says so: it needs no
+    character map and reports nothing, so a plan compiled before any of this
+    existed still writes the table it used to.
     """
-    dynamic = any(
-        op.at.where is not None and op.at.where.dynamic
+    return any(
+        op.at.where is not None
+        and (op.at.where.scope is not None or op.at.where.frame == "generated")
         for forward in step.forwards
         for tap in forward.taps
         for op in (*tap.reads, *tap.writes)
-    )
-    return bool(positions) and (
-        dynamic or any(one for record in positions.values() for one in record["reason"])
     )
 
 
@@ -263,6 +261,7 @@ def passes(engine: Any, step: Observe, state: State) -> tuple[dict[str, Any], Re
     """
     count = len(step.forwards[0].input_ids) if step.forwards else 0
     size = state.batch_size or count or 1
+    text = _dynamic(step)
     parts: list[dict[str, Any]] = []
     windows: list[Record] = []
     for start in range(0, count, size):
@@ -274,7 +273,7 @@ def passes(engine: Any, step: Observe, state: State) -> tuple[dict[str, Any], Re
         published = set(values)
         found: Record = {}
         for forward in step.forwards:
-            ready, resolved = located(engine, plan_module.window(forward, start, stop))
+            ready, resolved = located(engine, plan_module.window(forward, start, stop), start, text)
             found.update(resolved)
             _writes_land(ready, found, start)
             engine.forward(ready, values, state.featurizers)
@@ -294,14 +293,16 @@ def passes(engine: Any, step: Observe, state: State) -> tuple[dict[str, Any], Re
     }
 
 
-def located(engine: Any, forward: Forward, start: int = 0) -> tuple[Forward, Record]:
+def located(engine: Any, forward: Forward, start: int = 0, text: bool = True) -> tuple[Forward, Record]:
     """`forward` with every op's positions resolved, and what each one got.
 
     This is where a spec becomes integers, and it happens here — in the
     walk, inside the session, with the *model's* tokenizer — rather than on
     the client, so that a text anchor is looked for in the text the model
     will actually see. One `Frame` is built per forward and every tap shares
-    it; building one per tap is the one place this could be slow.
+    it; building one per tap is the one place this could be slow. `text` is
+    the character map, which is the expensive half and which only a pass
+    that reports where it acted has any use for — see `_dynamic`.
 
     What comes back beside the forward is what the run reports: per op, each
     row's `rows` window, the `reason` it is empty when it is, and the
@@ -314,7 +315,9 @@ def located(engine: Any, forward: Forward, start: int = 0) -> tuple[Forward, Rec
     the continuation that was is reported by `_continuation` — which is the
     only thing that has the right frame to say.
     """
-    frame = locate.frame_of(engine.tokenizer, forward.input_ids, forward.attention_mask)
+    frame = locate.frame_of(
+        engine.tokenizer, forward.input_ids, forward.attention_mask, text=text
+    )
     _same_text(forward, frame)
     rows = len(forward.input_ids)
     found: Record = {}
@@ -347,15 +350,6 @@ def located(engine: Any, forward: Forward, start: int = 0) -> tuple[Forward, Rec
         ),
         found,
     )
-
-
-#: How much a continuation-frame read may buffer before it is refused, in
-#: bytes. A read that cannot say which step it wants until the decode has
-#: finished keeps every step: `rows x decode x width` numbers. That is
-#: nothing at `decode = 8` and a gigabyte at `decode = 256` over a wide
-#: site, so there is a line, and it is drawn here rather than discovered as
-#: an allocation failure inside someone else's process.
-STACK_LIMIT = 256 * 1024 * 1024
 
 
 def _continuation(engine: Any, forward: Forward, values: dict[str, Any]) -> Record:
@@ -397,7 +391,6 @@ def _continuation(engine: Any, forward: Forward, values: dict[str, Any]) -> Reco
         windows, reasons = locate.locate(frame, where, parts[0].at.anchors)
         if getattr(parts[0], "stack", ""):
             steps = [values.pop(op.name) for op in parts]
-            _fits(name, steps)
             # (rows, steps, width): each step read the one position it processed
             whole = torch.stack(steps, dim=1).squeeze(2)
             values[name] = intervene.gather(
@@ -415,19 +408,6 @@ def _by_step(one: tuple[Any, Any]) -> int:
     """A stack's parts in decode order. A tap at every step (`"all"`) is not
     one of them, and sorts first."""
     return one[0] if isinstance(one[0], int) else -1
-
-
-def _fits(name: str, steps: list[Any]) -> None:
-    held = len(steps) * steps[0].nelement() * steps[0].element_size()
-    if held > STACK_LIMIT:
-        rows, width = steps[0].shape[0], steps[0].shape[-1]
-        raise PlanError(
-            f"read {name!r} keeps every decode step to cut against the continuation: "
-            f"{len(steps)} steps x {rows} rows x {width} wide is {held / 2**20:.0f} MiB, over "
-            f"the {STACK_LIMIT / 2**20:.0f} MiB a read may hold. Name the step "
-            "({'frame': 'generated', 'index': k}), decode fewer tokens, or run fewer rows "
-            "at a time with --batch-size"
-        )
 
 
 def _fits_every_row(kind: str, op: Any, windows: Positions, reasons: tuple[str, ...], start: int) -> None:

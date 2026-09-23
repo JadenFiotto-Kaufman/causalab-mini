@@ -79,6 +79,15 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
         if take is not None and max(take) >= count:
             raise PlanError(f"site {name!r}: {what} {max(take)} of a {count}-{what} tensor")
         features[name] = (count, None if take is None else tuple(take))
+    stacking = {
+        read.site
+        for one in spec.interventions.values()
+        for read in one.reads.values()
+        if _stacks(read.pos)
+    }
+    # `widths` below is the featurizers'; this is the sites' own, and only
+    # for the ones a continuation read buffers at
+    stack_widths = {name: engine.width(addresses[name]) for name in sorted(stacking)}
     fits = [one for one in spec.steps.values() if type(one).__name__ == "Fit"]
     featurizers = tuple(
         _spec_featurizer(name, one, spec, addresses, engine, fits)
@@ -117,7 +126,7 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
     for name, step in spec.steps.items():
         kind = type(step).__name__
         experiment = (
-            replace(_Experiment.of_spec(spec, spec.intervention_of(step)), features=features)
+            replace(_Experiment.of_spec(spec, spec.intervention_of(step)), features=features, widths=stack_widths)
             if kind in ("Observe", "Fit")
             else None
         )
@@ -467,6 +476,10 @@ class _Experiment:
     decode: int = 0
     #: site -> `(groups, take)`: which part of the feature axis the site is.
     features: dict[str, Any] = field(default_factory=dict)
+    #: site -> how wide the tensor there is, for the sites a continuation
+    #: read stacks at. Only those: `engine.width` is a question about the
+    #: checkpoint and there is no reason to ask it where nothing buffers.
+    widths: dict[str, int] = field(default_factory=dict)
 
     @classmethod
     def of_document(cls, document: Document) -> "_Experiment":
@@ -930,6 +943,16 @@ def _selection(pos: Where, anchors: tuple[str, ...], features: Any) -> Selection
     )
 
 
+#: How much a continuation-frame read may buffer before it is refused, in
+#: bytes. A read that cannot say which step it wants until the decode has
+#: finished keeps every step: `rows x decode x width` numbers. That is
+#: nothing at `decode = 8` and a gigabyte at `decode = 256` over a wide
+#: site, so there is a line — and all three numbers are known here, before
+#: a model is loaded, so it is drawn here rather than after the memory has
+#: been held.
+STACK_LIMIT = 256 * 1024 * 1024
+
+
 def _stacks(pos: Where) -> bool:
     """Whether a read has to see the whole continuation before it can say
     which of it it wants. `{"index": 2}` is step 2 and the tap fires there;
@@ -938,6 +961,23 @@ def _stacks(pos: Where) -> bool:
     exist until the decode has run, so the read fires at every step and is
     selected out of the stack afterwards."""
     return pos.frame == "generated" and pos.dynamic
+
+
+def _fits(name: str, site: str, experiment: _Experiment, rows: int) -> None:
+    """What a stacked read will hold, before anything holds it."""
+    groups, take = experiment.features.get(site) or (None, None)
+    wide = experiment.widths.get(site, 0)
+    if take is not None and groups:
+        wide = len(take) * (wide // groups)
+    held = experiment.decode * rows * wide * 4
+    if held > STACK_LIMIT:
+        raise PlanError(
+            f"read {name!r} keeps every decode step to cut against the continuation: "
+            f"{experiment.decode} steps x {rows} rows x {wide} wide is {held / 2**20:.0f} MiB, "
+            f"over the {STACK_LIMIT / 2**20:.0f} MiB a read may hold. The count is this pass's "
+            "rows, whatever --batch-size the run uses: name the step ({'frame': 'generated', "
+            "'index': k}), decode fewer tokens, or score fewer rows in one pass"
+        )
 
 
 def _forward(
@@ -993,6 +1033,7 @@ def _forward(
             )
             continue
         # one ordinary read per decode step, which the run stacks and cuts
+        _fits(read_name, spec.site, experiment, len(batch[0]))
         for step in range(experiment.decode):
             reads.setdefault((addresses[spec.site], step), []).append(
                 ReadOp(

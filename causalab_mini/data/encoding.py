@@ -29,8 +29,10 @@ def encode(tokenizer: Any, texts: list[str]) -> tuple[TokenRows, TokenRows, str]
     third value is how the run finds out: it decodes the same row with its
     own tokenizer and compares the strings.
     """
-    ids, mask, frame = locate.frame_of_texts(tokenizer, texts)
-    return ids, mask, frame.texts[0] if frame.texts else ""
+    ids, mask, frame = locate.frame_of_texts(tokenizer, texts, text=False)
+    if not ids:
+        return ids, mask, ""
+    return ids, mask, tokenizer.decode(ids[0][frame.starts[0] : frame.ends[0]])
 
 
 def token_id(tokenizer: Any, text: str, token_form: str) -> int:

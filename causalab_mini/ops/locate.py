@@ -67,30 +67,41 @@ class Frame:
     segments: tuple[dict[str, tuple[int, int]], ...] = ()
 
 
-def frame_of(tokenizer: Any, ids: TokenRows, mask: TokenRows) -> Frame:
-    """The frame of a padded batch the plan already carries."""
+def frame_of(tokenizer: Any, ids: TokenRows, mask: TokenRows, text: bool = True) -> Frame:
+    """The frame of a padded batch the plan already carries.
+
+    `text=False` builds the content spans and nothing else. They come from
+    the mask, and a position that names no anchor is index arithmetic over
+    them — while the character map is O(L) decode calls of O(L) work per
+    row, which is 840 ms for 64 rows of 260 tokens and is built once per
+    forward per pass. A fit whose every position is a bare `-1` would spend
+    all of that on a map nothing reads.
+    """
     starts, ends, texts, offsets = [], [], [], []
     for row, flags in zip(ids, mask):
         real = [index for index, flag in enumerate(flags) if flag]
         if real != list(range(real[0], real[-1] + 1)):
             raise LocateError("padding is not contiguous; cannot place positions")
-        text, marks = _chars(tokenizer, row[real[0] : real[-1] + 1])
         starts.append(real[0])
         ends.append(real[-1] + 1)
-        texts.append(text)
-        offsets.append(marks)
+        if text:
+            content, marks = _chars(tokenizer, row[real[0] : real[-1] + 1])
+            texts.append(content)
+            offsets.append(marks)
     return Frame(tuple(starts), tuple(ends), tuple(texts), tuple(offsets))
 
 
-def frame_of_texts(tokenizer: Any, texts: list[str]) -> tuple[TokenRows, TokenRows, Frame]:
+def frame_of_texts(
+    tokenizer: Any, texts: list[str], text: bool = True
+) -> tuple[TokenRows, TokenRows, Frame]:
     """Prompts in; the padded batch and its frame out. The client's `encode`
-    is this without the frame, and a client-side check is this with it."""
+    is this with `text=False`, because it needs the ids and not the map."""
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     encoded = tokenizer(list(texts), padding=True)
     ids = tuple(tuple(int(one) for one in row) for row in encoded["input_ids"])
     mask = tuple(tuple(int(one) for one in row) for row in encoded["attention_mask"])
-    return ids, mask, frame_of(tokenizer, ids, mask)
+    return ids, mask, frame_of(tokenizer, ids, mask, text=text)
 
 
 def continuation(tokenizer: Any, generated: TokenRows) -> Frame:
@@ -174,6 +185,11 @@ def _run(frame: Frame, where: Where, row: int, anchor: str | None) -> tuple[list
     start, end = frame.starts[row], frame.ends[row]
     if where.scope is None:
         return list(range(start, end)), ""
+    if not frame.texts:
+        raise LocateError(
+            f"position scope {where.scope} needs the row's text, and this frame was built "
+            "without one; build it with text=True"
+        )
     text = frame.texts[row]
     lo, hi = 0, len(text)
     if where.scope.segment is not None:
@@ -248,7 +264,7 @@ def tokens_of(frame: Frame, window: tuple[int, ...], row: int) -> str:
     """What a resolved window actually addressed, decoded — the provenance a
     number needs when "the last token of ` Thursday`" turns out to be the
     piece `day`. One short string per row per op."""
-    if not window:
+    if not window or not frame.offsets:
         return ""
     offsets, start = frame.offsets[row], frame.starts[row]
     lo = offsets[window[0] - start]
