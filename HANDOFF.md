@@ -36,9 +36,9 @@ It **imports nothing from causalab**. Only the JSON documents were copied.
 
 ## 2. State as of this handoff
 
-`master`, clean tree, pushed to GitHub (private). **480 tests passing**
+`master`, clean tree, pushed to GitHub (private). **486 tests passing**
 (`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~30 s), `uvx pyright` at 0
-errors. **7,178 lines** across 31 files in `causalab_mini/`.
+errors. **7,356 lines** across 31 files in `causalab_mini/`.
 
 The package is five sub-packages and a short spine, each named for what it is
 allowed to know:
@@ -47,7 +47,7 @@ allowed to know:
                                                   map, the entry point
     plan/   document.py spec.py plan.py           the request, as pure data
             build.py    write.py  sweep.py         (two authoring formats)
-    data/   rows.py     encoding.py                the corpus -> padded tokens
+    data/   rows.py     tokens.py                  the corpus -> padded tokens
     ops/    intervene.py metrics.py featurizer.py  agnostic: tensors only
             locate.py                              a position spec -> indices
     engine/ base.py     steps.py                   the contract, and what a
@@ -113,13 +113,20 @@ These are load-bearing. Several tests enforce them.
    over would be pickled by value instead, and would be the wrong object.
 6. **`address.py` is the only file that knows anything about model
    internals**, and since FINDINGS §23 most of what it knows it asks nnterp
-   for: a boundary inside the block is the *name of a nnterp accessor* plus
-   its stage in the forward, and which child module that is on a checkpoint,
-   whether the block has the place at all, and every width and head count
-   are nnterp's (`locate` writes the resolved child and side into the
-   `Address`). Interiors and the four layerless modules are still mini's
-   rows. Reaching there is the engine's (`engine/engines/nnterp/engine.py`'s
-   `read`/`write`). `ops/` knows nothing about models at all.
+   for. A boundary is the *name of a nnterp accessor*, and which child
+   module that is on a checkpoint, whether the block has the place at all,
+   whether it is one per layer, **where it sits in the forward pass**, and
+   every width and head count are nnterp's — `locate` stamps the resolved
+   child, side and rank into the `Address` and checks `per_layer` against
+   nnterp's answer, so the two cannot drift. The table is a floor and not a
+   fence: a name only `model.internals` has is addressable, because
+   `RenameConfig(addresses={...})` is how a user adds a place. Four
+   interiors (`attention_query/key/scores/z`) are still mini's rows, and so
+   is their rank, interleaved into nnterp's numbering. What is left that is
+   purely mini's: the per-head kind, the key axis, the seq axis, the width
+   *attribute name*, and read-only. Reaching there is the engine's
+   (`engine/engines/nnterp/engine.py`'s `read`/`write`). `ops/` knows
+   nothing about models at all.
 7. **An engine is eight members and no more**: `load`, then `tokenizer`,
    `num_layers`, `locate`, `width` and `heads` — what the compiler asks of a
    runtime — then `execute` and `forward`, what the run asks. (`heads` joined
@@ -150,6 +157,11 @@ fields and nothing else, and the *run* resolves it:
     scope                 which run of it: an `Anchor` — a variable's text,
                           a segment the frame located, or both
     index/span/last/all   how much of that run
+
+A position's run is the prompt's own tokens: it starts after whatever the
+tokenizer puts in front of every prompt, so `{"index": 0}` is the first word
+on Llama (which prepends a BOS) and on GPT-2 (which does not). Nothing
+addresses the prefix itself yet.
 
 `{"index": -1}` is the last token; `{"index": -1, "scope": {"variable":
 "entity"}}` is the last token of *this row's* entity; `{"frame": "generated",

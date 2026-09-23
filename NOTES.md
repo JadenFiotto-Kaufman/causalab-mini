@@ -826,6 +826,12 @@ surface that **nothing** in `documents/` needs.
 
 **Positions**
 
+> The run a position cuts is the **prompt's own tokens**: it starts after
+> whatever the tokenizer puts in front of every prompt, so `{"index": 0}` is
+> the first token of the user's text on a family that prepends a BOS and on
+> one that does not — which is what sec. 3.3 says it is. Nothing addresses
+> the prefix itself.
+>
 > Largely implemented since this was written, in one vocabulary
 > (`shapes.Where`): `frame` (`prompt` / `generated`), `scope` (an `Anchor`:
 > a `variable`, a `segment`, or both), and one of `index` / `span` / `last`

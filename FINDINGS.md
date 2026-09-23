@@ -1719,3 +1719,70 @@ frame the position was resolved against. The prompt frame now says nothing
 about a continuation tap, and `_continuation` — which builds the frame of
 the ids the decode produced — reports every tap in it, stacked or not: the
 decode step, and the token the model produced there.
+
+
+## 25. Three facts a whole-system audit found, and where each of them lives
+
+An audit of the package against nnterp `internals-accessors` and against base
+causalab's surface found three things mini was answering for itself that it
+had no business answering, or was answering wrongly. Each is here because the
+measurement cost something to make.
+
+### 25.1 Forward order is the family's, and mini had a second copy of it
+
+`_Component.stage` and `_Component.band` — two columns over twenty rows —
+were mini's own numbering of where each place sits in a block, beside
+nnterp's `Address.order` and `Internals.rank`. Measured on the tiny Llama:
+the two orderings agree **15/15** on every accessor-backed row, and *nothing
+in the suite compared them*. They would not agree forever: nnterp overrides
+the order per family (DBRX moves `attentions_norm_output` from 5 to 12), and
+a family override moves one side only.
+
+The rank is now stamped into the `Address` by `locate`, from
+`model.internals.rank(accessor, layer)`, and `per_layer` is checked against
+nnterp's rather than assumed. What mini still numbers is the four interiors
+nnterp does not address, interleaved into nnterp's own numbering — 11, 12,
+15, 22, in the gaps it leaves between `attentions_input` at 10 and
+`attentions_premix` at 25. The general shape: **a table that restates a
+dependency's facts is a table that will disagree with it, and the only
+question is when.**
+
+### 25.2 `lm_head_output` is not `logits`, and on Gemma-2 the difference is the answer
+
+nnterp carries them as two rows because Gemma-2's `final_logit_softcapping`
+bounds what the model predicts from and leaves the head's own output alone.
+Mini had one name for the pair, so every token-space metric on that family
+scored numbers the model never used — with no symptom, because both are
+`(rows, vocab)` and both look like logits.
+
+Measured on `trl-internal-testing/tiny-Gemma2ForCausalLM` (cap 30.0): on a
+natural forward the two differ by 8.2e-08, because the head's output there
+peaks at 0.06 and the cap does not bite. **A tiny checkpoint cannot show this
+by being run**; it shows it when a value large enough to reach the cap is
+written in. Swapping 100.0 into the head reads back 100.0 at `lm_head` and
+29.924 at `logits`, which is `tanh(100/30)·30`. That is the shape of the
+test to write for any "these two places are the same tensor" claim: make the
+difference reachable rather than waiting for it.
+
+The logit lens has the same problem and mini owns it: `lm_head(ln_final(x))`
+is the head's arithmetic, so `view: "logits"` takes the model's last step
+too (`ops.intervene.softcap`). nnterp has nothing about softcapping outside
+that one row's comment, so this is not a gap to push upstream — it is one
+line of arithmetic per consumer, and the consumer has to know it exists.
+
+### 25.3 `pos: 0` meant two different tokens on two families
+
+Llama's sentencepiece prepends a BOS to every prompt and GPT-2's BPE
+prepends nothing, and mini's content run started at the first unmasked
+index — so `{"index": 0}` decoded to `'<s>'` on one and `'If'` on the other,
+from the same document. nnterp has nothing about BOS (zero hits), so this is
+mini's, and the protocol had already decided it: "`{"index": 0}` is the
+first token of the user's text".
+
+The run starts after whatever the tokenizer puts in front of everything,
+asked rather than guessed — whatever it makes of the empty string is what it
+adds to every prompt. One shipped document's numbers moved and that is the
+fix working: `pca_harvest.json` reads `{"all": true}` and its basis no
+longer has the BOS embedding among the vectors it is the principal
+directions of. **A standardized name that resolves differently per family is
+worse than no name**, because nothing downstream can tell.
