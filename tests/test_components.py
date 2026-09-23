@@ -173,7 +173,10 @@ def test_the_addresses_sort_into_forward_order():
 
     everything = [Address(name, 0 if _COMPONENTS[name].band == 1 else None) for name in BOUNDARIES]
     ordered = [one.component for one in sorted(everything, key=lambda one: one.key)]
-    assert ordered[:2] == ["input_ids", "embeddings"] and ordered[-2:] == ["ln_final", "lm_head"]
+    assert ordered[:2] == ["input_ids", "embeddings"]
+    # the head's output, then the model's own — which is not the same tensor
+    # on a family that caps its logits
+    assert ordered[-3:] == ["ln_final", "lm_head", "logits"]
 
 
 def test_every_component_can_be_read_in_one_forward(eager_engine):
@@ -277,7 +280,10 @@ LAYER_UNDER_TEST = {"block_input": 1, "attention_input_norm": 1}
 
 @pytest.mark.parametrize(
     "component",
-    [name for name in BOUNDARIES if name not in ("lm_head", "embeddings", "input_ids")],
+    # `lm_head` and `logits` are where the metric reads, so a write there is
+    # the read; `embeddings`/`input_ids` are upstream of everything and are
+    # covered by the no-op test below
+    [name for name in BOUNDARIES if name not in ("lm_head", "logits", "embeddings", "input_ids")],
 )
 def test_a_swap_at_every_component_lands_and_moves_the_logits(
     component, minimal_raw, data_root, model_engine
@@ -377,3 +383,76 @@ def test_a_childs_spelling_is_nnterps_to_know(model_engine, gpt2_engine):
     assert model_engine.locate("attention_premix", 0) == Address(
         "attention_premix", 0, module="self_attn.o_proj", io="input"
     )
+
+
+# --------------------------------------------------------------------- #
+# the head's output and the model's own
+# --------------------------------------------------------------------- #
+
+
+GEMMA2 = {"key": "trl-internal-testing/tiny-Gemma2ForCausalLM", "revision": "main", "dtype": "fp32"}
+TINY_LLAMA = {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32",
+}
+
+
+def _both_heads(model: dict) -> dict:
+    """A document that swaps a big constant into the head's output and scores
+    it twice: once where the head put it, once where the model reads it."""
+    return {
+        "model": model,
+        "roles": {"base": {"field": "input"}},
+        "sites": {"head": {"component": "lm_head"}, "out": {"component": "logits"}},
+        "interventions": {
+            "one": {
+                "reads": {
+                    "raw": {"site": "head", "pos": -1, "model": "loud", "input": "base"},
+                    "capped": {"site": "out", "pos": -1, "model": "loud", "input": "base"},
+                },
+                "writes": {"shout": {"site": "head", "pos": -1, "mechanism": "swap", "operand": 100.0}},
+                "models": {"loud": {"input": "base", "writes": ["shout"]}},
+                "metrics": {
+                    "at_head": {"kind": "token_logit", "of": "raw", "token": "base_answer"},
+                    "at_logits": {"kind": "token_logit", "of": "capped", "token": "base_answer"},
+                },
+            }
+        },
+        "steps": {"score": {"kind": "observe", "rows": {"base": "weekdays/train"}}},
+    }
+
+
+def test_a_metric_at_the_head_and_at_the_logits_differ_where_the_family_caps(data_root):
+    """Gemma-2 bounds its logits with `final_logit_softcapping`, so the head's
+    output is not what the model predicts from. They are two places and two
+    components, and a metric scored on the wrong one is scored on numbers the
+    model never used."""
+    from causalab_mini.engine import NNterpEngine
+    from causalab_mini.plan.spec import Model
+
+    raw = _both_heads(GEMMA2)
+    engine = NNterpEngine.load(Model.model_validate(GEMMA2), device_map="cpu")
+    cap = engine.model.config.final_logit_softcapping
+    assert cap == 30.0
+
+    scored = engine.execute(plan.build_request(raw, data_root, engine))
+    at_head = scored.result("at_head")
+    at_logits = scored.result("at_logits")
+
+    assert torch.allclose(at_head, torch.full_like(at_head, 100.0))
+    assert torch.allclose(
+        at_logits, torch.full_like(at_logits, float(torch.tanh(torch.tensor(100.0 / cap)) * cap)),
+        atol=1e-4,
+    )
+    assert not torch.allclose(at_head, at_logits)
+
+
+def test_the_two_are_the_same_tensor_where_it_does_not(data_root, model_engine):
+    """And on a family with no cap they are one number twice, which is why
+    every shipped document can go on naming either."""
+    scored = model_engine.execute(
+        plan.build_request(_both_heads(TINY_LLAMA), data_root, model_engine)
+    )
+    assert getattr(model_engine.model.config, "final_logit_softcapping", None) is None
+    assert torch.equal(scored.result("at_head"), scored.result("at_logits"))

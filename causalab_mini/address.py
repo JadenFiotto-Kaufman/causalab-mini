@@ -10,7 +10,7 @@ one of two kinds:
   a place (a parallel-residual block has no mid-stream, a mixture of experts no
   single activation), and every width and head count, are nnterp's to know.
   The row here names the accessor and where it sits in the forward pass —
-  the four whole-model components (`embeddings`, `ln_final`, `lm_head`,
+  the five whole-model components (`embeddings`, `ln_final`, `lm_head`,
   `input_ids`) included, so every boundary goes through an accessor and a
   family's `select`/`Lens` applies to all of them.
 * an **interior** — `attention_query`. The tensor never crosses a module
@@ -194,6 +194,11 @@ _COMPONENTS = {
     "block_output": _Component(accessor="layers_output", stage=14, width="hidden_size"),
     "ln_final": _Component(accessor="ln_final_output", stage=0, band=2, width="hidden_size"),
     "lm_head": _Component(accessor="lm_head_output", stage=1, band=2, width="vocab_size"),
+    # The model's own output, which is not always the head's: Gemma-2 caps it
+    # with `final_logit_softcapping`, so a metric scored on `lm_head` there is
+    # scored on numbers the model does not predict from. nnterp carries the
+    # two as separate rows and this is the second one.
+    "logits": _Component(accessor="logits", stage=2, band=2, width="vocab_size"),
 }
 
 

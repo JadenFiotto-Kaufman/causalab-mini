@@ -262,7 +262,7 @@ def _apply(
             tap.address.seq_axis,
         )
         if read.view == "logits":
-            gathered = names.lm_head(names.ln_final(gathered))
+            gathered = intervene.softcap(names.lm_head(names.ln_final(gathered)), names.softcap)
         with intervene.exact(gathered):
             values[read.name] = featurizers[read.featurizer].featurize(gathered)[0].clone()
     return activation

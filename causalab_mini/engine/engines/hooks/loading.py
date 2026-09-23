@@ -100,6 +100,9 @@ def standardized(model: Any) -> Any:
         ln_final=_norm(decoder),
         embed_tokens=model.get_input_embeddings(),
         lm_head=model.get_output_embeddings(),
+        # what the model would do to the head's output before predicting from
+        # it: Gemma-2 caps, everything here does not
+        softcap=getattr(model.config, "final_logit_softcapping", None),
     )
 
 

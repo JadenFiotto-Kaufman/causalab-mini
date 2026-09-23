@@ -329,6 +329,17 @@ def apply_write(
     return scatter(tensor, at, written, seq_axis)
 
 
+def softcap(f: Any, cap: float | None) -> Any:
+    """`tanh(f / cap) · cap`, or `f` where the family does not cap.
+
+    The logit lens pushes a residual through the final norm and head by hand,
+    and on a family whose logits are capped — Gemma-2's
+    `final_logit_softcapping` — the head's output is not what the model
+    predicts from. This is the last step the model would have taken.
+    """
+    return f if cap is None else torch.tanh(f / cap) * cap
+
+
 def exact(x: Any) -> Any:
     """Featurizer math runs outside autocast.
 

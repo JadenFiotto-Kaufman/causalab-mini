@@ -51,8 +51,13 @@ COMPONENTS = (
     "block_output",
     "ln_final",
     "lm_head",
+    "logits",
 )
-LAYERLESS = ("input_ids", "embeddings", "ln_final", "lm_head")
+LAYERLESS = ("input_ids", "embeddings", "ln_final", "lm_head", "logits")
+#: The places whose last axis is the vocabulary, so a token-space metric can
+#: be scored on one. `logits` is what the model predicts from and `lm_head`
+#: what its head produced; they differ wherever the family caps.
+TOKEN_SPACE = ("lm_head", "logits")
 MECHANISMS = ("swap",)
 TOKEN_FORMS = ("space_prefixed",)
 INPUTS = ("base", "counterfactual")
@@ -702,12 +707,12 @@ def _cross_check(
     for name, metric in metrics.items():
         _check(metric.of in reads, f"metric {name!r}: 'of' must name a read")
         _check(
-            sites[reads[metric.of].site].component == "lm_head",
-            f"metric {name!r}: a token-space kind binds to an lm_head read",
+            sites[reads[metric.of].site].component in TOKEN_SPACE,
+            f"metric {name!r}: a token-space kind binds to a read of {list(TOKEN_SPACE)}",
         )
         _check(
             reads[metric.of].featurizer == IDENTITY,
-            f"metric {name!r}: a token-space kind binds to a *plain* lm_head read, "
+            f"metric {name!r}: a token-space kind binds to a *plain* token-space read, "
             "with no featurizer",
         )
 
