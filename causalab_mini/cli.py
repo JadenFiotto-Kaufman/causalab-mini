@@ -17,13 +17,23 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from nnterp.rename_utils import RenamingError
+from pydantic import ValidationError
+
 from . import address, plan as plan_module
+from .address import AddressError
 from .data import rows as rows_module
+from .data.rows import DataError
+from .data.tokens import TokenError
 from .engine import NNterpEngine
+from .engine.base import EngineError
 from .engine.engines.hooks import HooksEngine
 from .ops import featurizer, intervene, metrics
+from .ops.locate import LocateError
 from .plan import document, sweep
+from .plan.document import DocumentError
 from .plan.explain import explain
+from .plan.plan import PlanError
 from .plan.spec import METRIC_COLUMNS, Spec
 from .shapes import Where
 
@@ -38,10 +48,31 @@ ENGINES: dict[str, tuple[type, dict[str, Any], bool | str]] = {
 }
 SHAPE_ONLY = {"dispatch": False}
 
+#: What this package raises when it means "no". Every one carries a message
+#: written for the person who wrote the document, so the entry point prints
+#: that and nothing else. `ValidationError` is pydantic's and is how the
+#: plan-shaped format refuses; `RenamingError` is nnterp's, which mini
+#: forwards wherever a place is a family's to have or not have.
+REFUSALS: tuple[type[Exception], ...] = (
+    PlanError,          # the compiler, and the run's own refusals
+    DocumentError,      # the protocol format
+    AddressError,       # a component, a layer, an attention implementation
+    TokenError,         # a prompt, a conversation, an answer column
+    LocateError,        # a frame the resolver cannot build
+    DataError,          # a dataset ref, a column, a row
+    EngineError,        # a runtime asked for something it does not have
+    ValidationError,    # the plan-shaped format
+    RenamingError,      # nnterp, where a place is not this family's
+)
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="causalab-mini")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
+    parser.add_argument(
+        "--traceback", action="store_true",
+        help="on a refusal, print where it was raised as well as what it says",
+    )
     sub = parser.add_subparsers(dest="verb", required=True)
 
     sub.add_parser("schema", help="the JSON Schema of a plan-shaped document")
@@ -63,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
     one.add_argument("--data-root", default="documents/data")
 
     for verb, help_text in (
-        ("validate", "check a document; no model is loaded"),
+        ("validate", "compile a document without weights; say whether it is valid"),
         ("explain", "compile a document without weights and print the plan"),
         ("run", "execute a document and write its outputs"),
     ):
@@ -78,7 +109,16 @@ def main(argv: list[str] | None = None) -> int:
                              help="rows per model call; bounds memory, moves only the last bit (default: every row at once)")
 
     args = parser.parse_args(argv)
-    result = VERBS[args.verb](args)
+    try:
+        result = VERBS[args.verb](args)
+    except REFUSALS as refusal:
+        # A refusal is this package saying no, and it says why in its own
+        # message — every one of them is written to be read. The traceback
+        # is the library's business and is one flag away.
+        if args.traceback:
+            raise
+        print(f"{type(refusal).__name__}: {refusal}", file=sys.stderr)
+        return 1
     if args.json:
         print(json.dumps(result, indent=1, default=str))
     else:
@@ -196,11 +236,24 @@ def data(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def validate(args: argparse.Namespace) -> dict[str, Any]:
+    """The same work `explain` does, without printing the plan.
+
+    A document is only valid against a model: which components exist, how
+    wide each site is, whether a layer is in range and whether a metric
+    column is one token are all questions about a checkpoint. `--engine
+    nnterp` answers them from a meta shell, in under a second and with
+    nothing downloaded but the config and the tokenizer, so there is no
+    reason for a cheaper check that passes documents `explain` refuses.
+    """
     raw = _read(args.document)
     shape = "plan-shaped" if "steps" in raw else "protocol"
-    for _, point in sweep.points(raw):
-        Spec.model_validate(point) if shape == "plan-shaped" else document.Document.from_json(point)
-    return {"text": f"ok: {args.document} is a valid {shape} document", "ok": True, "format": shape}
+    _, built = _compile(args, **SHAPE_ONLY)
+    return {
+        "text": f"ok: {args.document} is a valid {shape} document, {_plural(len(built.steps), 'step')}",
+        "ok": True,
+        "format": shape,
+        "steps": list(built.steps),
+    }
 
 
 def _compile(args: argparse.Namespace, **options: Any) -> tuple[Any, Any]:
@@ -226,6 +279,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     engine, built = _compile(args, **loading)
     written = engine.execute(built, remote=remote, batch_size=args.batch_size).write(args.out)
     return {"text": "\n".join(str(path) for path in written), "written": [str(path) for path in written]}
+
+
+def _plural(count: int, thing: str) -> str:
+    return f"{count} {thing}" + ("" if count == 1 else "s")
 
 
 def _read(path: str) -> dict[str, Any]:

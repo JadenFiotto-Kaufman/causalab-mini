@@ -84,12 +84,33 @@ def test_validate_reads_both_formats(capsys):
 
 
 def test_validate_refuses_with_a_path(tmp_path, capsys):
+    """A refusal is a message, not a traceback: the entry point catches this
+    package's own error types, prints what they say, and exits 1."""
     broken = json.loads(pathlib.Path(DAS).read_text())
     broken["interventions"]["das"]["reads"]["v_cf"]["shuffle"] = {"seed": 1}
     path = tmp_path / "broken.json"
     path.write_text(json.dumps(broken))
+
+    assert cli.main(["validate", str(path), "--data-root", DATA]) == 1
+    said = capsys.readouterr()
+    assert "interventions.das.reads.v_cf.shuffle" in said.err
+    assert "Traceback" not in said.err and said.out == ""
+
     with pytest.raises(Exception, match="interventions.das.reads.v_cf.shuffle"):
-        cli.main(["validate", str(path)])
+        cli.main(["--traceback", "validate", str(path), "--data-root", DATA])
+
+
+def test_validate_compiles_so_a_misspelled_component_fails_there(tmp_path, capsys):
+    """It answers the same question `explain` does, against the same meta
+    shell — so a name that only a model can refuse is refused here too,
+    rather than validating and failing at the next verb."""
+    broken = json.loads(pathlib.Path(DAS).read_text())
+    broken["sites"]["target"]["component"] = "block_ouput"
+    path = tmp_path / "typo.json"
+    path.write_text(json.dumps(broken))
+
+    assert cli.main(["validate", str(path), "--data-root", DATA]) == 1
+    assert "block_ouput" in capsys.readouterr().err
 
 
 def test_explain_prints_the_compiled_plan_without_weights(capsys):
