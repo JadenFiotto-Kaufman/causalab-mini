@@ -78,23 +78,1169 @@
             <p class="lede">The parts of an intervention, and what each one computes.</p>
           </header>
 
-          <div class="stub">
-            <span class="label">in progress</span>
-            <p>This page has not been written yet. It is one page of a set being
-            filled in; the rest of the site is live.</p>
-            <p>What it will cover:</p>
+          <p>An <code>intervention</code> declares four things and every step of a
+          document runs that same declaration: <code>reads</code>, which take a value
+          out of a forward; <code>writes</code>, which change one; <code>models</code>,
+          which say which writes a pass applies; and <code>metrics</code>, which turn a
+          read into one number per row.</p>
+
+          <!-- causalab_mini/ops/intervene.py:8 -->
+          <p>All of it is pure data until an engine walks it. Two functions do the
+          tensor work: <code>gather</code> for a read, and one <code>apply_write</code>
+          that every mechanism and every featurizer goes through. That second one is the
+          seam the rest of the project is built around, and it is one line:</p>
+
+          <!-- causalab_mini/ops/intervene.py:6-15 -->
+          <pre><code>write = inverse(do(featurize(x)), err, x)</code></pre>
+
+          <h2>At a glance</h2>
+
+          <p>The closed vocabularies are printed by the <code>vocab</code> verb, which
+          needs no model, no weights and no network:</p>
+
+          <!-- ran 2026-09-23, CPU; causalab_mini/cli.py -->
+          <pre><code class="language-bash">$ uv run causalab-mini vocab
+components:
+  attention_query        interior  [heads]
+…
+  logits                 nnterp logits
+mechanisms:       add_scaled, clamp, gaussian, lerp, renormalize, swap
+featurizer kinds: gate, linear, pca, sae, subspace (plus &#x27;identity&#x27;, never declared)
+metric kinds:     match(expected), logit_diff(a, b), cross_entropy(target), token_logit(token), token_prob(token)
+position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, all=bool
+                  scope: variable=str, segment=Literal[&#x27;system&#x27;, &#x27;user&#x27;, &#x27;assistant&#x27;, &#x27;eos&#x27;]
+                  frame: Literal[&#x27;prompt&#x27;, &#x27;generated&#x27;]; a bare integer is {&quot;index&quot;: i}; -1 is the last token</code></pre>
+
+          <p>The component list is <a href="locations.html">Locations</a> and the
+          position forms are <a href="positions.html">Positions</a>. The three lines
+          between them are this page.</p>
+
+          <h2>A read</h2>
+
+          <!-- causalab_mini/plan/spec.py:172-181 -->
+          <p>A read names a place, a cut of the sequence, which pass to take it from,
+          which text that pass runs on, and the space to express it in.</p>
+
+          <table>
+            <thead>
+              <tr><th>field</th><th>default</th><th>what it is</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>site</code></td><td>—</td><td>A name from <code>sites</code>: the component, its layer, and any <code>heads</code> or <code>units</code> of it.</td></tr>
+              <tr><td><code>pos</code></td><td>—</td><td>The cut of the sequence. A bare integer is <code>{"index": i}</code>.</td></tr>
+              <tr><td><code>model</code></td><td><code>"original"</code></td><td><code>"original"</code>, or the name of an entry in <code>models</code> — that is, the pass with those writes applied.</td></tr>
+              <tr><td><code>input</code></td><td>—</td><td>A role, which is the column of the row the prompt comes from.</td></tr>
+              <tr><td><code>featurizer</code></td><td><code>"identity"</code></td><td>A name from <code>featurizers</code>. The read is then the feature value, not the activation: <code>v_cf</code> is <code>Qᵀx</code>.</td></tr>
+              <tr><td><code>view</code></td><td><code>"raw"</code></td><td><code>"logits"</code> pushes a residual-stream read through the model's final norm and head.</td></tr>
+            </tbody>
+          </table>
+
+          <h3>What it yields</h3>
+
+          <!-- causalab_mini/ops/intervene.py:219-241 -->
+          <p>A read is a window of positions per row, and of that window the features
+          the site names. When every row's window is the same width the value keeps its
+          rectangle — <code>(rows, w, width)</code>, with the unit window
+          <code>w = 1</code> that a metric squeezes off. When the widths differ across
+          rows the value comes back <strong>flat</strong>, <code>(total, width)</code>,
+          every row's positions in row order; the plan's own <code>positions</code> say
+          where each row begins and ends. Which shape it is, is decided by the
+          positions and never by the tensor.</p>
+
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:175-190 -->
+          <p><code>width</code> is the site's, not the model's: a site of four heads is
+          <code>4 · head_dim</code> wide and a site of four units is four wide. The
+          read's featurizer is applied where the read happens, so what a later write
+          gets as an operand is already in the feature space, and it is the same
+          featurizer object the write's <code>inverse</code> will use.</p>
+
+          <!-- causalab_mini/plan/build.py:1046-1052 -->
+          <p>At one address, inside one pass, the writes go first and the reads see
+          them. A read that should not see them names <code>model: "original"</code>,
+          which is a different forward.</p>
+
+          <h3><code>view: "logits"</code></h3>
+
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:180-189 -->
+          <!-- causalab_mini/ops/intervene.py:332-340 -->
+          <p>With <code>view: "logits"</code> the gathered residual is pushed through
+          <code>ln_final</code> and <code>lm_head</code> inside the trace, and through
+          the family's logit softcapping where it has one (Gemma-2 does). The value is
+          <code>(rows, w, vocab)</code>. A layer sweep of that read, with a
+          <code>token_prob</code> metric on it, is the logit lens as one document.</p>
+
+          <!-- causalab_mini/plan/spec.py:153, 622-633 -->
+          <div class="caution">
+            <span class="label">two refusals</span>
+            <p>A logits view is only for the residual stream —
+            <code>embeddings</code>, <code>block_input</code>,
+            <code>block_output</code>, <code>ln_final</code> — because that is what the
+            final norm and head expect. And a featurized read cannot also be viewed as
+            logits: the projection takes an activation, not a feature vector.</p>
+          </div>
+
+          <h2>The write contract</h2>
+
+          <!-- causalab_mini/ops/intervene.py:296-329 -->
+          <p>Every write is the same five steps. Gather the activation at the site and
+          the positions; map it into the featurizer's space, keeping whatever the map
+          threw away as <code>err</code>; apply the mechanism to the feature value;
+          invert, handing <code>inverse</code> the error term <em>and</em> the pre-write
+          activation; scatter the result back.</p>
+
+          <figure>
+            <svg viewBox="0 0 440 320" role="img" aria-labelledby="seam-t seam-d" width="440">
+              <title id="seam-t">The write seam</title>
+              <desc id="seam-d">Five steps in a column — gather, featurize, do, inverse,
+              scatter. Two side paths rejoin at inverse: the error term that featurize
+              set aside, and the pre-write activation x itself.</desc>
+              <defs>
+                <marker id="seam-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+                        markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fg-faint)"/>
+                </marker>
+                <marker id="seam-arrow-accent" viewBox="0 0 10 10" refX="9" refY="5"
+                        markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"/>
+                </marker>
+              </defs>
+              <g fill="var(--bg-raised)" stroke="var(--rule-strong)" stroke-width="1">
+                <rect x="125" y="12"  width="190" height="46" rx="6"/>
+                <rect x="125" y="74"  width="190" height="46" rx="6"/>
+                <rect x="125" y="136" width="190" height="46" rx="6"/>
+                <rect x="125" y="198" width="190" height="46" rx="6"/>
+                <rect x="125" y="260" width="190" height="46" rx="6"/>
+              </g>
+              <g text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif">
+                <g fill="var(--fg)" font-size="14" font-weight="600">
+                  <text x="220" y="34">gather</text>
+                  <text x="220" y="96">featurize</text>
+                  <text x="220" y="158">do</text>
+                  <text x="220" y="220">inverse</text>
+                  <text x="220" y="282">scatter</text>
+                </g>
+                <g fill="var(--fg-muted)" font-size="11">
+                  <text x="220" y="50">the site, at the positions</text>
+                  <text x="220" y="112">x → (f, err)</text>
+                  <text x="220" y="174">the mechanism, on its operand</text>
+                  <text x="220" y="236">(f′, err, x) → x′</text>
+                  <text x="220" y="298">x′ back into the tensor</text>
+                </g>
+              </g>
+              <g font-family="ui-sans-serif, system-ui, sans-serif" font-size="11.5"
+                 fill="var(--fg-faint)" text-anchor="start">
+                <text x="226" y="70">x</text>
+                <text x="226" y="132">f</text>
+                <text x="226" y="194">f′</text>
+                <text x="226" y="256">x′</text>
+              </g>
+              <g stroke="var(--fg-faint)" stroke-width="1.4" fill="none" marker-end="url(#seam-arrow)">
+                <path d="M 220 58 L 220 70"/>
+                <path d="M 220 120 L 220 132"/>
+                <path d="M 220 182 L 220 194"/>
+                <path d="M 220 244 L 220 256"/>
+                <path d="M 315 97 L 385 97 L 385 221 L 319 221"/>
+              </g>
+              <path d="M 125 35 L 38 35 L 38 221 L 121 221" fill="none"
+                    stroke="var(--accent)" stroke-width="1.4" marker-end="url(#seam-arrow-accent)"/>
+              <g font-family="ui-sans-serif, system-ui, sans-serif" font-size="11.5">
+                <text x="380" y="160" fill="var(--fg-muted)" text-anchor="end">err</text>
+                <text x="44" y="160" fill="var(--accent)" text-anchor="start">x, pre-write</text>
+              </g>
+            </svg>
+            <figcaption>Why <code>err</code> and <code>x</code> reach
+            <code>inverse</code>: they are what a partial write puts back. The identity
+            featurizer ignores both, which is what makes patching and DAS one code
+            path.</figcaption>
+          </figure>
+
+          <!-- causalab_mini/ops/intervene.py:50-58 -->
+          <p>With no <code>featurizer</code> key a write gets <code>Identity</code>:
+          <code>featurize(x)</code> is <code>(x, None)</code> and <code>inverse</code>
+          returns the mechanism's output untouched. The line collapses to "replace the
+          tensor", which is activation patching.</p>
+
+          <!-- causalab_mini/ops/featurizer.py:93-108 -->
+          <p>With a rotation it is DAS, and nothing else changes.
+          <code>featurize</code> is <code>Qᵀx</code>, the mechanism swaps that, and
+          <code>inverse</code> is <code>Qf + (x − QQᵀx)</code> — the complement comes
+          from <code>x</code>, the pre-write value, which is exactly why a subspace swap
+          leaves the orthogonal complement alone.</p>
+
+          <!-- causalab_mini/ops/intervene.py:343-353 -->
+          <div class="note">
+            <span class="label">featurizer math runs outside autocast</span>
+            <p>The whole seam is wrapped in <code>torch.autocast(enabled=False)</code>
+            and a featurizer declares fp32. A server may wrap a request in an autocast
+            region — NDIF does — and inside one a matmul of two fp32 tensors comes back
+            bf16 while a subtraction stays fp32, so half a Cayley solve is downcast and
+            <code>linalg.solve</code> refuses the pair.</p>
+          </div>
+
+          <h2>Mechanisms</h2>
+
+          <!-- causalab_mini/ops/intervene.py:69-111, 183-190 -->
+          <!-- causalab_mini/plan/spec.py:199, 238-249 -->
+          <p>Six, and each one's parameters are checked by name. <code>mechanism</code>
+          and <code>operand</code> are two fields rather than the protocol's
+          <code>{"swap": "v_cf"}</code>, because a key that is itself the mechanism's
+          name cannot be enumerated by a schema.</p>
+
+          <table>
+            <thead>
+              <tr><th>mechanism</th><th>on the feature value <code>f</code></th><th>operand</th><th><code>params</code></th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>swap</code></td><td><code>operand</code></td><td>required</td><td>none</td></tr>
+              <tr><td><code>add_scaled</code></td><td><code>f + scale·operand</code></td><td>required</td><td><code>scale</code> (default 1.0)</td></tr>
+              <tr><td><code>lerp</code></td><td><code>(1−t)·f + t·operand</code></td><td>required</td><td><code>t</code>, required</td></tr>
+              <tr><td><code>gaussian</code></td><td><code>f + scale·ε</code>, <code>ε ~ N(0,1)</code></td><td>none</td><td><code>seed</code> required, <code>scale</code> optional</td></tr>
+              <tr><td><code>clamp</code></td><td><code>min(max(f, lo), hi)</code></td><td>none</td><td><code>lo</code>, <code>hi</code>, at least one</td></tr>
+              <tr><td><code>renormalize</code></td><td><code>f · ‖f₀‖ / ‖f‖</code></td><td>supplied by the seam</td><td>none</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/ops/intervene.py:86-91 -->
+          <p><code>gaussian</code> draws on the CPU generator and moves the noise, so
+          one seed is one noise tensor on any device. <code>lerp</code> at
+          <code>t = 1</code> is a swap and at <code>t = 0</code> is nothing; every
+          partial interchange is between. Of the six, the corpus uses <code>swap</code>,
+          <code>add_scaled</code> and <code>renormalize</code>; <code>lerp</code>,
+          <code>gaussian</code> and <code>clamp</code> have no document, and are covered
+          by <code>tests/test_mechanisms.py</code>.</p>
+
+          <h3>The operand</h3>
+
+          <!-- causalab_mini/plan/spec.py:203, 184-187 -->
+          <!-- causalab_mini/ops/intervene.py:161-168 -->
+          <p>Four spellings, and the seam resolves them in five lines:</p>
+
+          <table>
+            <thead>
+              <tr><th>spelling</th><th>what it is</th><th>a document that uses it</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>"v_cf"</code></td><td>A read of <em>this</em> intervention, already in the write's feature space.</td><td><code>documents/v2/patching.json</code></td></tr>
+              <tr><td><code>{"ref": "mean"}</code></td><td>A value an <strong>earlier sibling step</strong> published under <code>outputs</code>.</td><td><code>documents/v2/mean_ablation.json</code></td></tr>
+              <tr><td><code>0.0</code></td><td>A literal number. Zero ablation is this.</td><td><code>documents/v2/zero_ablation.json</code></td></tr>
+              <tr><td>absent</td><td>For <code>gaussian</code>, <code>clamp</code> and <code>renormalize</code>, which take none.</td><td><code>documents/v2/steer_renormalize.json</code></td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/plan/spec.py:648-658, 719-728 -->
+          <p>A read used as an operand must be a read of the same intervention — a value
+          from an earlier step is <code>{"ref": …}</code> and not a bare name — it may
+          not be a logits view, and its window must be as wide as the write's. A ragged
+          side has no width until the rows are known, and the compiler checks those row
+          by row.</p>
+
+          <h3>One site, several writes</h3>
+
+          <!-- causalab_mini/plan/build.py:993-1005 -->
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:157-175 -->
+          <p>Writes at one address apply <strong>in the order
+          <code>models.&lt;name&gt;.writes</code> lists them</strong>, each one reading
+          the value the one before it left. Before the first of them, the seam keeps the
+          address's untouched value; that is <code>f₀</code>, what a pre-write mechanism
+          measures against, and it is captured once per pass.</p>
+
+          <!-- causalab_mini/ops/intervene.py:101-116 -->
+          <!-- causalab_mini/plan/spec.py:660-671 -->
+          <div class="caution">
+            <span class="label">where <code>renormalize</code> may sit</span>
+            <p><code>renormalize</code> is the only mechanism whose operand is not
+            authored: it is <code>f₀</code>, the feature value at this address before
+            any write of this forward touched it. So it has to come <em>after</em> at
+            least one other write at its site and <em>last</em> among them. Listed
+            first, or alone, <code>f</code> is <code>f₀</code> and the mechanism is the
+            identity — a document that orders it that way is refused rather than quietly
+            doing nothing.</p>
+          </div>
+
+          <h3>A scaled add, run</h3>
+
+          <p><code>documents/v2/steer_renormalize.json</code> is both rules at once: a
+          harvested mean is added to the residual stream at four times its own scale,
+          which also makes the activation longer, and <code>renormalize</code> listed
+          after it puts the length back. The second model, without the
+          <code>renormalize</code>, is the comparison.</p>
+
+          <pre><code class="language-json">      &quot;writes&quot;: {
+        &quot;steer&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;mechanism&quot;: &quot;add_scaled&quot;,
+          &quot;operand&quot;: {
+            &quot;ref&quot;: &quot;direction&quot;
+          },
+          &quot;params&quot;: {
+            &quot;scale&quot;: 4.0
+          }
+        },
+        &quot;restore&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;mechanism&quot;: &quot;renormalize&quot;
+        }
+      },
+      &quot;models&quot;: {
+        &quot;steered&quot;: {
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;writes&quot;: [
+            &quot;steer&quot;
+          ]
+        },
+        &quot;steered_renormed&quot;: {
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;writes&quot;: [
+            &quot;steer&quot;,
+            &quot;restore&quot;
+          ]
+        }
+      },</code></pre>
+
+          <p><code>explain</code> compiles it against the model without loading any
+          weights, and the write order it prints is the order in the list:</p>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/steer_renormalize.json
+&lt;root&gt;: Plan
+  harvest: Observe  metrics=[]  outputs=[&#x27;direction=mean(resid)&#x27;]
+      forward &#x27;original&#x27; on &#x27;counterfactual&#x27;  (4 rows x 11 tokens)
+        read  &#x27;resid&#x27; at block_output[0] pos={index:-1} via &#x27;identity&#x27;
+  steer: Observe  metrics=[&#x27;logit_diff/logit_diff&#x27;, &#x27;p_answer/token_prob&#x27;, &#x27;logit_diff_raw/logit_diff&#x27;]  outputs=[&#x27;norm_before=before&#x27;, &#x27;norm_after=after&#x27;, &#x27;norm_steered=after_raw&#x27;]  saves=[&#x27;logit_diff_renormed.json&#x27;, &#x27;logit_diff_steered.json&#x27;]
+      forward &#x27;original&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+        read  &#x27;before&#x27; at block_output[0] pos={index:-1} via &#x27;identity&#x27;
+      forward &#x27;steered&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+        write &#x27;steer&#x27; at block_output[0] pos={index:-1} add_scaled(direction, scale=4.0) via &#x27;identity&#x27;
+        read  &#x27;after_raw&#x27; at block_output[0] pos={index:-1} via &#x27;identity&#x27;
+        read  &#x27;raw_logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
+      forward &#x27;steered_renormed&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+        write &#x27;steer&#x27; at block_output[0] pos={index:-1} add_scaled(direction, scale=4.0) via &#x27;identity&#x27;
+        write &#x27;restore&#x27; at block_output[0] pos={index:-1} renormalize() via &#x27;identity&#x27;
+        read  &#x27;after&#x27; at block_output[0] pos={index:-1} via &#x27;identity&#x27;
+        read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;</code></pre>
+
+          <p>Three forwards, because three named passes are read from. Running it writes
+          the two metric tables:</p>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-bash">$ uv run causalab-mini run documents/v2/steer_renormalize.json --device-map cpu --out out/ops-steer
+out/ops-steer/document.json
+out/ops-steer/run.json
+out/ops-steer/logit_diff_renormed.json
+out/ops-steer/logit_diff_steered.json</code></pre>
+
+          <p>Their four rows, side by side (<code>value</code> from each file, rounded
+          here):</p>
+
+          <table>
+            <thead>
+              <tr><th><code>example_id</code></th><th class="num">steered</th><th class="num">steered, renormalized</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>0</td><td class="num">−0.0077</td><td class="num">−0.0283</td></tr>
+              <tr><td>1</td><td class="num">+0.1846</td><td class="num">+0.1842</td></tr>
+              <tr><td>2</td><td class="num">+0.0096</td><td class="num">+0.0362</td></tr>
+              <tr><td>3</td><td class="num">−0.1858</td><td class="num">−0.1925</td></tr>
+            </tbody>
+          </table>
+
+          <div class="caution">
+            <span class="label">this checkpoint knows nothing</span>
+            <p><code>hf-internal-testing/tiny-random-LlamaForCausalLM</code> has random
+            weights. The two columns differ, which is the mechanism working; neither
+            column is a fact about a language model. For results that mean something,
+            see <a href="use-cases/layer-sweep.html">the layer sweep</a>.</p>
+          </div>
+
+          <h3>A swap, run</h3>
+
+          <p>The cheapest write there is: the residual stream at the answer position
+          replaced by the number <code>0.0</code>, scored against the un-intervened
+          model. The operand is a literal, not a read.</p>
+
+          <details class="listing">
+            <summary><code>documents/v2/zero_ablation.json</code> <span class="what">— the whole document</span></summary>
+            <pre><code class="language-json">{
+  &quot;header&quot;: {
+    &quot;description&quot;: &quot;Zero ablation, the cheapest baseline there is: the residual stream at the answer position replaced by 0.0, scored against the un-intervened model. The operand is a number, not a read \u2014 the write seam&#x27;s operand was never a read-name seam.&quot;
+  },
+  &quot;model&quot;: {
+    &quot;key&quot;: &quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;,
+    &quot;revision&quot;: &quot;9fb191250dd56d0ba7ec9785a025ed29c03d5998&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;
+  },
+  &quot;roles&quot;: {
+    &quot;base&quot;: {
+      &quot;field&quot;: &quot;input&quot;
+    }
+  },
+  &quot;sites&quot;: {
+    &quot;target&quot;: {
+      &quot;component&quot;: &quot;block_output&quot;,
+      &quot;layers&quot;: [
+        0
+      ]
+    },
+    &quot;head&quot;: {
+      &quot;component&quot;: &quot;lm_head&quot;
+    }
+  },
+  &quot;interventions&quot;: {
+    &quot;clean&quot;: {
+      &quot;reads&quot;: {
+        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;input&quot;: &quot;base&quot;
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;logit_diff&quot;: {
+          &quot;kind&quot;: &quot;logit_diff&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;a&quot;: &quot;cf_answer&quot;,
+          &quot;b&quot;: &quot;base_answer&quot;
+        }
+      }
+    },
+    &quot;zeroed&quot;: {
+      &quot;reads&quot;: {
+        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;zeroed&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        }
+      },
+      &quot;writes&quot;: {
+        &quot;zero&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;mechanism&quot;: &quot;swap&quot;,
+          &quot;operand&quot;: 0.0
+        }
+      },
+      &quot;models&quot;: {
+        &quot;zeroed&quot;: {
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;writes&quot;: [
+            &quot;zero&quot;
+          ]
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;logit_diff&quot;: {
+          &quot;kind&quot;: &quot;logit_diff&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;a&quot;: &quot;cf_answer&quot;,
+          &quot;b&quot;: &quot;base_answer&quot;
+        },
+        &quot;p_answer&quot;: {
+          &quot;kind&quot;: &quot;token_prob&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;token&quot;: &quot;cf_answer&quot;
+        }
+      }
+    }
+  },
+  &quot;steps&quot;: {
+    &quot;clean&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;intervention&quot;: &quot;clean&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;clean.json&quot;
+        }
+      ]
+    },
+    &quot;zeroed&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;intervention&quot;: &quot;zeroed&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;zeroed.json&quot;
+        },
+        {
+          &quot;value&quot;: &quot;p_answer&quot;,
+          &quot;file_path&quot;: &quot;p_answer.json&quot;
+        }
+      ]
+    }
+  }
+}</code></pre>
+          </details>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/zero_ablation.json
+&lt;root&gt;: Plan
+  clean: Observe  metrics=[&#x27;logit_diff/logit_diff&#x27;]  saves=[&#x27;clean.json&#x27;]
+      forward &#x27;original&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+        read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
+  zeroed: Observe  metrics=[&#x27;logit_diff/logit_diff&#x27;, &#x27;p_answer/token_prob&#x27;]  saves=[&#x27;zeroed.json&#x27;, &#x27;p_answer.json&#x27;]
+      forward &#x27;zeroed&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+        write &#x27;zero&#x27; at block_output[0] pos={index:-1} swap(0.0) via &#x27;identity&#x27;
+        read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;</code></pre>
+
+
+          <h2>Featurizers</h2>
+
+          <!-- causalab_mini/ops/featurizer.py:241-256 -->
+          <!-- causalab_mini/plan/spec.py:118-148 -->
+          <p>A featurizer is the space a write acts in. Five kinds are declarable, plus
+          <code>identity</code>, which is never declared and is what a read or write with
+          no <code>featurizer</code> key gets.</p>
+
+          <table>
+            <thead>
+              <tr><th>kind</th><th>tensors</th><th><code>k</code></th><th>trainable</th><th><code>err</code></th><th>what a write acts on</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>subspace</code></td><td><code>weight</code>, <code>(d, k)</code></td><td>required</td><td>yes</td><td>always zero</td><td><code>k</code> directions of a Cayley-parametrized rotation</td></tr>
+              <tr><td><code>pca</code></td><td><code>weight</code>, the <code>(d, k)</code> basis itself</td><td>required</td><td>no, loaded only</td><td>always zero</td><td><code>k</code> fixed orthonormal directions</td></tr>
+              <tr><td><code>gate</code></td><td><code>weight</code>, <code>(d,)</code></td><td>refused</td><td>yes</td><td>always zero</td><td>the site's units, through a binary mask</td></tr>
+              <tr><td><code>sae</code></td><td><code>W_enc</code>, <code>W_dec</code>; <code>b_enc</code>, <code>b_dec</code> optional</td><td>from the bundle</td><td>no, loaded only</td><td><code>x − decode(f)</code></td><td>dictionary latents, after a ReLU</td></tr>
+              <tr><td><code>linear</code></td><td><code>W_enc</code>; the other three optional</td><td>from the bundle</td><td>no, loaded only</td><td><code>x − decode(f)</code></td><td>the same, with no nonlinearity</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/plan/spec.py:499-512 -->
+          <p>One featurizer name is one parameter set, so it is used at exactly one
+          site; a name that appears at two is refused. <code>d</code> is never authored
+          — the compiler fills it in from the model and the site.</p>
+
+          <h3><code>subspace</code> and <code>pca</code></h3>
+
+          <!-- causalab_mini/ops/featurizer.py:19-27, 49-55 -->
+          <p>A <code>subspace</code> stores a <code>(d, k)</code> parameter, not the
+          basis. <code>Q</code> is the Cayley transform of the skew matrix that
+          parameter names, applied to the first <code>k</code> columns of the identity —
+          <code>Q = (I − A)⁻¹(I + A)E</code> with <code>A = WEᵀ − EWᵀ</code>. That is
+          orthonormal for <strong>every</strong> value of the parameter, so a fit is an
+          ordinary AdamW over an unconstrained tensor: no retraction, no penalty, no
+          projection after the update, and the rotation cannot drift off the manifold
+          however long the fit runs. The basis is recomputed on every access, because a
+          cached one would be stale the moment the optimizer stepped.</p>
+
+          <!-- causalab_mini/ops/featurizer.py:58-73 -->
+          <p>An untrained <code>subspace</code> is a reproducible random rank-<code>k</code>
+          basis drawn from <code>seed</code>, scaled by <code>1/√d</code>. Unscaled, the
+          skew matrix's singular values grow like <code>√d</code> and the Cayley
+          transform saturates toward <code>−I</code>, which at <code>d = 2048</code> is a
+          rotation no gradient can move.</p>
+
+          <!-- causalab_mini/ops/featurizer.py:111-134, 225-234 -->
+          <!-- causalab_mini/plan/spec.py:115, 142-143 -->
+          <p>A <code>pca</code> is the same <code>featurize</code>/<code>inverse</code>
+          with <code>Q</code> stored rather than parametrized. It is always loaded from a
+          file and nothing trains one — it is the control a DAS fit is compared against.
+          The basis it loads is what <code>reduce: pca</code> writes.</p>
+
+          <h3><code>sae</code> and <code>linear</code>: the error term</h3>
+
+          <!-- causalab_mini/ops/featurizer.py:137-178 -->
+          <p>These two are the reason <code>err</code> is in the seam at all:</p>
+
+          <pre><code>featurize(x)         = (f, x − decode(f))   f = act((x − b_dec) W_enc + b_enc)
+inverse(f′, err, x)  = decode(f′) + err</code></pre>
+
+          <p>A write changes what the dictionary explains and leaves what it does not
+          explain exactly as it was. With <code>f′ = f</code> the activation comes back
+          to the bit, however bad the reconstruction is. Without the error term every SAE
+          intervention would also be "replace the activation with its reconstruction",
+          and the two effects could not be told apart. The tensor names and orientations
+          are SAELens's — <code>W_enc (d, k)</code>, <code>W_dec (k, d)</code> — and a
+          missing <code>W_dec</code> means tied weights, <code>W_encᵀ</code>.
+          <code>linear</code> is the same object with the nonlinearity off.</p>
+
+          <h3><code>gate</code>: the one piece of mode</h3>
+
+          <!-- causalab_mini/ops/featurizer.py:181-222 -->
+          <p>A gate is a learned binary mask over the site's units — the DBM featurizer.
+          Its features <em>are</em> the activation, which is why it needs no
+          <code>k</code>:</p>
+
+          <pre><code>featurize(x)      = (x, 0)
+inverse(f, 0, x)  = m ⊙ f + (1 − m) ⊙ x</code></pre>
+
+          <p>So a swap through a gate takes the masked units from the counterfactual and
+          leaves the rest alone: the same sentence as a subspace, with "units" for
+          "directions". One parameter <code>θ</code> has two readings, and which is in
+          force is the only mode in the library:</p>
+
+          <table>
+            <thead>
+              <tr><th>when</th><th>mask</th><th>why</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>training = True</code></td><td><code>m = σ(θ / T)</code></td><td>soft, so a gradient reaches <code>θ</code></td></tr>
+              <tr><td>otherwise</td><td><code>m = [θ &gt; 0]</code></td><td>hard, so the score is of a real mask</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/engine/steps.py:519-540, 555-559 -->
+          <p><code>training</code> is a plain attribute the fit loop sets around an
+          update and clears around its eval pass. A gate nobody is fitting is always
+          hard, including one loaded from a file, which is a mask and nothing else.
+          <code>start</code> puts an unfitted gate at <code>θ = 0</code>: every unit at
+          <code>σ(0) = ½</code> while training and — because the hard mask is
+          <code>θ &gt; 0</code> — every unit <em>off</em> until a fit says otherwise.</p>
+
+          <!-- causalab_mini/plan/spec.py:396-402 -->
+          <!-- causalab_mini/engine/steps.py:522-525 -->
+          <p><code>anneal</code> on a fit gives a gate a temperature schedule:
+          <code>start</code> on the first update, <code>end</code> on the last,
+          geometric between, so the soft mask the optimizer sees approaches the hard one
+          the score uses. A gate without a schedule stays at <code>T = 1</code>, and a
+          fit may only anneal a gate it trains.</p>
+
+          <!-- causalab_mini/plan/spec.py:410-412, 573-589 -->
+          <!-- causalab_mini/engine/steps.py:514-516, 528, 569-577 -->
+          <p>In a fit's <code>objective</code> — <code>Σ wᵢ·termᵢ</code>, minimized — a
+          term is a metric name or <code>&lt;gate&gt;.mask</code>, the mean of the soft
+          mask, which is the L1 pressure toward keeping few units. Only a gate
+          <em>this</em> fit trains has such a term. <code>documents/v2/dbm.json</code>
+          sweeps the weight on it, so that one document is the sparsity curve:</p>
+
+          <pre><code class="language-json">      &quot;objective&quot;: [
+        [
+          1.0,
+          &quot;ce&quot;
+        ],
+        [
+          {
+            &quot;sweep&quot;: [
+              0.0001,
+              0.002,
+              0.01,
+              0.05
+            ]
+          },
+          &quot;mask.mask&quot;
+        ]
+      ],</code></pre>
+
+          <h3><code>features</code>: acting on part of the space</h3>
+
+          <!-- causalab_mini/plan/spec.py:206-208 -->
+          <!-- causalab_mini/ops/intervene.py:308-327 -->
+          <p><code>features</code> on a write names the coordinates of the
+          <em>featurizer's</em> space the mechanism acts on — one SAE latent, three
+          directions of a rotation. The rest of the feature vector passes through
+          untouched, and so does whatever the featurizer did not explain. An operand
+          already in that same space is cut the same way; a literal number, or one
+          already that narrow, is used as it is.</p>
+
+          <p><code>features</code> is not <code>units</code>. <code>units</code> is part
+          of the <em>site</em> and narrows the activation before the featurizer sees it
+          (<a href="locations.html">Locations</a>); <code>features</code> is part of the
+          <em>write</em> and narrows the feature vector after.</p>
+
+          <h3>A subspace read, run</h3>
+
+          <p><code>documents/v2/das_apply.json</code> loads the rotation that
+          <code>das.json</code> fitted and scores it on the held-out split: no fit, no
+          weights step. Both the read and the write name it, which is what makes
+          <code>v_cf</code> a vector of eight coordinates rather than an activation.</p>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/das_apply.json
+&lt;root&gt;: Plan
+  featurizers: Featurizers
+      rot: subspace k=8 d=16 cayley loaded from documents/artifacts/rot.safetensors trained=False
+  apply: Observe  metrics=[&#x27;iia/logit_diff&#x27;, &#x27;ce/cross_entropy&#x27;]  saves=[&#x27;iia.json&#x27;, &#x27;ce.json&#x27;]
+      forward &#x27;original&#x27; on &#x27;counterfactual&#x27;  (2 rows x 9 tokens)
+        read  &#x27;v_cf&#x27; at block_output[0] pos={index:-1} via &#x27;rot&#x27;
+      forward &#x27;patched&#x27; on &#x27;base&#x27;  (2 rows x 9 tokens)
+        write &#x27;patch&#x27; at block_output[0] pos={index:-1} swap(v_cf) via &#x27;rot&#x27;
+        read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;</code></pre>
+
+          <!-- ran 2026-09-23, CPU, fp32; 8.2 s wall including the model load -->
+          <pre><code class="language-bash">$ uv run causalab-mini run documents/v2/das_apply.json --device-map cpu --out out/ops-das
+out/ops-das/document.json
+out/ops-das/run.json
+out/ops-das/iia.json
+out/ops-das/ce.json</code></pre>
+
+          <!-- causalab_mini/plan/spec.py:131-134 -->
+          <p>A loaded bundle's header is checked against the document — model, site,
+          layer, <code>k</code>, <code>d</code> — and a mismatch is refused naming the
+          key. The <code>featurizers</code> node in the plan is where the parameters are
+          built, and it is built <em>where the run runs</em>: a tensor drawn on the
+          client would not be the tensor the block rotates by.</p>
+
+          <h2>Metrics</h2>
+
+          <!-- causalab_mini/ops/metrics.py:23-53, 67-81 -->
+          <p>A metric binds to one read, takes one vocabulary id per row per operand, and
+          returns one value per row. The unit and the estimand version come from the
+          kind and are never authored.</p>
+
+          <table>
+            <thead>
+              <tr><th>kind</th><th>fields</th><th>per row</th><th><code>unit</code></th><th><code>estimand_version</code></th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>match</code></td><td><code>expected</code></td><td>1.0 when the argmax is that token, else 0.0</td><td>fraction</td><td><code>match/v1</code></td></tr>
+              <tr><td><code>logit_diff</code></td><td><code>a</code>, <code>b</code></td><td><code>logit[a] − logit[b]</code></td><td>logit</td><td><code>logit_diff/v1</code></td></tr>
+              <tr><td><code>cross_entropy</code></td><td><code>target</code></td><td><code>−log softmax(logits)[target]</code></td><td>nat</td><td><code>cross_entropy/v1</code></td></tr>
+              <tr><td><code>token_logit</code></td><td><code>token</code></td><td>the raw logit of that token</td><td>logit</td><td><code>token_logit/v1</code></td></tr>
+              <tr><td><code>token_prob</code></td><td><code>token</code></td><td><code>softmax(logits)[token]</code></td><td>probability</td><td><code>token_prob/v1</code></td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/ops/metrics.py:64-73 -->
+          <!-- causalab_mini/plan/spec.py:293-299 -->
+          <p>Every field above is a <strong>data column name</strong>, not a literal
+          token: <code>"expected": "cf_answer"</code> means the <code>cf_answer</code>
+          column of the row, tokenized under <code>token_form</code> (the one form is
+          <code>space_prefixed</code>). Which fields a kind names, and in which order
+          <code>compute</code> takes them, is one table — <code>COLUMNS</code> — read
+          both by the metric classes and by the function that scores them, so a front end
+          cannot disagree with the engine about which column is which.</p>
+
+          <!-- causalab_mini/plan/spec.py:708-718 -->
+          <p><code>of</code> is a read name, and that read must be one position wide. A
+          metric scores one position per row; a window of several, or a varying one, is
+          refused at compile time.</p>
+
+          <h3>Which rows are scored</h3>
+
+          <!-- causalab_mini/engine/steps.py:122-132 -->
+          <p>Eligibility has two halves, and neither is authoritative alone.</p>
+
+          <!-- causalab_mini/plan/build.py:636-658; causalab_mini/data/rows.py:113-117 -->
+          <p>The <strong>column half</strong> is decided on the client, where the data
+          is: a row is in when every column the metric names has a value. A row whose
+          answer column is null is an excluded measurement, and it is taken out here so
+          the run indexes and never masks — a mean is a mean, and a NaN is still a bug
+          rather than a convention. If no row survives, the compiler refuses: a metric of
+          nothing has no mean.</p>
+
+          <!-- causalab_mini/engine/steps.py:125-132, 207-213 -->
+          <p>The <strong>position half</strong> only the run can know: a text-anchored
+          position may not be found on a given row. The scored set is the intersection,
+          computed per pass, and if it is empty the run raises rather than reporting a
+          number. The reasons a position resolved to nothing are on
+          <a href="positions.html">Positions</a>.</p>
+
+          <h3>What comes out</h3>
+
+          <!-- causalab_mini/ops/metrics.py:84-88; causalab_mini/engine/steps.py:196-220 -->
+          <p>In memory, one value per eligible row, in row order, with no mask — the
+          rectangle's unit window is squeezed off, and a flat read is indexed by each
+          row's place among the ones that resolved.</p>
+
+          <!-- causalab_mini/plan/write.py:65-96 -->
+          <p>On disk it is a JSON array with one object per row of the step's data,
+          <em>including</em> the excluded ones, so a reader can never take an exclusion
+          for a zero or silently shorten a denominator. One row of
+          <code>out/ops-lens/layers=0/p_answer.json</code>:</p>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-json">{
+ &quot;example_id&quot;: &quot;0&quot;,
+ &quot;metric&quot;: &quot;p_answer&quot;,
+ &quot;value&quot;: 2.7850861442857422e-05,
+ &quot;eligible&quot;: true,
+ &quot;positions&quot;: null,
+ &quot;reason&quot;: &quot;&quot;,
+ &quot;unit&quot;: &quot;probability&quot;,
+ &quot;estimand_version&quot;: &quot;token_prob/v1&quot;,
+ &quot;produced_by&quot;: &quot;f0a9953702556caad89e3bd9960a07d36dbd6e89ff7967f50f8d20f3d140377f&quot;
+}</code></pre>
+
+          <p>When <code>eligible</code> is false, <code>value</code> is
+          <code>null</code> and <code>reason</code> says which half excluded it.
+          <code>positions</code> is filled in only by a pass whose positions the document
+          did not already fix; otherwise there is nothing to report that the document
+          does not already say. <code>produced_by</code> is the digest of the experiment:
+          everything in the document except <code>header</code>.</p>
+
+          <h3>A metric, run</h3>
+
+          <p><code>documents/v2/logit_lens.json</code> is two metrics on one
+          <code>view: "logits"</code> read, swept over two layers.</p>
+
+          <details class="listing">
+            <summary><code>documents/v2/logit_lens.json</code> <span class="what">— the whole document</span></summary>
+            <pre><code class="language-json">{
+  &quot;header&quot;: {
+    &quot;description&quot;: &quot;The logit lens as one document: at every layer, push the residual stream at the answer position through the model&#x27;s final norm and head and read what it would say if that were its last layer. `view: logits` is the projection; the layer sweep is the lens; `token_prob` on the answer is what to plot against depth. Two layers here, so two points.&quot;
+  },
+  &quot;model&quot;: {
+    &quot;key&quot;: &quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;,
+    &quot;revision&quot;: &quot;9fb191250dd56d0ba7ec9785a025ed29c03d5998&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;
+  },
+  &quot;roles&quot;: {
+    &quot;base&quot;: {
+      &quot;field&quot;: &quot;input&quot;
+    }
+  },
+  &quot;sites&quot;: {
+    &quot;resid&quot;: {
+      &quot;component&quot;: &quot;block_output&quot;,
+      &quot;layers&quot;: {
+        &quot;sweep&quot;: [
+          [
+            0
+          ],
+          [
+            1
+          ]
+        ]
+      }
+    }
+  },
+  &quot;interventions&quot;: {
+    &quot;lens&quot;: {
+      &quot;reads&quot;: {
+        &quot;lens&quot;: {
+          &quot;site&quot;: &quot;resid&quot;,
+          &quot;pos&quot;: -1,
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;view&quot;: &quot;logits&quot;
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;p_answer&quot;: {
+          &quot;kind&quot;: &quot;token_prob&quot;,
+          &quot;of&quot;: &quot;lens&quot;,
+          &quot;token&quot;: &quot;base_answer&quot;
+        },
+        &quot;top1&quot;: {
+          &quot;kind&quot;: &quot;match&quot;,
+          &quot;of&quot;: &quot;lens&quot;,
+          &quot;expected&quot;: &quot;base_answer&quot;
+        }
+      }
+    }
+  },
+  &quot;steps&quot;: {
+    &quot;lens&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;p_answer&quot;,
+          &quot;file_path&quot;: &quot;p_answer.json&quot;
+        },
+        {
+          &quot;value&quot;: &quot;top1&quot;,
+          &quot;file_path&quot;: &quot;top1.json&quot;
+        }
+      ]
+    }
+  }
+}</code></pre>
+          </details>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/logit_lens.json
+&lt;root&gt;: Plan
+  layers=0: Plan
+    lens: Observe  metrics=[&#x27;p_answer/token_prob&#x27;, &#x27;top1/match&#x27;]  saves=[&#x27;p_answer.json&#x27;, &#x27;top1.json&#x27;]
+        forward &#x27;original&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+          read  &#x27;lens&#x27; at block_output[0] pos={index:-1} via &#x27;identity&#x27; as logits
+  layers=1: Plan
+    lens: Observe  metrics=[&#x27;p_answer/token_prob&#x27;, &#x27;top1/match&#x27;]  saves=[&#x27;p_answer.json&#x27;, &#x27;top1.json&#x27;]
+        forward &#x27;original&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+          read  &#x27;lens&#x27; at block_output[1] pos={index:-1} via &#x27;identity&#x27; as logits</code></pre>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-bash">$ uv run causalab-mini run documents/v2/logit_lens.json --device-map cpu --out out/ops-lens
+out/ops-lens/document.json
+out/ops-lens/run.json
+out/ops-lens/layers=0/document.json
+out/ops-lens/layers=0/p_answer.json
+out/ops-lens/layers=0/top1.json
+out/ops-lens/layers=1/document.json
+out/ops-lens/layers=1/p_answer.json
+out/ops-lens/layers=1/top1.json</code></pre>
+
+          <h2><code>outputs</code> and <code>reduce</code></h2>
+
+          <!-- causalab_mini/plan/spec.py:325-340 -->
+          <p>An <code>observe</code> step may publish a read for the steps after it.
+          Each entry names a read and how to reduce it; a bare read name is shorthand for
+          keeping it whole.</p>
+
+          <table>
+            <thead>
+              <tr><th><code>reduce</code></th><th>what it does</th><th>shape out</th><th>a document</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>none</code></td><td>Keeps the read as it is, rows and all.</td><td>as gathered</td><td><code>documents/v2/sae_feature_ablation.json</code></td></tr>
+              <tr><td><code>mean</code></td><td><code>tensor.mean(dim=0)</code>.</td><td>one axis fewer</td><td><code>documents/v2/mean_ablation.json</code></td></tr>
+              <tr><td><code>pca</code></td><td>The top-<code>k</code> principal directions of the read, orthonormal by construction.</td><td><code>(d, k)</code></td><td><code>documents/v2/pca_harvest.json</code></td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/engine/steps.py:153-165 -->
+          <p><code>k</code> is for <code>pca</code> and <code>pca</code> needs it;
+          either without the other is refused.</p>
+
+          <!-- causalab_mini/engine/steps.py:155-158 -->
+          <div class="note">
+            <span class="label">what <code>mean</code> averages over</span>
+            <p><code>mean(dim=0)</code> is axis zero of the gathered value, and which
+            axis that is depends on how the read came back. A rectangular read is
+            <code>(rows, w, width)</code>, so the mean is <strong>over rows</strong> and
+            the window survives: a two-position read averaged this way is still two
+            positions wide. A ragged read is flat, <code>(total, width)</code>, with no
+            window axis to keep, so the mean is <strong>over every (row, position) pair
+            at once</strong>.</p>
+          </div>
+
+          <!-- causalab_mini/ops/featurizer.py:225-234 -->
+          <!-- the vector count is documents/v2/pca_harvest.json's own header -->
+          <p><code>pca</code> reshapes to <code>(-1, d)</code> first, so it is always
+          over every vector the read produced, centered, and takes the right singular
+          vectors. <code>documents/v2/pca_harvest.json</code> harvests every token of
+          four prompts — about 36 vectors — for a rank-4 basis, and says why: four
+          vectors have no rank-4 PCA, and the compiler says so too.</p>
+
+          <pre><code class="language-json">      &quot;outputs&quot;: {
+        &quot;basis&quot;: {
+          &quot;read&quot;: &quot;acts&quot;,
+          &quot;reduce&quot;: &quot;pca&quot;,
+          &quot;k&quot;: 4
+        }
+      },</code></pre>
+
+          <!-- causalab_mini/engine/steps.py:14-24, 162-164 -->
+          <!-- causalab_mini/ops/intervene.py:148-158 -->
+          <p>A published value lives in the walk's state, not on disk, unless a
+          <code>save</code> asks for it. A later step reaches it with
+          <code>{"ref": …}</code>. An unreduced output also carries the positions it was
+          read over, so that when a later step runs in batches the operand is sliced the
+          same way the rows are and a write still meets the operand of <em>its</em> row.
+          A mean has no row axis, and every window of rows shares it whole.</p>
+
+          <!-- causalab_mini/plan/spec.py:539-556 -->
+          <p>Three rules on the names: an output must be published before it is
+          referenced, two steps may not publish the same name, and an output may not
+          share its name with a read — an operand names one or the other.</p>
+
+          <p>This is how a corpus mean gets made without the un-reduced activations ever
+          leaving the run. <code>documents/v2/mean_ablation.json</code> is three steps:
+          harvest and publish, score the clean model, swap the published mean in and
+          score again.</p>
+
+          <pre><code class="language-json">      &quot;outputs&quot;: {
+        &quot;mean&quot;: {
+          &quot;read&quot;: &quot;acts&quot;,
+          &quot;reduce&quot;: &quot;mean&quot;
+        }
+      },</code></pre>
+
+          <h2>Sweeps</h2>
+
+          <!-- causalab_mini/plan/sweep.py:1-14, 52-95 -->
+          <p><code>{"sweep": [a, b, c]}</code> at <strong>any</strong> field means the
+          document is three <em>points</em> — the same experiment three times, differing
+          in that one field. A sweep is lowered on the client, on the raw JSON, before
+          anything is compiled: the wrapper is replaced by each of its values in turn and
+          each resulting document is compiled on its own. A point is an ordinary document
+          in every way, with its own addresses, its own tokenization and its own digest,
+          and nothing downstream of the compiler knows a sweep happened.</p>
+
+          <!-- causalab_mini/plan/sweep.py:129-142 -->
+          <p>A wrapper is any object whose keys are a subset of
+          <code>{"sweep", "as"}</code>, found anywhere in the document, in reading order.
+          Both front ends refuse a document that still has one: a document and a plan are
+          each one point.</p>
+
+          <h3>The two spellings beyond a list</h3>
+
+          <!-- causalab_mini/plan/sweep.py:106-126 -->
+          <p><code>{"sweep": {"range": [0, 16]}}</code> is <code>0, 1, … 15</code>:
+          <code>[start, stop]</code> or <code>[start, stop, step]</code>, in integers, as
+          Python's. <code>documents/real/weekdays_layer_sweep.json</code> uses it for the
+          layer:</p>
+
+          <pre><code class="language-json">      &quot;component&quot;: &quot;block_output&quot;,
+      &quot;layers&quot;: [
+        {
+          &quot;sweep&quot;: {
+            &quot;range&quot;: [
+              0,
+              16
+            ]
+          }
+        }
+      ]</code></pre>
+
+          <!-- causalab_mini/plan/sweep.py:26-30, 76-86 -->
+          <p><code>"as"</code> names an <strong>axis</strong>, and every wrapper with the
+          same name moves together as one coordinate. The cross product is sometimes the
+          wrong thing: a patch reads at a position and writes at the same one, and swept
+          separately those are N² points, most of them reading one place and writing
+          another. The same document names its position axis twice, once on the read and
+          once on the write:</p>
+
+          <pre><code class="language-json">          &quot;pos&quot;: {
+            &quot;sweep&quot;: [
+              -4,
+              -1
+            ],
+            &quot;as&quot;: &quot;pos&quot;
+          },</code></pre>
+
+          <p>Three wrappers, two axes: 16 layers × 2 positions is 32 points, not 64.
+          Fields that move together need a value each per point, so two wrappers sharing
+          a name and disagreeing on how many values they have is refused, naming both
+          paths. <a href="use-cases/layer-sweep.html">The layer sweep</a> runs this
+          document end to end.</p>
+
+          <h3>How points are laid out</h3>
+
+          <!-- causalab_mini/plan/sweep.py:87-95, 159-167 -->
+          <p>Several independent wrappers are their cross product, one point per
+          combination, in the order the fields appear.
+          <code>documents/real/weekdays_head_patching.json</code> sweeps a layer and a
+          head separately: 3 × 32 = 96 points, labelled
+          <code>layers=10,heads=0</code> through <code>layers=12,heads=31</code>.</p>
+
+          <p>A point's label is the swept field's own name and the value it took. The
+          name is the axis's, when it has one, else the last string key on the path to
+          the wrapper — which is why a weight swept at
+          <code>steps.fit.objective.1.0</code> is labelled <code>objective=…</code>. A
+          one-element list sweeps as its element, so <code>[[0], [1]]</code> gives
+          <code>features=0</code> and not <code>features=[0]</code>; anything else is
+          compact JSON.</p>
+
+          <p>The label is the point's name in the plan tree and its directory on disk.
+          Running <code>documents/v2/neuron_patching.json</code>, which sweeps which MLP
+          neurons the interchange covers:</p>
+
+          <pre><code class="language-json">      &quot;units&quot;: {
+        &quot;sweep&quot;: [
+          [
+            0,
+            1,
+            2,
+            3
+          ],
+…
+        ]
+      }</code></pre>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-bash">$ uv run causalab-mini run documents/v2/neuron_patching.json --device-map cpu --out out/ops-neuron
+out/ops-neuron/document.json
+out/ops-neuron/run.json
+out/ops-neuron/units=[0,1,2,3]/document.json
+out/ops-neuron/units=[0,1,2,3]/iia.json
+out/ops-neuron/units=[0,1,2,3]/logit_diff.json
+out/ops-neuron/units=[4,5,6,7]/document.json
+out/ops-neuron/units=[4,5,6,7]/iia.json
+out/ops-neuron/units=[4,5,6,7]/logit_diff.json
+out/ops-neuron/units=[8,9,10,11]/document.json
+out/ops-neuron/units=[8,9,10,11]/iia.json
+out/ops-neuron/units=[8,9,10,11]/logit_diff.json</code></pre>
+
+          <!-- causalab_mini/engine/steps.py:20-22, 62-64 -->
+          <p>Each point gets its own <code>document.json</code>, which is that point's
+          document with the wrapper replaced — the thing that was actually compiled. A
+          nested plan gets its own published outputs too, so points cannot see each
+          other's.</p>
+
+          <p>Sweeping <code>features</code> on a write gives a feature-at-a-time
+          ablation, which is what <code>documents/v2/sae_feature_ablation.json</code>
+          is. Its four points, trimmed to two:</p>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/sae_feature_ablation.json
+&lt;root&gt;: Plan
+  features=0: Plan
+    featurizers: Featurizers
+        dictionary: sae k=32 d=16 loaded from documents/artifacts/sae.safetensors trained=False
+    ablate: Observe  metrics=[&#x27;logit_diff/logit_diff&#x27;, &#x27;p_answer/token_prob&#x27;]  outputs=[&#x27;active=latents&#x27;]  saves=[&#x27;zeroed.json&#x27;, &#x27;p_answer.json&#x27;]
+        forward &#x27;original&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+          read  &#x27;latents&#x27; at block_output[0] pos={index:-1} via &#x27;dictionary&#x27;
+        forward &#x27;zeroed&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+          write &#x27;ablate&#x27; at block_output[0] pos={index:-1} swap(0.0) via &#x27;dictionary&#x27; on its features [0]
+          read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
+  features=1: Plan
+    featurizers: Featurizers
+        dictionary: sae k=32 d=16 loaded from documents/artifacts/sae.safetensors trained=False
+    ablate: Observe  metrics=[&#x27;logit_diff/logit_diff&#x27;, &#x27;p_answer/token_prob&#x27;]  outputs=[&#x27;active=latents&#x27;]  saves=[&#x27;zeroed.json&#x27;, &#x27;p_answer.json&#x27;]
+        forward &#x27;original&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+          read  &#x27;latents&#x27; at block_output[0] pos={index:-1} via &#x27;dictionary&#x27;
+        forward &#x27;zeroed&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+          write &#x27;ablate&#x27; at block_output[0] pos={index:-1} swap(0.0) via &#x27;dictionary&#x27; on its features [1]
+          read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
+…</code></pre>
+
+          <h2>What is refused</h2>
+
+          <p>All of it at compile time, before a weight is loaded, and every message
+          names the path it was at.</p>
+
+          <table>
+            <thead>
+              <tr><th>the document says</th><th>why not</th></tr>
+            </thead>
+            <tbody>
+              <!-- causalab_mini/plan/spec.py:213-228 -->
+              <tr><td>A mechanism without its required <code>params</code>, or with ones it does not take</td><td>Each mechanism names the numbers it takes; <code>clamp</code> needs at least one bound.</td></tr>
+              <!-- causalab_mini/plan/spec.py:222-225, 249 -->
+              <tr><td>An <code>operand</code> on <code>gaussian</code>, <code>clamp</code> or <code>renormalize</code>, or none on the other three</td><td>One draws its own noise, one only bounds, one measures against the value the seam supplies.</td></tr>
+              <!-- causalab_mini/plan/spec.py:660-671 -->
+              <tr><td><code>renormalize</code> first at its site, or alone there</td><td>It would be the identity. See above.</td></tr>
+              <!-- causalab_mini/plan/spec.py:708-718 -->
+              <tr><td>A metric on a read of more than one position</td><td>A metric scores one position per row.</td></tr>
+              <!-- causalab_mini/plan/spec.py:719-728 -->
+              <tr><td>A write whose window is wider or narrower than its operand's read</td><td>The windows have to match. A ragged side is checked row by row at compile time.</td></tr>
+              <!-- causalab_mini/plan/spec.py:622-633 -->
+              <tr><td><code>view: "logits"</code> off the residual stream, or on a featurized read</td><td>The final norm and head take a residual stream, not a feature vector.</td></tr>
+              <!-- causalab_mini/plan/spec.py:654-658 -->
+              <tr><td>A logits read used as a write's operand</td><td>It is vocabulary-wide and cannot be written back at a site.</td></tr>
+              <!-- causalab_mini/plan/spec.py:643-647 -->
+              <tr><td>A write at <code>input_ids</code></td><td>Read-only: the model's input, not an activation.</td></tr>
+              <!-- causalab_mini/plan/spec.py:499-512 -->
+              <tr><td>One featurizer name used at two sites</td><td>One name is one parameter set, so it is one site.</td></tr>
+              <!-- causalab_mini/plan/spec.py:136-148 -->
+              <tr><td>A <code>gate</code> with a <code>k</code> or a <code>seed</code>; a <code>subspace</code> or <code>pca</code> without <code>k</code>; a <code>pca</code>, <code>sae</code> or <code>linear</code> without <code>file_path</code>; a loaded featurizer with a <code>seed</code></td><td>A gate masks every unit and starts at θ = 0; a basis needs a rank; the loaded-only kinds exist as a file; loaded weights are their bytes.</td></tr>
+              <!-- causalab_mini/plan/spec.py:567-572 -->
+              <tr><td>A fit that trains a <code>pca</code>, <code>sae</code> or <code>linear</code></td><td>Fixed by definition. A pca basis can be fine-tuned as a <code>subspace</code> loaded from it.</td></tr>
+              <!-- causalab_mini/plan/spec.py:730-762 -->
+              <tr><td>A step that uses a featurizer before the fit that trains it</td><td>It would score an untrained rotation without complaint. A deliberate untrained baseline is a second featurizer that no fit names.</td></tr>
+              <!-- causalab_mini/plan/spec.py:573-589 -->
+              <tr><td>An <code>objective</code> term or an <code>anneal</code> entry that is not a metric or a gate this fit trains</td><td>Only a gate being fitted has a mask term and a temperature.</td></tr>
+              <!-- causalab_mini/plan/sweep.py:63-70 -->
+              <tr><td>A sweep on <code>model</code> or <code>header</code></td><td>The engine loads the model once and every point runs against it; those are the identity of the run, not a coordinate in it.</td></tr>
+              <!-- causalab_mini/plan/sweep.py:78-84 -->
+              <tr><td>Two wrappers sharing an <code>"as"</code> with different numbers of values</td><td>Fields that move together need a value each per point.</td></tr>
+              <!-- causalab_mini/plan/sweep.py:72-73, 106-126 -->
+              <tr><td>An empty sweep, or a <code>range</code> that is not two or three integers with a non-zero step</td><td>A sweep of nothing has no points.</td></tr>
+            </tbody>
+          </table>
+
+          <div class="seealso">
+            <h2>See also</h2>
             <ul>
-            <li>Reads: <code>site</code>, <code>pos</code>, <code>model</code>, <code>input</code>, <code>featurizer</code>, and <code>view: logits</code>.</li>
-            <li>The six write mechanisms and their params: <code>swap</code>, <code>add_scaled</code>, <code>lerp</code>, <code>gaussian</code>, <code>clamp</code>, <code>renormalize</code>. <code>causalab_mini/plan/spec.py:238</code>.</li>
-            <li>Operands: a read of the same intervention, a <code>{"ref": …}</code> to an earlier step's output, a bare number, or none.</li>
-            <li>Featurizers: <code>subspace</code>, <code>pca</code>, <code>gate</code>, <code>sae</code>, <code>linear</code> — which are trainable, which are loaded-only, and the error term.</li>
-            <li><code>features</code>: acting on some coordinates of a featurizer's space and passing the rest through.</li>
-            <li>The five metric kinds and their columns, with units and <code>estimand_version</code>.</li>
-            <li><code>outputs</code> and <code>reduce</code>: <code>none</code>, <code>mean</code>, <code>pca</code> — how a corpus mean is made without the activations leaving.</li>
-            <li>Sweeps: the wrapper, named axes, the range form, and what is refused.</li>
+              <li><a href="locations.html">Locations</a> — what a <code>site</code> names, and how <code>heads</code> and <code>units</code> set the width a featurizer sees</li>
+              <li><a href="positions.html">Positions</a> — the <code>pos</code> vocabulary, the continuation frame, and the reasons a row resolves to no window</li>
+              <li><a href="documents.html">Documents</a> — the rest of the document: <code>roles</code>, <code>steps</code>, <code>saves</code>, and the JSON Schema</li>
+              <li><a href="use-cases/layer-sweep.html">Layer sweep</a> — a swap, a named sweep axis and two metrics on a real model, with the result</li>
+              <li><a href="use-cases/das-fit.html">DAS fit</a> — fitting a <code>subspace</code>, and the controls to compare it against</li>
+              <li><a href="use-cases/dbm-fit.html">DBM fit</a> — the <code>gate</code>, its anneal and the sparsity curve</li>
+              <li><a href="use-cases/sweeps.html">Sweeps</a> — more swept documents, and what the points cost</li>
             </ul>
-            <p>Writing it? Read <code>docs/STYLE.md</code> first — it has the page
-            template, the citation rule and the nav snippet to paste.</p>
           </div>
 
         </article>
