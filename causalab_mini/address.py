@@ -493,6 +493,25 @@ def width(model: Any, address: Address) -> int:
     return int(value)
 
 
+def layered(component: str, layer: int | None) -> str | None:
+    """Why this component may not be addressed at this layer, or `None`.
+
+    A whole-model place takes none and a per-layer one takes exactly one,
+    and which a component is, is this table's to say — so both authoring
+    formats ask here rather than each keeping a list. A name only nnterp
+    knows is per layer unless nnterp says otherwise, which `locate` finds
+    out; here it is not refused for a layer either way.
+    """
+    entry = _COMPONENTS.get(component)
+    if entry is None:
+        return None
+    if not entry.per_layer and layer is not None:
+        return f"{component} takes no layers"
+    if entry.per_layer and not isinstance(layer, int):
+        return f"{component} is addressed at one layer"
+    return None
+
+
 def describe() -> dict[str, dict[str, Any]]:
     """The component vocabulary, as data an agent can read: for each name,
     where it is and what kind of place that is. This is the table, not a

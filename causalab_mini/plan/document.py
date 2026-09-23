@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .. import address
 from ..shapes import Where
 
 Json = dict[str, Any]
@@ -185,13 +186,8 @@ class SiteSpec:
             f"component {self.component!r} is not implemented "
             f"(this slice has {COMPONENTS})",
         )
-        if self.component in LAYERLESS:
-            _check(self.layer is None, f"{self.component} takes no layers")
-        else:
-            _check(
-                isinstance(self.layer, int),
-                f"{self.component} is addressed at one layer",
-            )
+        wrong = address.layered(self.component, self.layer)
+        _check(wrong is None, wrong or "")
 
     @classmethod
     def from_json(cls, name: str, raw: Json) -> "SiteSpec":
