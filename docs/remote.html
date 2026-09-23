@@ -274,11 +274,14 @@ AttributeError: module 'causalab_mini.engine.steps' has no attribute 'a_function
           <div class="caution">
             <span class="label">a skew that changes a number is silent</span>
             <p>A missing name is loud. A function whose body changed is not: the
-            server runs its own, the run completes, and <code>run.json</code> does
-            not show it — <code>provenance.record</code> reads every version and the
-            code digest <em>on the client</em>. On this stack that is visible in a
-            small way already: the run record says <code>pydantic 2.13.5</code>,
-            which is the client's; the server has 2.13.4.</p>
+            server runs its own and the run completes. What the record does show
+            is the two sides side by side — <code>versions</code> is the
+            client's and <code>server.versions</code> is what
+            <code>/env</code> answered — and on this stack that is how the
+            <code>pydantic</code> skew below turns up: <code>2.13.5</code> here,
+            <code>2.13.4</code> there. The code digest is still the client's
+            reading of its own files; the server computing it too is what
+            <a href="#what-came-home">the record</a> shows.</p>
           </div>
 
           <h3 id="what-the-request-weighs">What the request weighs <a class="anchor" href="#what-the-request-weighs" aria-label="Link to this section">#</a></h3>
@@ -378,9 +381,9 @@ $ diff out/sweep-local/run.json out/sweep-ndif/run.json
           against the default deployment it would be the second field to differ, and
           the only one that would move a number. The whole record:</p>
 
-          <!-- ran 2026-09-23, before run.json recorded the server's own
-               versions; provenance.py:41-54. The `server` block a run against
-               this stack records now is below. -->
+          <!-- ran 2026-09-23 against the local NDIF, positions @ 2f7d4f7:
+               out/sweep/run.json from `causalab-mini run
+               documents/real/weekdays_layer_sweep.json --engine ndif` -->
           <pre><code class="language-json">{
  &quot;engine&quot;: &quot;NNterpEngine&quot;,
  &quot;remote&quot;: true,
@@ -392,7 +395,18 @@ $ diff out/sweep-local/run.json out/sweep-ndif/run.json
   &quot;nnterp&quot;: &quot;0.5.0.dev0+internalsaccessors&quot;,
   &quot;pydantic&quot;: &quot;2.13.5&quot;
  },
- &quot;causalab_mini&quot;: &quot;76c8c9d0c0d1f3e0b8e2eaeb09564107d1c0a70cb9e8b7d6cecab09fdc92d8a1&quot;,
+ &quot;causalab_mini&quot;: &quot;d52d3c7757ac30d38e9990ba441d563756235e6b6d4312351110acec46185e73&quot;,
+ &quot;server&quot;: {
+  &quot;asked&quot;: &quot;http://localhost:8001&quot;,
+  &quot;python&quot;: &quot;3.12.14&quot;,
+  &quot;versions&quot;: {
+   &quot;torch&quot;: &quot;2.14.0+cu126&quot;,
+   &quot;transformers&quot;: &quot;5.17.0&quot;,
+   &quot;nnsight&quot;: &quot;0.8.1.dev125+g524c33fc&quot;,
+   &quot;nnterp&quot;: &quot;0.5.0.dev0+internalsaccessors&quot;,
+   &quot;pydantic&quot;: &quot;2.13.4&quot;
+  }
+ },
  &quot;served_dtype&quot;: &quot;torch.float32&quot;
 }</code></pre>
 
@@ -405,24 +419,38 @@ $ diff out/sweep-local/run.json out/sweep-ndif/run.json
           cached per host, and what comes back is recorded under
           <code>server</code> beside them, filtered to the same five names so
           the two compare line for line. A server that will not answer is
-          recorded as not having answered. A local run's record is unchanged —
-          there is no server, so there is no key.</p>
+          recorded as not having answered. <code>asked</code> is the host the
+          client resolved, so a run against the public service reads
+          <code>&quot;asked&quot;: &quot;https://api.ndif.us&quot;</code>. The
+          same command with <code>--engine nnterp</code> writes the same file
+          without the key: a local run has no server to ask.</p>
 
-          <!-- ran 2026-09-24, CPU: provenance.record against nnsight's cache
-               seeded with the /env output shown above, since this box has no
-               NDIF deployment of its own -->
-          <pre><code class="language-json"> &quot;server&quot;: {
-  &quot;asked&quot;: &quot;http://localhost:5001&quot;,
-  &quot;python&quot;: &quot;3.12.14&quot;,
-  &quot;versions&quot;: {
-   &quot;torch&quot;: &quot;2.14.0+cu126&quot;,
-   &quot;transformers&quot;: &quot;5.17.0&quot;,
-   &quot;nnsight&quot;: &quot;0.8.1.dev125+g524c33fc&quot;,
-   &quot;nnterp&quot;: &quot;0.5.0.dev0+internalsaccessors&quot;,
-   &quot;pydantic&quot;: &quot;2.13.4&quot;
-  }
- }</code></pre>
+          <p>Read the two <code>pydantic</code> lines. The client has
+          <code>2.13.5</code> and the server <code>2.13.4</code>, on a stack
+          built to match — every other watched package agrees. That skew was
+          invisible before this key existed, and finding it is what the key is
+          for.</p>
 
+          <!-- ran 2026-09-23: the digest computed inside the block on the
+               server, against the client's, causalab_mini/engine/provenance.py:47-54 -->
+          <p><code>causalab_mini</code> is a sha256 over every
+          <code>.py</code> file in the package, and it is not in
+          <code>WATCHED</code> because a version string is coarse for a package
+          installed from a checkout. On this run the server computed it inside
+          the block and it matched, from a different path:</p>
+
+          <pre><code class="language-bash">server digest: d52d3c7757ac30d38e9990ba441d563756235e6b6d4312351110acec46185e73
+client digest: d52d3c7757ac30d38e9990ba441d563756235e6b6d4312351110acec46185e73
+server file  : /usr/local/lib/python3.12/site-packages/causalab_mini/engine/provenance.py
+client file  : /home/localjadenfk/wd/causalab-mini/causalab_mini/engine/provenance.py</code></pre>
+
+          <p>Two paths, one digest. That is the claim the record's
+          <code>causalab_mini</code> field makes, checked end to end rather than
+          assumed: the server ran its own installed copy and it is byte-identical
+          to the client's.</p>
+
+          <!-- ran 2026-09-23 against the local NDIF: entity_patch and
+               chat_turn, each local and remote, results compared leaf by leaf -->
           <p>Ragged results come home too, not just tensors. An anchored document's
           <code>positions</code> record — each row's window, its decoded tokens and
           its reason code — and the per-row <code>eligible</code> mask are nested
@@ -430,6 +458,14 @@ $ diff out/sweep-local/run.json out/sweep-ndif/run.json
           nothing reordered. <code>documents/v2/entity_patch.json</code>, whose
           position is <code>{"index": -1, "scope": {"variable": "entity"}}</code>,
           writes the same <code>positions</code> column locally and remotely.</p>
+
+          <p>So does a chat document, whose spans are the client's alone: the
+          compiler renders the conversation through the template and records
+          where each turn landed, and those travel in the plan rather than being
+          worked out on the server. <code>documents/v2/chat_turn.json</code>
+          through NDIF is the local run leaf for leaf — all 46 of them — and
+          <code>{"index": -1, "scope": {"segment": "user[1]"}}</code> comes back
+          as <code>' is'</code>, the question's own last token, on both.</p>
 
           <h3 id="timings">Timings <a class="anchor" href="#timings" aria-label="Link to this section">#</a></h3>
 
@@ -455,24 +491,45 @@ $ diff out/sweep-local/run.json out/sweep-ndif/run.json
 
           <p>A document whose write has nothing to write on some row is refused at run
           time, because whether a row's entity text is in that row's prompt is not
-          known until the prompt is tokenized. Locally that is a
-          <code>causalab_mini.plan.plan.PlanError</code>. Through NDIF:</p>
+          known until the prompt is tokenized. Locally the CLI catches it and
+          prints what it says:</p>
+
+          <!-- ran 2026-09-23 on the local box, --engine nnterp --device-map cuda -->
+          <pre><code class="language-bash">$ causalab-mini run entity_patch_absent.json --engine nnterp --device-map cuda \
+    --data-root data --out out/absent
+PlanError: write 'patch' has nothing to write on row(s) {1: 'alignment_missing'}. A read may skip a row; a write may not — writing nothing somewhere is not an intervention, and the row would score as if one had happened. `alignment_ambiguous` is a value that is in the prompt more than once, and scoping the anchor is what makes it one
+$ echo $?
+1</code></pre>
+
+          <p>Through NDIF the same refusal arrives, with the same text and the
+          same exit code, at the bottom of a 45-line double traceback:</p>
 
           <!-- ran 2026-09-23 against the local NDIF: documents/v2/entity_patch.json
-               over a four-row table whose row 1 names an entity its own prompt does
-               not contain. Trimmed to the server-side frames. -->
-          <pre><code class="language-bash">nnsight.intervention.backends.remote.RemoteError: Traceback (most recent call last):
-…
+               over a four-row table whose row 1 names an entity its own prompt
+               does not contain. The CLI's own stderr, trimmed at the two ellipses. -->
+          <pre><code class="language-bash">$ NDIF_HOST=http://localhost:8001 causalab-mini run entity_patch_absent.json \
+    --engine ndif --data-root data --out out/absent
+Traceback (most recent call last):
+  ...
+  File "causalab_mini/cli.py", line 331, in run
+    written = engine.execute(built, remote=remote, batch_size=args.batch_size).write(args.out)
+  File "causalab_mini/engine/engines/nnterp/engine.py", line 89, in execute
+    with model.session(remote=remote):
+  File "nnsight/tracing/tracer.py", line 580, in __exit__
+    raise exception.with_traceback(
+nnsight.intervention.backends.remote.RemoteError: Traceback (most recent call last):
   File "/usr/local/lib/python3.12/site-packages/ndif/services/ray/deployments/modeling/nns.py", line 183, in execute_traced_block
     tracer.execute(tracer.info.code)
-  File "/home/localjadenfk/wd/causalab-mini/causalab_mini/engine/engines/nnterp/engine.py", line 96, in execute
+  File "causalab_mini/engine/engines/nnterp/engine.py", line 96, in execute
     steps.run(engine, plan, batch_size=batch_size)
   File "/usr/local/lib/python3.12/site-packages/causalab_mini/engine/steps.py", line 76, in run
     run(engine, child, state.child() if isinstance(child, Plan) else state)
-…
-  File "/usr/local/lib/python3.12/site-packages/causalab_mini/engine/steps.py", line 478, in _writes_land
+  ...
+  File "/usr/local/lib/python3.12/site-packages/causalab_mini/engine/steps.py", line 481, in _writes_land
     raise PlanError(
-causalab_mini.plan.plan.PlanError: write 'patch' has nothing to write on row(s) {1: 'alignment_missing'}. A read may skip a row; a write may not — writing nothing somewhere is not an intervention, and the row would score as if one had happened. `alignment_ambiguous` is a value that is in the prompt more than once, and scoping the anchor is what makes it one</code></pre>
+causalab_mini.plan.plan.PlanError: write 'patch' has nothing to write on row(s) {1: 'alignment_missing'}. A read may skip a row; a write may not — writing nothing somewhere is not an intervention, and the row would score as if one had happened. `alignment_ambiguous` is a value that is in the prompt more than once, and scoping the anchor is what makes it one
+$ echo $?
+1</code></pre>
 
           <p>Three things to read off it. The message survives whole, down to the
           trailing advice, and the server's traceback comes with it. The frames say
@@ -486,14 +543,24 @@ causalab_mini.plan.plan.PlanError: write 'patch' has nothing to write on row(s) 
   api_key=local stage=running error_type=PlanError fatal=False exec_ms=21.31</code></pre>
 
           <div class="caution">
-            <span class="label">the type does not survive</span>
+            <span class="label">the type does not survive, so neither does the message</span>
+            <!-- causalab_mini/cli.py:56-66 (REFUSALS) has the nine types; the
+                 client raises nnsight.intervention.backends.remote.RemoteError,
+                 whose MRO is RemoteError -> Exception -->
             <p>The client raises <code>RemoteError</code>, whose bases are
             <code>Exception</code> and nothing else, so <code>except PlanError:</code>
             on the client does not catch a refusal that came from a server. The text
-            and the traceback are intact; the class is not. With causalab_mini
-            installed on both sides the real class is importable on the client, so
-            this is a gap rather than a limit — and the runs that most want the type
-            are exactly the ones whose refusals are decided at run time.</p>
+            and the traceback are intact; the class is not.</p>
+            <p>That is why the remote transcript above is a traceback where the
+            local one is a line. The CLI catches its own nine refusal types and
+            prints what they say — <code>RemoteError</code> is not one of them,
+            and cannot be, because it is the wrapper rather than the refusal. The
+            fix is nnsight's: the server already names the class in its own log
+            (<code>error_type=PlanError</code>), so re-raising the server's
+            exception as its real type wherever that type is importable on the
+            client would give a remote run the same one line a local one gets.
+            With causalab_mini installed on both sides, as it is here, it always
+            would be.</p>
           </div>
 
           <!-- engine/engines/hooks/engine.py:106-112 -->
