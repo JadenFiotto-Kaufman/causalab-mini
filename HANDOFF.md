@@ -103,8 +103,13 @@ These are load-bearing. Several tests enforce them.
    no `execute`: a plan that knew how to run itself would only run on one
    engine.
 5. **No trace body may reference a client object** — no executor, document,
-   tokenizer. `tests/test_structure.py` is an AST tripwire over every
-   `with ….trace(`/`.session(` block, package-wide; it has a vacuity guard.
+   dataset, or bare `tokenizer`. `tests/test_structure.py` is an AST tripwire
+   over every `with ….trace(`/`.session(` block, package-wide; it has a
+   vacuity guard. The run does use a tokenizer — resolving a position is
+   its job — and reaches it through the *model*: `model.tokenizer` is one of
+   nnsight's persistent objects, so it is written as an id and a server
+   resolves it to the served checkpoint's own tokenizer. A bare name closed
+   over would be pickled by value instead, and would be the wrong object.
 6. **`address.py` is the only file that knows anything about model
    internals**, and since FINDINGS §23 most of what it knows it asks nnterp
    for: a boundary inside the block is the *name of a nnterp accessor* plus

@@ -255,3 +255,27 @@ def test_a_row_whose_entity_is_not_in_its_prompt_refuses_the_write_by_name(
         plan.build_request(patch_raw, _holed(data_root, tmp_path / "b", drop=1), model_engine)
     )
     assert torch.equal(without.result("logit_diff"), whole.result("logit_diff")[[0, 2, 3]])
+
+
+def test_a_text_anchor_resolves_the_same_way_through_the_serialized_path(
+    patch_raw, data_root, model_engine
+):
+    """The claim the whole design rests on: the block reaches the *model's*
+    tokenizer, and a remote run has no second code path.
+
+    `remote="local"` serializes the session, hides this project's modules and
+    deserializes against the persistent objects a server would supply — which
+    is how `model.tokenizer` resolves to the served checkpoint's own. If that
+    did not hold, an anchored document would come back with different
+    positions, or with none. It comes back with the same ones, and the same
+    numbers. (A run against a real NDIF deployment is still outstanding.)
+    """
+    here = model_engine.execute(plan.build_request(patch_raw, data_root, model_engine))
+    shipped = model_engine.execute(
+        plan.build_request(patch_raw, data_root, model_engine), remote="local"
+    )
+    a, b = (one.step("score", plan.Observe).results for one in (here, shipped))
+
+    assert a["positions"] == b["positions"] and a["eligible"] == b["eligible"]
+    assert b["positions"]["patch"]["tokens"] == ("'day'", "' Friday'", "' Saturday'", "' Sunday'")
+    assert torch.equal(a["logit_diff"], b["logit_diff"])

@@ -10,7 +10,17 @@ Two properties are pinned here:
 1. a trace body loads only its own function's data: parameters, names the block
    binds, and module-level names of the file it lives in;
 2. a trace body never reaches the client side of the project — no document, no
-   dataset, no tokenizer, no `self`. The block gets the plan and the model.
+   dataset, no bare `tokenizer`, no `self`. The block gets the plan and the
+   model.
+
+The `tokenizer` name is the one that changed meaning. A block *does* resolve
+positions against a tokenizer now, and it must be **the model's**:
+`model.tokenizer` is a persistent object, which nnsight writes as an id and
+a server resolves to the served checkpoint's own. A bare local named
+`tokenizer` and closed over would be pickled by value instead — a few
+megabytes, and a *different object* from the one that will run the model.
+So the ban on the name stands, and what it forbids is reaching one any way
+but through the model.
 
 `cls` is allowed where `self` is not: an engine is a stateless class, and a
 class pickles by reference out of a registered package, where an instance
@@ -120,5 +130,6 @@ def test_a_trace_body_never_reaches_the_client_side(case):
     forbidden = _loaded(block) & (CLIENT_SIDE | {"self", "tokenizer", "document"})
     assert not forbidden, (
         f"{filename}:{function.name} loads {sorted(forbidden)} inside a trace "
-        "body — that object would ship whole"
+        "body — that object would ship whole. A tokenizer is reached through "
+        "the model, where it is a persistent object and the server's own"
     )

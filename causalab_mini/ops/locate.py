@@ -68,7 +68,12 @@ class Frame:
 
 
 def frame_of(tokenizer: Any, ids: TokenRows, mask: TokenRows) -> Frame:
-    """The frame of a padded batch the plan already carries."""
+    """The frame of a padded batch the plan already carries.
+
+    The plan's ids were produced by one tokenizer and this is another one —
+    the served checkpoint's, on a remote run — so one row is checked before
+    anything is placed. See `_same_tokenizer`.
+    """
     starts, ends, texts, offsets = [], [], [], []
     for row, flags in zip(ids, mask):
         real = [index for index, flag in enumerate(flags) if flag]
@@ -79,7 +84,33 @@ def frame_of(tokenizer: Any, ids: TokenRows, mask: TokenRows) -> Frame:
         ends.append(real[-1] + 1)
         texts.append(text)
         offsets.append(marks)
-    return Frame(tuple(starts), tuple(ends), tuple(texts), tuple(offsets))
+    frame = Frame(tuple(starts), tuple(ends), tuple(texts), tuple(offsets))
+    _same_tokenizer(tokenizer, ids, frame)
+    return frame
+
+
+def _same_tokenizer(tokenizer: Any, ids: TokenRows, frame: Frame) -> None:
+    """One row, re-encoded, against the ids the plan carries.
+
+    Where a position lands is decided here, against whatever tokenizer this
+    process has, while the ids were encoded by whatever tokenizer the client
+    had. Those are the same object on a local run and two objects on a
+    remote one, and if they ever disagree every position in the plan is
+    addressed in the wrong place — silently, because both sides produce
+    integers that are in range. Re-encoding what one row decodes to costs
+    one call and turns that into a refusal that names the disagreement.
+    """
+    if not frame.texts:
+        return
+    content = list(ids[0][frame.starts[0] : frame.ends[0]])
+    again = [int(one) for one in tokenizer.encode(frame.texts[0], add_special_tokens=False)]
+    if again != content:
+        raise LocateError(
+            "the tokenizer here disagrees with the one that encoded this plan: row 0's ids "
+            f"are {content}, they decode to {frame.texts[0]!r}, and encoding that again here "
+            f"gives {again}. Positions are resolved against the model's own tokenizer, so a "
+            "plan encoded by a different one would be addressed in the wrong place"
+        )
 
 
 def frame_of_texts(tokenizer: Any, texts: list[str]) -> tuple[TokenRows, TokenRows, Frame]:

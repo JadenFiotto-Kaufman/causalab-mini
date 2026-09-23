@@ -24,6 +24,18 @@ FOUR = [
 EVEN = ["If today is Friday, tomorrow is", "If today is Sunday, tomorrow is"]
 
 
+@pytest.fixture(scope="module")
+def gpt2_tokenizer():
+    """A second, unrelated tokenizer, for the one thing that needs two."""
+    from causalab_mini.engine import NNterpEngine
+    from causalab_mini.plan.spec import Model
+
+    return NNterpEngine.load(
+        Model(key="hf-internal-testing/tiny-random-gpt2", revision="main", dtype="fp32"),
+        dispatch=False,
+    ).tokenizer
+
+
 @pytest.fixture
 def frames(model):
     """Each batch as the resolver sees it: the ids a plan would carry, and
@@ -177,3 +189,13 @@ def test_an_anchor_resolves_to_a_different_index_on_different_rows(model):
     assert [locate.tokens_of(frame, one, row) for row, one in enumerate(windows)] == [
         "' one'", "' three'", "' two'", "' five'"
     ]
+
+
+def test_a_tokenizer_that_disagrees_with_the_plan_is_refused_by_name(model, gpt2_tokenizer):
+    """The failure this design could have had. The client encodes and the
+    *run* resolves, so the two sides must be the same tokenizer; when they
+    are not, every position is in range and in the wrong place. One row is
+    re-encoded before anything is placed, which turns that into a refusal."""
+    ids, mask, _frame = locate.frame_of_texts(model.tokenizer, PAIR)
+    with pytest.raises(locate.LocateError, match="disagrees with the one that encoded this plan"):
+        locate.frame_of(gpt2_tokenizer, ids, mask)
