@@ -122,18 +122,19 @@ def named(step: Step) -> set[str]:
     """Every value a step of this tree takes — a write's operand, a metric's
     or a reduction's `of` — or a save of it keeps, a fit's updates and
     held-out run included."""
-    found: set[str] = set()
     if isinstance(step, Forward):
-        found |= set(step.keep)
-        found |= {op.operand for tap in step.taps for op in tap.writes if isinstance(op.operand, str)}
-    elif isinstance(step, (Metric, Reduce)):
-        found.add(step.of)
+        return set(step.keep) | _operands(step)
+    if isinstance(step, (Metric, Reduce)):
+        return {step.of}
     inner = [*step.steps.values()] if isinstance(step, Plan) else []
     if isinstance(step, Fit):
         inner = [*(update for epoch in step.epochs for update in epoch), step.evaluation]
-    for one in inner:
-        found |= named(one)
-    return found
+    return set().union(*map(named, inner))
+
+
+def _operands(step: Forward) -> set[str]:
+    """The earlier values this call's writes take, by name."""
+    return {op.operand for tap in step.taps for op in tap.writes if isinstance(op.operand, str)}
 
 
 def run(engine: Any, step: Step, state: State, name: str = "") -> None:
@@ -198,7 +199,7 @@ def call(engine: Any, name: str, step: Forward, state: State) -> None:
     dynamic = _dynamic(step)
     ready, record = located(engine, step, dynamic)
     _writes_land(ready, {**state.records, **record})
-    operands = {op.operand for tap in step.taps for op in tap.writes if isinstance(op.operand, str)}
+    operands = _operands(step)
     model_call = engine.generate if isinstance(step, Generate) else engine.forward
     rows = len(step.input_ids)
     size = state.batch_size or rows
