@@ -152,7 +152,7 @@ def test_the_interior_is_refused_by_name(hooks_engine):
     """`attention_query` is one argument of one call inside a forward. A hook
     fires at the boundary, so this engine says so instead of reaching for
     something nearby."""
-    with pytest.raises(AddressError, match="interior"):
+    with pytest.raises(AddressError, match="the nnterp engine reaches it"):
         hooks_engine.locate("attention_query", 0)
 
 

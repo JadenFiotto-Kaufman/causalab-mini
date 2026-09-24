@@ -32,8 +32,10 @@ from causalab_mini.plan import document
 REPO = pathlib.Path(__file__).resolve().parents[1]
 GPT2 = REPO / "documents" / "gpt2_cpu.json"
 
-#: Every module boundary. The interiors are covered by `test_interior.py`.
-BOUNDARIES = [name for name, entry in _COMPONENTS.items() if entry.op is None]
+#: The four places inside the attention's call into its implementation,
+#: covered by `test_interior.py` and below; every other component here.
+CALL = ("attention_query", "attention_key", "attention_scores", "attention_z")
+BOUNDARIES = [name for name in _COMPONENTS if name not in CALL]
 LAYERED = [name for name in BOUNDARIES if _COMPONENTS[name].per_layer]
 
 
@@ -92,10 +94,12 @@ def _at(raw, component, layer):
 def test_one_address_serves_both_families(component, eager_engine, eager_gpt2_engine):
     """FINDINGS §1.11, extended from three components to eleven: the address
     is *equal* on tiny Llama and tiny GPT-2, whose module trees share no path,
-    because nnterp absorbs the family axis and the interior's operation is
-    resolved per checkpoint rather than tabulated."""
+    because nnterp absorbs the family axis: the accessor, the side and
+    whether it is inside a forward are the same, and only the module path
+    each checkpoint spells differs."""
     layer = 0 if _COMPONENTS[component].per_layer else None
-    assert eager_engine.locate(component, layer).where == eager_gpt2_engine.locate(component, layer).where
+    one, other = eager_engine.locate(component, layer), eager_gpt2_engine.locate(component, layer)
+    assert (one.accessor, one.layer, one.io, one.inside) == (other.accessor, other.layer, other.io, other.inside)
 
 
 #: What each standardized name resolves to in a raw HuggingFace tree. This is
@@ -162,8 +166,7 @@ def test_the_hooks_engine_translates_every_name_to_the_right_raw_module(family, 
 def test_the_addresses_sort_into_forward_order(eager_engine):
     """The sort key is what keeps a read at the head from being issued before
     a read at layer 0 — nnsight refuses that outright. It is nnterp's
-    `internals.rank`, stamped by `locate`, with mini's own numbering only for
-    the interiors it addresses and nnterp does not."""
+    `internals.rank`, stamped by `locate`, for every place."""
     model_engine = eager_engine  # eager, so the pattern is among them
     layered = [model_engine.locate(name, 0) for name in LAYERED]
     order = [one.component for one in sorted(layered, key=lambda one: one.key)]
@@ -243,9 +246,8 @@ def test_the_residual_stream_taps_are_the_tensors_they_claim(model_engine):
 
 
 def test_the_attention_interior_taps_are_head_shaped(model_engine):
-    """`attention_key` is the second argument of the same call the query is
-    the first of, and `attention_z` is that call's return — the one tap whose
-    handle is an output rather than an argument."""
+    """`attention_key` is the argument after the query in the same call,
+    and `attention_z` is that call's result."""
     model = model_engine.model
     batch = {
         "input_ids": torch.tensor([[1, 2, 3, 4]]),

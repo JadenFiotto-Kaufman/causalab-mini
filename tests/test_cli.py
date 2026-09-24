@@ -45,7 +45,7 @@ def test_vocab_is_the_tables_not_a_description_of_them(capsys):
     assert set(out["components"]) == set(address.describe())
     assert out["mechanisms"] == sorted(intervene.MECHANISMS)
     assert out["metric_kinds"]["logit_diff"] == ["a", "b"]
-    assert out["components"]["attention_query"]["interior"] is True
+    assert out["components"]["attention_query"]["accessor"] == "attention_queries"
     assert out["components"]["block_output"]["width"] == "hidden_size"
 
 
@@ -56,12 +56,12 @@ def test_model_answers_without_weights(capsys):
     # one band per run of layers that answer alike, so a model whose layers
     # are all the same says so in one entry
     assert out["components"]["block_output"] == [
-        {"layers": "0-1", "resolves": True, "width": 16, "op": None}
+        {"layers": "0-1", "resolves": True, "width": 16, "inside": False}
     ]
     assert out["components"]["lm_head"] == [
-        {"layers": None, "resolves": True, "width": 32000, "op": None}
+        {"layers": None, "resolves": True, "width": 32000, "inside": False}
     ]
-    assert out["components"]["attention_query"][0]["op"] == "attention_interface_1"
+    assert out["components"]["attention_query"][0]["inside"] is True
 
 
 def test_model_takes_the_model_blocks_own_fields(capsys):
@@ -79,12 +79,12 @@ def test_model_takes_the_model_blocks_own_fields(capsys):
 
 
 def test_model_reports_what_an_engine_refuses(capsys):
-    """The hooks engine cannot reach an interior, and `model --engine hooks`
+    """The hooks engine cannot reach inside a forward, and `model --engine hooks`
     says so per component rather than failing whole."""
     out = _json(capsys, ["model", TINY, "--revision", REVISION, "--engine", "hooks"])
     assert out["components"]["block_output"][0]["resolves"] is True
     assert out["components"]["attention_query"][0]["resolves"] is False
-    assert "interior" in out["components"]["attention_query"][0]["why"]
+    assert "inside a module's forward" in out["components"]["attention_query"][0]["why"]
     assert out["components"]["logits"][0]["resolves"] is True, "it reaches this one now"
 
 

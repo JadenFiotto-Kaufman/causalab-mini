@@ -1,8 +1,8 @@
-"""`attention_query`: the one address that is not a module boundary.
+"""`attention_query`: an address that is not a module boundary.
 
 The query tensor as the attention implementation receives it — after the
 projection, after the head reshape, after RoPE — reached inside the attention
-module's forward through nnsight's `.source`.
+module's forward through nnsight's `.source`, by nnterp's `attention_queries`.
 """
 
 import copy
@@ -15,8 +15,7 @@ import torch
 from conftest import of_kind
 
 from causalab_mini import ops, plan
-from causalab_mini.address import Address, AddressError
-from causalab_mini.engine.engines.nnterp.engine import find_op
+from causalab_mini.address import Address
 from causalab_mini.plan import document
 from causalab_mini.engine import NNterpEngine, steps
 from causalab_mini.engine.engines.nnterp import engine as nnterp
@@ -55,43 +54,32 @@ def _identity_write(raw):
 # --------------------------------------------------------------------- #
 
 
-def test_the_interior_is_addressed_by_the_interface_call(model_engine):
+def test_the_interior_is_nnterps_row_for_the_interface_call(model_engine, model):
+    """The address is the accessor and the layer; where that is — the
+    attention's call into its implementation, positional argument 1 of the
+    `(args, kwargs)` it is called with — is nnterp's row, one of those its
+    source-ops suite checks on every family."""
     located = model_engine.locate("attention_query", 0)
 
-    assert located.path == "attentions.0"
-    assert located.op == "attention_interface_1"
+    assert located.accessor == "attention_queries"
+    assert (located.path, located.io, located.inside) == ("layers.0.self_attn", "inputs", True)
     assert located.seq_axis == 2
     # It is still pure data, and it is still what the document said.
-    assert located == Address("attention_query", 0, "attention_interface_1", rank=(0, 11))
+    assert located == Address("attention_query", 0, module="self_attn", io="inputs", rank=(0, 13), inside=True)
+    row = model.internals["attention_queries"].address
+    assert row.op == ("attention_interface_1",) and row.select.steps == (0, 1)
 
 
-def test_a_binding_and_a_call_share_one_namespace_so_the_name_alone_is_ambiguous(model):
-    """The reason the needle is call-shaped. nnsight's occurrence suffix counts
-    assignments and calls together, so this forward has both
-    `attention_interface_0` (the assignment that looks the implementation up)
-    and `attention_interface_1` (the call that runs it)."""
-    source = model.attentions[0].source
-    assert {"attention_interface_0", "attention_interface_1"} <= set(source.names)
-
-    with pytest.raises(AddressError, match="serves exactly one") as refusal:
-        find_op(source, "attention_interface")
-    # Three, in fact: the lookup call, the name it binds, and the call itself.
-    assert "matches 3 operations" in str(refusal.value)
-
-
-def test_a_needle_that_matches_nothing_prints_the_inventory_it_saw(model):
-    with pytest.raises(AddressError, match="attention_probs") as refusal:
-        find_op(model.attentions[0].source, "attention_probs(")
-    assert "matches 0 operations" in str(refusal.value)
-    assert "self_q_proj_0" in str(refusal.value)  # the inventory is printed
-
-
-def test_an_interior_address_built_without_a_model_refuses_rather_than_guesses(model):
-    with pytest.raises(AddressError, match="engine.locate"):
-        with model.trace(
-            {"input_ids": torch.tensor([[1, 2, 3]]), "attention_mask": torch.tensor([[1, 1, 1]])}
-        ):
-            nnterp.read(model, Address("attention_query", 0))
+def test_an_address_is_only_the_accessor_and_the_layer(model):
+    """Reading needs nothing `locate` resolved: the accessor knows the rest,
+    so a hand-built address reads the tensor the accessor does."""
+    tokens = {"input_ids": torch.tensor([[1, 2, 3]]), "attention_mask": torch.tensor([[1, 1, 1]])}
+    with torch.no_grad(), model.trace(tokens):
+        got = nnsight.save({})
+        got["address"] = nnterp.read(model, Address("attention_query", 0)).clone()
+    with torch.no_grad(), model.trace(tokens):
+        got["accessor"] = model.attention_queries[0].clone()
+    assert torch.equal(got["address"], got["accessor"])
 
 
 # --------------------------------------------------------------------- #

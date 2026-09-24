@@ -68,8 +68,8 @@ class Engine:
         `key`, `revision` and `dtype`, and an engine needs nothing else.
         `options` are the runtime's own and pass straight through: for nnsight
         that includes `dispatch=False`, a meta-device shell that answers
-        everything the compiler asks — tokenizer, layer count, widths, an
-        interior's `.source` — in well under a second, and that is *also* how
+        everything the compiler asks — tokenizer, layer count, widths, where
+        each place is — in well under a second, and that is *also* how
         a model is loaded to run on NDIF, where the weights are the server's.
         Whether such a shell can run is not the engine's question; the caller
         decided that when it chose how to load and where to execute.
@@ -91,10 +91,10 @@ class Engine:
     def locate(self, component: str, layer: int | None = None) -> Address:
         """The address of `(component, layer)` on this model.
 
-        A module boundary is just the pair. An interior also needs the
-        operation inside the forward resolved, and how that is done is the
-        runtime's business — which is why this is asked of the engine and not
-        of the address.
+        The pair, plus what the checkpoint says about it — which module,
+        which side, where in the forward pass — and a refusal for a place
+        this runtime cannot reach, which is the runtime's business: why this
+        is asked of the engine and not of the address.
         """
         raise NotImplementedError
 

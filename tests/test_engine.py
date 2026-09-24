@@ -157,9 +157,10 @@ def test_a_meta_shell_compiles_the_same_plan(engine_class, minimal_raw, data_roo
 
 
 def test_a_meta_shell_still_locates_an_interior(minimal_raw):
-    """`.source` is the forward's *code*; it exists on the meta device."""
+    """Where the query is, is nnterp's row — no weight is needed to say so."""
     shell = NNterpEngine.load(document.Document.from_json(minimal_raw).model, dispatch=False)
-    assert shell.locate("attention_query", 0).op == "attention_interface_1"
+    located = shell.locate("attention_query", 0)
+    assert (located.accessor, located.inside, located.rank) == ("attention_queries", True, (0, 13))
 
 
 def test_a_hooks_shell_refuses_to_run_because_it_has_nowhere_to(minimal_raw, data_root):

@@ -125,13 +125,16 @@ These are load-bearing. Several tests enforce them.
    child, side and rank into the `Address` and checks `per_layer` against
    nnterp's answer, so the two cannot drift. The table is a floor and not a
    fence: a name only `model.internals` has is addressable, because
-   `RenameConfig(addresses={...})` is how a user adds a place. Four
-   interiors (`attention_query/key/scores/z`) are still mini's rows, and so
-   is their rank, interleaved into nnterp's numbering. What is left that is
-   purely mini's: the per-head kind, the key axis, the seq axis, the width
-   *attribute name*, and read-only. Reaching there is the engine's
-   (`engine/engines/nnterp/engine.py`'s `read`/`write`). `ops/` knows
-   nothing about models at all.
+   `RenameConfig(addresses={...})` is how a user adds a place, or moves one
+   nnterp has wrong for their model. The four places inside the attention
+   (`attention_query/key/scores/z`) are nnterp rows too —
+   `attention_queries`, `attention_keys`, `attention_scores`,
+   `attention_head_outputs`, hard-coded `.source` ops checked on 26 families
+   by nnterp's `test_source_ops.py` — so an address is an accessor and a
+   layer and nothing else, and the engine's `read`/`write` are
+   `model.internals[name][layer]`. What is left that is purely mini's: the
+   per-head kind, the key axis, the seq axis, the width *attribute name*,
+   and read-only. `ops/` knows nothing about models at all.
 7. **An engine is nine members and no more**: `load`, then `tokenizer`,
    `num_layers`, `locate`, `width` and `heads` — what the compiler asks of a
    runtime — then `execute`, `forward` and `generate`, what the run asks.
@@ -324,10 +327,9 @@ Full detail in `FINDINGS.md`; these are the ones that reach past mini.
   models, 0.38 on a padded GPT-2 row. FINDINGS §6.
 - **No family axis was needed.** `Address.locate` returns *equal* addresses on
   tiny Llama and tiny GPT-2 for all three components, including the interior,
-  though the trees share no module path. nnterp absorbs the family axis for
-  module boundaries, and the interior's op is resolved per model at load time
-  rather than tabulated. The real engine carries a family-keyed table; this
-  suggests it may not need one.
+  though the trees share no module path. nnterp absorbs the family axis, the
+  interiors included: one hard-coded op serves every family that calls
+  transformers' attention interface, and a family that does not says so.
 - **Binding-suffix addressing is a real trap, and mini measured it — but the
   claim about causalab was overstated and is corrected here.** On GPT-2,
   `query_states_0` is the cross-attention query on a branch that never runs
@@ -339,7 +341,8 @@ Full detail in `FINDINGS.md`; these are the ones that reach past mini.
   causalab's `sources.py` addresses scores and probabilities this way and
   that it works by luck. It does not. Its documented rule is a substring
   match with refusal on ambiguity and a preference for the hit whose own
-  source line *calls* the symbol — the same fix `find_op` uses — and it says
+  source line *calls* the symbol — the fix mini's `find_op` used before the
+  interiors became nnterp rows — and it says
   "NEVER a hardcoded `_n` suffix for a symbol that appears once". A suffix is
   spelled only where two *live* ops share a symbol. Checked against
   transformers 5.17: llama and gpt2 bind `attn_weights` in the same order, so

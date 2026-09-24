@@ -23,8 +23,8 @@ def load(spec: Any, **options: Any) -> StandardizedTransformer:
     else is nnterp's and passes through — `device_map`, and `dispatch=False`
     for a meta-device shell: the module tree, the config and the tokenizer,
     nothing downloaded but those. Everything the compiler asks is answered
-    from it, including an interior's `.source`, which is the forward's
-    *code*. The same shell is what runs on NDIF.
+    from it, where every place is included. The same shell is what runs on
+    NDIF.
     """
     if options.get("dispatch") is False:
         options.setdefault("device_map", None)

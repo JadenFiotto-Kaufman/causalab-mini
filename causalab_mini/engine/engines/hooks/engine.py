@@ -6,9 +6,10 @@ engine beside it. No session, no envoys, no tracing, no remote: one
 hook does the reading and the writing on the way out.
 
 What it costs to not be standardized is `loading.standardized`, and what it
-costs to not be nnsight is the interior: a forward hook sees a module's
-boundary and nothing between, so `attention_query` is refused by name rather
-than approximated. Everything else — the walk over steps, the fit loop, the
+costs to not be nnsight is the inside of a forward: a hook sees a module's
+boundary and nothing between, so `attention_query` — an operation inside the
+attention's forward — is refused by name at compile time rather than
+approximated. Everything else — the walk over steps, the fit loop, the
 metrics, the write algebra — is the shared code in `engine/steps.py` and
 `ops/`, unchanged, which is the claim this engine was written to test.
 """
@@ -66,24 +67,26 @@ class HooksEngine(Engine):
     def locate(self, component: str, layer: int | None = None) -> Address:
         """The address of `(component, layer)`, or a refusal.
 
-        A hook fires at a module boundary, so an interior is not reachable at
-        all: nnsight recompiles the forward (`.source`) and hooks have no
-        equivalent. The two ways to build one would both be a different
-        engine — patch the module's `forward` to expose the tensor, or hook
-        the `q_proj` submodule and reimplement here the reshape and the rotary
-        embedding that the address says have already happened by the time the
-        query is the query.
+        The same nnterp row the other engine reads — module path, side, and
+        where in the value the tensor is — so what a hook reaches is what an
+        accessor reaches. A row that names an operation inside a module's
+        forward is the exception, and it is refused here, at compile time: a
+        hook fires at a module boundary, and nnsight reaches inside by
+        recompiling the forward (`.source`), which hooks have no equivalent
+        of. Building one would be a different engine — patch the module's
+        `forward` to expose the tensor, or hook `q_proj` and reimplement the
+        reshape and the rotary embedding the query has had by the time it is
+        the query.
         """
-        # The child's spelling is a fact about the checkpoint that nnterp
-        # knows; this engine has no nnterp handle, so it asks the shell.
+        # The row is a fact about the checkpoint that nnterp knows; this
+        # engine's model is not an nnterp one, so it asks the shell.
         address = address_module.locate(self._shell, component, layer)
-        if address.interior:
+        if address.inside:
             raise AddressError(
-                f"component {component!r} is an interior — one argument of one call "
-                "inside a module's forward — and a forward hook only sees the "
-                "module's boundary. It is addressed through nnsight's `.source`, "
-                "which has no hooks equivalent; run this document on the nnterp "
-                "engine."
+                f"component {component!r} is an operation inside a module's forward — "
+                "one argument or result of one call — and a forward hook only sees the "
+                "module's boundary. nnsight reaches it through `.source`, which has no "
+                "hooks equivalent; the nnterp engine reaches it."
             )
         return address
 
@@ -178,7 +181,7 @@ def _install(
 ) -> Any:
     """Hook one address, on the side it is addressed on."""
     module = resolve(tap.address, names)
-    if tap.address.side == "output":
+    if tap.address.io == "output":
         return module.register_forward_hook(intervene_at(tap, values, featurizers, names, clock))
     return module.register_forward_pre_hook(
         intervene_before(tap, values, featurizers, names, clock), with_kwargs=True
@@ -322,6 +325,4 @@ def selection(address: Address, names: Any) -> Any:
     the same weightless shell this engine asks for a module's spelling and
     for every width — so there is no second table here and no third spelling
     of "the first element of a tuple"."""
-    if address.accessor is None:
-        return None
     return names.shell.internals[address.accessor].address.select

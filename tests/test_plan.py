@@ -90,14 +90,14 @@ def test_the_schedule_is_two_forwards_counterfactual_then_base(minimal_plan):
     assert [f.input for f in of_kind(minimal_plan, plan.Forward)] == ["counterfactual", "base"]
 
     original, patched = of_kind(minimal_plan, plan.Forward)
-    assert [(tap.address.path, tap.address.side) for tap in original.taps] == [
+    assert [(tap.address.path, tap.address.io) for tap in original.taps] == [
         ("layers.0", "output")
     ]
     assert [read.name for read in original.taps[0].reads] == ["v_cf"]
     assert original.taps[0].writes == ()
 
     # forward order: the write at layer 0 goes above the read at the head.
-    assert [(tap.address.path, tap.address.side) for tap in patched.taps] == [
+    assert [(tap.address.path, tap.address.io) for tap in patched.taps] == [
         ("layers.0", "output"),
         ("lm_head", "output"),
     ]

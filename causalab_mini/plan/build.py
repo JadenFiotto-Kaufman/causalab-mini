@@ -546,9 +546,9 @@ def build(document: Document, data_root: str | Path, engine: Any) -> Plan:
                 f"site {name!r}: layer {site.layer} is outside the model's "
                 f"{engine.num_layers} layers"
             )
-    # One address per site, resolved by the engine now: an interior's
-    # operation is named by the loaded checkpoint's forward, so a document
-    # that cannot be addressed is a load error here, on the client.
+    # One address per site, resolved by the engine now: where a place is,
+    # and whether it is there at all, are facts of the loaded checkpoint, so
+    # a document that cannot be addressed is a load error here, on the client.
     addresses = {
         name: engine.locate(site.component, site.layer)
         for name, site in document.sites.items()

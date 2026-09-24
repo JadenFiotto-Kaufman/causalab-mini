@@ -154,10 +154,7 @@ def vocab(args: argparse.Namespace) -> dict[str, Any]:
     lines = [f"step kinds:       {', '.join(payload['step_kinds'])}; a reduce is {' or '.join(payload['reductions'])}"]
     lines.append("components:")
     for name, entry in payload["components"].items():
-        kind = "interior" if entry["interior"] else (
-            f"nnterp {entry['accessor']}" if entry["accessor"] else f"{entry['side']} of {entry['path']}"
-        )
-        lines.append(f"  {name:22s} {kind}{'  (read-only)' if entry['read_only'] else ''}"
+        lines.append(f"  {name:22s} nnterp {entry['accessor']}{'  (read-only)' if entry['read_only'] else ''}"
                      f"{'  [heads]' if entry['heads'] else ''}"
                      f"{'  needs ' + entry['needs'] + ' attention' if entry['needs'] else ''}")
     lines.append(f"mechanisms:       {', '.join(payload['mechanisms'])}")
@@ -218,7 +215,7 @@ def model(args: argparse.Namespace) -> dict[str, Any]:
             at = "" if band["layers"] is None or len(bands) == 1 else f"layers {band['layers']}  "
             if band["resolves"]:
                 width = f"width={band['width']}" if band["width"] is not None else "no width (no featurizer here)"
-                said = f"ok   {at}{width}" + (f"  op={band['op']}" if band["op"] else "")
+                said = f"ok   {at}{width}" + ("  inside a forward" if band["inside"] else "")
             else:
                 said = f"--   {at}{band['why']}"
             lines.append(f"  {name if index == 0 else '':18s} {said}")
@@ -246,7 +243,7 @@ def _resolves(engine: Any, name: str, layer: int | None) -> dict[str, Any]:
         width: Any = engine.width(located)
     except REFUSALS:
         width = None
-    return {"resolves": True, "width": width, "op": located.op}
+    return {"resolves": True, "width": width, "inside": located.inside}
 
 
 def _choices(field: str) -> tuple[str, ...]:

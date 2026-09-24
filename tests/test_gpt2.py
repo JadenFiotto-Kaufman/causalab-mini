@@ -78,10 +78,11 @@ def _identity_write(raw):
 
 
 def test_one_address_serves_both_families(model_engine, gpt2_engine, model, gpt2):
-    """The same `Address` — the same component, layer and resolved operation —
-    reaches both models, although the modules it lands on share no path."""
+    """The same accessor, layer and side reach both models, although the
+    modules they land on share no path."""
     for component, layer in (("block_output", 0), ("lm_head", None), ("attention_query", 0)):
-        assert model_engine.locate(component, layer).where == gpt2_engine.locate(component, layer).where
+        one, other = model_engine.locate(component, layer), gpt2_engine.locate(component, layer)
+        assert (one.accessor, one.layer, one.io, one.inside) == (other.accessor, other.layer, other.io, other.inside)
 
     # What nnterp is absorbing on our behalf, spelled out: these are the real
     # paths, and nothing in the project mentions either of them.
@@ -96,9 +97,10 @@ def test_the_interior_operation_is_the_same_call_on_both_families(model_engine, 
     forwards' dispatch identically — not by luck of an occurrence count: on
     GPT-2 the call sits in an `else` branch, under two more assignments and a
     second candidate implementation, and the suffix still lands on 1 because a
-    call-op suffix counts calls of one symbol."""
-    assert gpt2_engine.locate("attention_query", 0).op == "attention_interface_1"
-    assert model_engine.locate("attention_query", 0).op == "attention_interface_1"
+    call-op suffix counts calls of one symbol. nnterp's one row serves both."""
+    for one in (model, gpt2):
+        assert "attention_interface_1" in set(one.attentions[0].source.names)
+        assert one.internals["attention_queries"].address.op == ("attention_interface_1",)
     gpt2_ops = set(gpt2.attentions[0].source.names)
     assert "self__upcast_and_reordered_attn_0" in gpt2_ops  # the branch Llama has not
     assert "self__upcast_and_reordered_attn_0" not in set(model.attentions[0].source.names)
