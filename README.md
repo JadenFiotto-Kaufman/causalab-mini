@@ -50,4 +50,12 @@ or — as `--engine ndif` — on NDIF with no local weights. `--engine hooks` is
 plain torch and forward hooks: a measurement fixture that agrees with the
 first to the bit on single writes and refuses what a hook cannot reach.
 
+**`--engine ndif` runs by reference.** Nothing of `causalab_mini` or `nnterp`
+travels with a request: the block's module references and the plan's classes
+resolve by import on the server, which therefore has to have both packages
+installed at the client's versions. A stock ndif.us cannot run a mini document
+until they are installed there — the failure is a `ModuleNotFoundError` on the
+server, not a silent divergence. Set `NDIF_HOST` (and `NDIF_API_KEY` where the
+server has auth on) and the run is one job.
+
 Tests: `CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`. Types: `uvx pyright`.

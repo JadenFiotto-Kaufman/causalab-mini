@@ -89,13 +89,13 @@
           token of <em>this row's</em> entity, whatever text that is and however many
           tokens it takes.</p>
 
-          <!-- causalab_mini/ops/locate.py:1-26 — AGNOSTIC: stdlib, torch and shapes.py only, "which is what lets it run where the model is" -->
-          <!-- FINDINGS.md §24, §24.1 — the block reaches the served checkpoint's own tokenizer, measured through nnsight's persistent objects -->
+          <!-- causalab_mini/ops/locate.py:1-27 — AGNOSTIC: stdlib, torch and shapes.py only, "which is what lets it run where the model is" -->
+          <!-- FINDINGS.md §25, §25.1 — the block reaches the served checkpoint's own tokenizer, measured through nnsight's persistent objects -->
           <p>Resolution happens inside the session, where the model is, against the
           <em>model's</em> tokenizer — not on the client. On a remote run that is the
           served checkpoint's own tokenizer, reached through nnsight's persistent
           objects, so no tokenizer bytes travel and a document runs against a model
-          whose tokenizer the client never loads (FINDINGS §24.1). The resolver,
+          whose tokenizer the client never loads (FINDINGS §25.1). The resolver,
           <code>causalab_mini/ops/locate.py</code>, imports nothing but the standard
           library, <code>torch</code> and <code>shapes.py</code> for exactly that
           reason.</p>
@@ -160,7 +160,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
             </tbody>
           </table>
 
-          <!-- causalab_mini/ops/locate.py:10-19 — "A position is three independent questions and one function answers them" -->
+          <!-- causalab_mini/ops/locate.py:11-20 — "A position is three independent questions and one function answers them" -->
           <p>They are independent: any cut of any scope in either frame. The resolver
           answers them in that order — find the run, cut it, check the cut is inside
           it — and a position with no scope is those same three steps with the run
@@ -170,7 +170,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
 
           <h3 id="the-cut">The cut <a class="anchor" href="#the-cut" aria-label="Link to this section">#</a></h3>
 
-          <!-- causalab_mini/ops/locate.py:269-286 (_cut); causalab_mini/shapes.py:130-144 (width) -->
+          <!-- causalab_mini/ops/locate.py:270-287 (_cut); causalab_mini/shapes.py:130-144 (width) -->
           <table>
             <thead><tr><th>cut</th><th>means</th><th><code>width</code></th></tr></thead>
             <tbody>
@@ -187,7 +187,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
           a decode step is <code>{"frame": "generated", "index": k}</code>, in the same
           vocabulary as everything else.</p>
 
-          <!-- causalab_mini/ops/locate.py:271-285 — negatives are resolved against len(run) -->
+          <!-- causalab_mini/ops/locate.py:272-286 — negatives are resolved against len(run) -->
           <p>Negatives count from the end of the <em>run</em>, not of the row. Inside a
           scope, <code>{"index": -1}</code> is the anchor's last token; with no scope it
           is the prompt's. A span may mix signs, and then its width is not knowable
@@ -309,7 +309,7 @@ weekdays/train: 4 rows
 
           <h3 id="when-the-value-is-in-the-prompt-twice-or-not-at-all">When the value is in the prompt twice, or not at all <a class="anchor" href="#when-the-value-is-in-the-prompt-twice-or-not-at-all" aria-label="Link to this section">#</a></h3>
 
-          <!-- causalab_mini/ops/locate.py:36-39 (REASONS); :224, :234, :236 for the first two; :269-286 for out_of_range -->
+          <!-- causalab_mini/ops/locate.py:37-40 (REASONS); :225, :235, :237 for the first two; :270-287 for out_of_range -->
           <table>
             <thead><tr><th>reason</th><th>when</th><th>what it means</th></tr></thead>
             <tbody>
@@ -319,7 +319,7 @@ weekdays/train: 4 rows
             </tbody>
           </table>
 
-          <!-- causalab_mini/ops/locate.py:248-266 (_hits) — the three spellings, and occurrences counted for one of them -->
+          <!-- causalab_mini/ops/locate.py:249-267 (_hits) — the three spellings, and occurrences counted for one of them -->
           <p>The search is in the decoded text, because decoding is what normalizes a
           sentencepiece prefix space. It tries the value, then <code>" " +
           value</code>, then the stripped value, and the first spelling that hits at
@@ -331,7 +331,7 @@ weekdays/train: 4 rows
 
           <h2 id="the-character-map-and-why-the-last-token-of-thursday-is-day">The character map, and why the last token of Thursday is <code>day</code> <a class="anchor" href="#the-character-map-and-why-the-last-token-of-thursday-is-day" aria-label="Link to this section">#</a></h2>
 
-          <!-- causalab_mini/ops/locate.py:21-25, :169-189 (_chars) — offsets[k] = len(decode(ids[:k])), parked where a prefix is not one -->
+          <!-- causalab_mini/ops/locate.py:22-26, :170-190 (_chars) — offsets[k] = len(decode(ids[:k])), parked where a prefix is not one -->
           <p>The map from characters to tokens is built from the ids, by decoding
           growing prefixes: <code>offsets[k]</code> is the character at which token
           <code>k</code> starts. It needs no fast tokenizer and no
@@ -368,7 +368,7 @@ print(locate.locate(frame, Where(index=-1, scope=Anchor(variable=&quot;e&quot;))
 {index:-1 scope:{variable:e}} ((6,), (6,)) [&quot;'day'&quot;, &quot;' Friday'&quot;] ('', '')
 (((), ()), ('alignment_ambiguous', 'alignment_ambiguous'))</code></pre>
 
-          <!-- causalab_mini/ops/locate.py:239-245 — "the tokens that OVERLAP the character span: a value starting mid-piece brings its whole piece" -->
+          <!-- causalab_mini/ops/locate.py:240-246 — "the tokens that OVERLAP the character span: a value starting mid-piece brings its whole piece" -->
           <p>A character span selects the tokens that <strong>overlap</strong> it, not
           the ones it contains, because the addressed thing is a token. The anchor
           <code>"Thursday"</code> starts at character 12 and the piece
@@ -392,7 +392,7 @@ print(locate.locate(frame, Where(index=-1, scope=Anchor(variable=&quot;e&quot;))
 
           <h2 id="position-0-and-bos">Position 0, and BOS <a class="anchor" href="#position-0-and-bos" aria-label="Link to this section">#</a></h2>
 
-          <!-- causalab_mini/ops/locate.py:70-91 (frame_of), :159-166 (_special_prefix) — asked rather than guessed -->
+          <!-- causalab_mini/ops/locate.py:71-92 (frame_of), :160-167 (_special_prefix) — asked rather than guessed -->
           <p>A row's run starts after whatever the tokenizer puts before every prompt,
           and what that is, is asked rather than guessed: whatever the tokenizer makes
           of the empty string is what it adds to everything. Llama's sentencepiece
@@ -425,14 +425,14 @@ gpt2   prefix=()    ids[:4]=(41, 70, 227, 68) starts=(0,) index 0 -&gt; (0,) 'I'
           prompt's own text and not a marker the tokenizer added
           (<code>tests/test_locate.py:287-305</code>).</p>
 
-          <!-- causalab_mini/ops/locate.py:84-87 — "Nothing addresses the prefix itself yet" -->
+          <!-- causalab_mini/ops/locate.py:85-88 — "Nothing addresses the prefix itself yet" -->
           <p>The prefix itself is not addressable. It would be a run the frame locates,
           like <code>eos</code> in the continuation — <code>{"scope": {"segment":
           "bos"}}</code> — and no document has asked.</p>
 
           <h2 id="left-padding-the-same-index-a-different-token">Left padding: the same index, a different token <a class="anchor" href="#left-padding-the-same-index-a-different-token" aria-label="Link to this section">#</a></h2>
 
-          <!-- causalab_mini/ops/locate.py:46-58 — starts/ends are "what makes resolution independent of the padding side" -->
+          <!-- causalab_mini/ops/locate.py:47-59 — starts/ends are "what makes resolution independent of the padding side" -->
           <p>Resolution works from each row's half-open content span inside the padded
           sequence, so it does not care which side the padding is on. What left padding
           does mean is that every row's last token sits at the same index, and so does
@@ -444,7 +444,7 @@ gpt2   prefix=()    ids[:4]=(41, 70, 227, 68) starts=(0,) index 0 -&gt; (0,) 'I'
           nothing here and the decoded tokens say everything (see
           <a href="#prov">Provenance</a> below for the run that produced them).</p>
 
-          <!-- FINDINGS.md §24.3 — the index only moves when the tokens AFTER the anchor differ -->
+          <!-- FINDINGS.md §25.3 — the index only moves when the tokens AFTER the anchor differ -->
           <p>The index moves when the tokens <em>after</em> the anchor differ. On
           arithmetic prompts, where <code>" Tuesday"</code> is three tokens and
           <code>" Monday"</code> one, the same spec lands at 8 on two rows and at 6 on
@@ -518,7 +518,7 @@ in the prompt more than once, and scoping the anchor is what makes it one</code>
           every row and every run, and the document already says so: it builds no
           character map and reports nothing. The map is the expensive half — O(L)
           decode calls of O(L) work per row — and only a pass that reports where it
-          acted has any use for it (<code>locate.py:84-90</code>).</p>
+          acted has any use for it (<code>locate.py:85-91</code>).</p>
 
           <!-- ran 2026-09-23, CPU, fp32, 12-core Ryzen 9 5900X; about 7 s including the model load -->
           <pre><code class="language-bash">$ uv run causalab-mini run documents/v2/entity_patch.json --out out/entity_patch
@@ -600,7 +600,7 @@ eligible {'iia': (True, True, True, True), 'logit_diff': (True, True, True, True
 
           <h2 id="the-generated-frame">The generated frame <a class="anchor" href="#the-generated-frame" aria-label="Link to this section">#</a></h2>
 
-          <!-- causalab_mini/ops/locate.py:123-137 (continuation) — the decode ran to the bound; the frame stops at the first stop token -->
+          <!-- causalab_mini/ops/locate.py:124-138 (continuation) — the decode ran to the bound; the frame stops at the first stop token -->
           <p><code>{"frame": "generated"}</code> addresses what the decode produced.
           The decode runs to its bound — mini holds EOS off so the loop is a bound and
           the batch stays rectangular — but how far a row <em>meant</em> to generate is
@@ -608,12 +608,12 @@ eligible {'iia': (True, True, True, True), 'logit_diff': (True, True, True, True
           stop token is the last one in it. A row that never stopped has the whole
           bound and no <code>eos</code> segment.</p>
 
-          <!-- causalab_mini/ops/locate.py:133-136 — the map is built from the ids the decode produced, never from re-encoding -->
+          <!-- causalab_mini/ops/locate.py:134-137 — the map is built from the ids the decode produced, never from re-encoding -->
           <p>Its character map is built from the ids the decode produced, never from
           re-encoding the finished text: a tokenizer is free to merge across a boundary
           the decode never saw.</p>
 
-          <!-- causalab_mini/plan/build.py:943-949 (_stacks); FINDINGS.md §24.4 — one ordinary read per step, stacked and cut afterwards -->
+          <!-- causalab_mini/plan/build.py:943-949 (_stacks); FINDINGS.md §25.4 — one ordinary read per step, stacked and cut afterwards -->
           <p><code>{"index": k}</code> with <code>k &gt;= 0</code> is decode step
           <code>k</code>, and the tap fires there. Every other cut of the continuation
           — the last generated token, the stop token, where the model said the answer —
@@ -639,7 +639,7 @@ eligible {'iia': (True, True, True, True), 'logit_diff': (True, True, True, True
             </tbody>
           </table>
 
-          <!-- causalab_mini/engine/steps.py:353-372 (_continuation); FINDINGS.md §24.7 — report in the frame you resolved in -->
+          <!-- causalab_mini/engine/steps.py:353-372 (_continuation); FINDINGS.md §25.7 — report in the frame you resolved in -->
           <p>Every tap in this frame is reported by the continuation and not by the
           prompt, stacked or not: the prompt frame has nothing true to say about a
           position that is a decode step. So <code>positions</code> for a
@@ -698,7 +698,7 @@ eligible {'p_answer': (True, True, False, False)}</code></pre>
 ]</code></pre>
           </figure>
 
-          <!-- FINDINGS.md §24.5 — EOS held off means no row ever stops, and that is a result -->
+          <!-- FINDINGS.md §25.5 — EOS held off means no row ever stops, and that is a result -->
           <p><code>at_stop</code> asks <code>{"scope": {"segment": "eos"}}</code> and
           every row reports <code>alignment_missing</code>. That is not the document
           being wrong: mini decodes with <code>min_new_tokens == max_new_tokens</code>
@@ -769,7 +769,7 @@ eligible {'p_answer': (True, True, False, False)}</code></pre>
             </tbody>
           </table>
 
-          <!-- FINDINGS.md §24.2 — do not check a tokenizer by re-encoding -->
+          <!-- FINDINGS.md §25.2 — do not check a tokenizer by re-encoding -->
           <p>That last check compares decoded strings rather than re-encoding, because
           <code>encode(decode(ids)) == ids</code> is not a property tokenizers have: it
           holds for ASCII on both fixtures here and fails on the first emoji. One row

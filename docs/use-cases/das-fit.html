@@ -465,7 +465,7 @@ Q = (I − A)⁻¹ (I + A) E  orthonormal by construction</code></pre>
           optimizer and its own digest. <code>d=2048</code> is printed because the
           compiler has already asked the model; the document never said it.</p>
 
-          <!-- causalab_mini/engine/engines/nnterp/engine.py:89 — one
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:91 — one
                `with model.session(...)` around steps.run over the whole plan tree -->
           <p>The fit, the score and the weights step of one point all run inside the
           <em>same session</em> as every other point — one model load, one traced

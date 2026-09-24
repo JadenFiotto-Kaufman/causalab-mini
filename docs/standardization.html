@@ -619,7 +619,7 @@ mlps_output
           pickles, sorts, prints, and travels in a plan that an engine without nnterp's
           accessors can still walk.</p>
 
-          <!-- causalab_mini/engine/engines/nnterp/engine.py:222-262 -->
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:223-263 -->
           <p>In the trace, a boundary is one line each way:</p>
 
           <pre><code class="language-python">model.internals[address.accessor][address.layer]            # read
@@ -663,7 +663,7 @@ hf-internal-testing/tiny-random-GPTNeoXForCausalLM via nnterp: 5 layers, padding
           descriptor — so the per-head slicing is mini's too, and a per-head tensor is
           handed on flat however the model holds it.</p>
 
-          <!-- causalab_mini/engine/engines/nnterp/engine.py:200-219 -->
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:201-220 -->
           <p>Mini names such an operation by its <em>call site</em>, not by its name,
           and <code>find_op</code> resolves the name against the loaded checkpoint.
           nnsight names an operation <code>{callable}_{occurrence}</code> and gives
@@ -698,7 +698,7 @@ hf-internal-testing/tiny-random-GPTNeoXForCausalLM via nnterp: 5 layers, padding
           <code>locate</code> refuses at compile time and says what to write:
           <code>"attn_implementation": "eager"</code> in the document's model block.</p>
 
-          <!-- causalab_mini/ops/locate.py:68-82 -->
+          <!-- causalab_mini/ops/locate.py:69-83 -->
           <p>Positions are mini's too, for the same reason the components are nnterp's:
           Llama's tokenizer prepends a BOS and GPT-2's prepends nothing, so without a
           content frame <code>{"index": 0}</code> is <code>&lt;s&gt;</code> on one
@@ -808,12 +808,12 @@ print(repr(model.internals["attentions_gate"]))</code></pre>
           <code>scan()</code> on the meta model, and no request is sent during
           construction.</p>
 
-          <!-- causalab_mini/engine/engines/nnterp/engine.py:82-86 -->
-          <p>Mini is on the other side of that line and says so: it calls
-          <code>nnsight.register("causalab_mini")</code> before a remote run, because
-          its own package is not installed on an NDIF server and the functions a traced
-          block calls have to ship by value. What ships is mini; what is already there
-          is nnterp. See <a href="remote.html">Remote &amp; NDIF</a>.</p>
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:22-27; FINDINGS.md §24 -->
+          <p>Mini is on the same side of that line: nothing of it ships by value
+          either, so the server needs <code>causalab_mini</code> installed at the
+          client's version as well as nnterp, and a server without it fails with a
+          <code>ModuleNotFoundError</code> rather than running a different copy.
+          See <a href="remote.html">Remote &amp; NDIF</a>.</p>
 
           <div class="seealso">
             <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>

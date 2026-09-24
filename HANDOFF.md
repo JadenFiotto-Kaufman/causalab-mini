@@ -179,8 +179,9 @@ token is a token the model produced). A bare `-1` is sugar for
   needed. `locate(frame, where, anchors)` is three steps: find the run, cut
   the run, bounds-check. An integer position is the scope-free case of those
   same three steps, which is why there is one resolver and not two. It
-  imports the standard library, `torch` and `shapes.py` and nothing else, so
-  it ships by value to a stock NDIF server.
+  imports the standard library, `torch` and `shapes.py` and nothing else;
+  on a server it resolves by reference from the installed `causalab_mini`,
+  like the rest of the package (FINDINGS §24).
 - **`engine/steps.py` calls it**, once per forward per window of rows, with
   `engine.tokenizer` — which is `model.tokenizer`, one of nnsight's
   persistent objects, so on a server it is the *served checkpoint's own*.
@@ -366,6 +367,13 @@ Full detail in `FINDINGS.md`; these are the ones that reach past mini.
   **These are shared working checkouts and can move underneath this project.**
   At handoff: nnsight is a detached HEAD at `524c33fc` (the commit of nnsight
   PR #729); nnterp is on branch `standardize-internals`.
+- **`--engine ndif` needs the server to have our code.** `causalab_mini` and
+  `nnterp` must be installed there at the client's versions; nothing of either
+  ships by value any more. That makes the two sides one codebase rather than
+  two, and it is why a stock ndif.us cannot run a mini document: it has neither
+  package. Self-hosting is the path — build the NDIF image with the three
+  checkouts (`nnsight`, `nnterp`, `causalab_mini`) installed into it, and a
+  request that names a module the server lacks fails loudly.
 - Tiny CPU models: `hf-internal-testing/tiny-random-LlamaForCausalLM` pinned to
   a commit SHA (see the documents), and a tiny GPT-2. Tiny GPT-2 cannot run the
   weekdays documents — `" Friday"` is four tokens there — hence

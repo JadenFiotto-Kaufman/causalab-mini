@@ -224,14 +224,14 @@ real	0m9.472s</code></pre>
           a meta shell: enough of the model to resolve a component to a module path, to know a
           site's width, and to tokenize.</p>
 
-          <!-- causalab_mini/engine/engines/nnterp/engine.py:89 — the one session -->
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:91 — the one session -->
           <p>The whole plan runs inside <strong>one</strong>
           <code>model.session(remote=True)</code>. A 32-point sweep is one job on the server,
           not 32 — the server log for the run above records one request, 4032 ms of execution
           inside the model actor, in a 9.5 s wall. The client's remaining time is building the
           meta shell, compiling 32 documents and tokenizing.</p>
 
-          <!-- causalab_mini/engine/engines/nnterp/engine.py:93 — what comes home is plain:
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:92 — what comes home is plain:
                strings and tensors, via nnsight.save({}) and plan_module.results_of -->
           <p>What comes home is plain: strings and tensors. The client already has the plan, so
           only what fills it in makes the trip, and the plan is filled in on arrival. That is
@@ -324,7 +324,7 @@ real	0m9.472s</code></pre>
             </tbody>
           </table>
 
-          <!-- causalab_mini/engine/engines/nnterp/engine.py:100 —
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:101 —
                home["served_dtype"] = str(model.lm_head.weight.dtype) -->
           <div class="note">
             <span class="label"><code>served_dtype</code> is the answer to a question the

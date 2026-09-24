@@ -107,20 +107,18 @@ out/entity-ndif/logit_diff.json</code></pre>
 
           <div class="note">
             <span class="label">how the blocks on this page were produced</span>
-            <!-- causalab_mini/engine/engines/nnterp/engine.py:83-86 -->
+            <!-- causalab_mini/engine/engines/nnterp/engine.py:22-27; FINDINGS.md §24 -->
             <p>The server this page talks to has causalab_mini and nnterp installed,
-            so the block imports them rather than carrying them. <code>execute</code>
-            also calls <code>nnsight.register("causalab_mini")</code> when
-            <code>remote</code> is set
-            (<code>engine/engines/nnterp/engine.py:86</code>), which ships the
-            package's source instead;
-            <a href="https://github.com/JadenFiotto-Kaufman/causalab-mini/pull/1">PR&nbsp;#1</a>
-            deletes that line, and this page describes the world without it. The
-            blocks that show <em>which copy ran</em> — the payload sizes and the
-            server-side traceback — were produced with that one call rebound to a
-            no-op from outside the checkout. Every number and every written file is
-            byte-identical the other way; only the payload size and the file paths in
-            a traceback are not.</p>
+            so the block imports them rather than carrying them: nothing of either
+            ships by value
+            (<a href="https://github.com/JadenFiotto-Kaufman/causalab-mini/pull/1">PR&nbsp;#1</a>
+            deleted the <code>nnsight.register("causalab_mini")</code> call that used
+            to ship the package's source). The blocks that show <em>which copy
+            ran</em> — the payload sizes and the server-side traceback — were
+            produced before that PR merged, with the call rebound to a no-op from
+            outside the checkout, which is the code as it is now. Every number and
+            every written file is byte-identical with the call on; only the payload
+            size and the file paths in a traceback are not.</p>
           </div>
 
           <h2 id="what-runs-where">What runs where <a class="anchor" href="#what-runs-where" aria-label="Link to this section">#</a></h2>
@@ -296,7 +294,7 @@ AttributeError: module 'causalab_mini.engine.steps' has no attribute 'a_function
             <tbody>
             <tr><td><code>entity_patch</code> — 4 rows, one swap, two metrics</td><td class="num">5,069 B</td><td class="num">998 B</td></tr>
             <tr><td><code>weekdays_layer_sweep</code> — 32 experiments x 42 rows</td><td class="num">14,471 B</td><td class="num">7,746 B</td></tr>
-            <tr><td><code>entity_patch</code>, with <code>register("causalab_mini")</code> left on</td><td class="num">69,085 B</td><td class="num">—</td></tr>
+            <tr><td><code>entity_patch</code>, with <code>register("causalab_mini")</code> put back</td><td class="num">69,085 B</td><td class="num">—</td></tr>
             </tbody>
           </table>
 
@@ -309,7 +307,7 @@ AttributeError: module 'causalab_mini.engine.steps' has no attribute 'a_function
 
           <h2 id="the-dtype-is-the-server-s">The dtype is the server's <a class="anchor" href="#the-dtype-is-the-server-s" aria-label="Link to this section">#</a></h2>
 
-          <!-- engine/engines/nnterp/engine.py:98-101 -->
+          <!-- engine/engines/nnterp/engine.py:99-102 -->
           <p>A document's <code>model.dtype</code> is a request. The deployment
           decides what it serves, and dtype is not part of the model key, so a client
           cannot ask for one and cannot see what it got from the outside. The block

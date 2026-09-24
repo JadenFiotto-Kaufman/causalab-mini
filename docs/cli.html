@@ -664,9 +664,9 @@ out/cli/das/rot.safetensors</code></pre>
               <tr><td><code>eligible</code></td><td><code>false</code> when the measurement was excluded. Two halves: the column half, decided from the data — this row had no answer to score — and, for a run that anchored a position to text, the rows it could place. The result holds one value per eligible row; an excluded row is still a row of the table, so it can never be read as a zero or silently shorten a denominator</td></tr>
               <!-- causalab_mini/engine/steps.py:141, 169-185 -->
               <tr><td><code>positions</code></td><td>the absolute token indices, in the padded batch, that this row's number was read at. <code>null</code> when the pass has no text anchor and no cut of the continuation — then the document already fixed the integers and the run has nothing to report</td></tr>
-              <!-- causalab_mini/ops/locate.py:39 (REASONS), :224-236, :267-286 -->
+              <!-- causalab_mini/ops/locate.py:40 (REASONS), :225-237, :268-287 -->
               <tr><td><code>reason</code></td><td>why <code>positions</code> is empty when it is. Three of them: <code>alignment_missing</code>, the anchor text or the segment is not in this row; <code>alignment_ambiguous</code>, it is there more than once, and scoping the anchor is what makes it one; <code>out_of_range</code>, the cut falls outside the run it cuts. <code>""</code> when the window was found</td></tr>
-              <!-- causalab_mini/plan/write.py:96, causalab_mini/ops/locate.py:290-300 (tokens_of) -->
+              <!-- causalab_mini/plan/write.py:96, causalab_mini/ops/locate.py:291-301 (tokens_of) -->
               <tr><td><code>tokens</code></td><td>what those positions say, decoded — the answer to "of what token?". <code>"'day'"</code> where the window is the last piece of <code>" Thursday"</code>. Empty for a row with no window, and for a pass that reports nothing</td></tr>
               <!-- causalab_mini/ops/metrics.py:75-81 -->
               <tr><td><code>unit</code></td><td><code>fraction</code>, <code>logit</code>, <code>nat</code> or <code>probability</code>, by metric kind</td></tr>

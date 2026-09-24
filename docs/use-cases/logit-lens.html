@@ -105,7 +105,7 @@
   "top1":     { "kind": "match", "of": "lens", "expected": "base_answer" }
 }</code></pre>
 
-          <!-- causalab_mini/engine/engines/nnterp/engine.py:182-190 — the projection,
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:183-191 — the projection,
                inside the trace: softcap(lm_head(ln_final(gathered))) -->
           <p>The read gathers the residual window and pushes it through
           <code>ln_final</code> and <code>lm_head</code> inside the trace, so what the
@@ -400,7 +400,7 @@ Value error, interventions.lens: read &#x27;lens&#x27;: a featurized read cannot
             </tbody>
           </table>
 
-          <!-- causalab_mini/ops/intervene.py:332 softcap; nnterp/engine.py:195
+          <!-- causalab_mini/ops/intervene.py:332 softcap; nnterp/engine.py:196
                softcapping(model) reads config.final_logit_softcapping -->
           <p>Gemma-2 is the family where they differ: it caps its logits with
           <code>final_logit_softcapping</code>,

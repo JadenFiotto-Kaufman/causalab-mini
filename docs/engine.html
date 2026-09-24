@@ -297,7 +297,7 @@
           see. One <code>Frame</code> is built per forward and every tap of that
           forward shares it.</p>
 
-          <!-- causalab_mini/ops/locate.py:85-90 -->
+          <!-- causalab_mini/ops/locate.py:86-91 -->
           <p>The frame's character map is the expensive half: O(L) decode calls
           of O(L) work per row, measured at 840&nbsp;ms for 64 rows of 260
           tokens. So it is built only when the pass has a position the document
@@ -474,19 +474,14 @@ out/logit_diff.json</code></pre>
           <figure class="listing">
             <figcaption><code>causalab_mini/engine/engines/nnterp/engine.py</code>
             <span class="what">— the run half, in full</span></figcaption>
-            <pre><code class="language-python">    def execute(self, plan: Plan, remote: bool | str = False, batch_size: int | None = None) -> Plan:
-        if remote:
-            # Our own package is not installed on an NDIF server, so the
-            # functions the block calls have to ship by value.
-            nnsight.register("causalab_mini")
+            <pre><code class="language-python">    def execute(self, plan: Plan, remote: bool | str = False, batch_size: int | None = None) -&gt; Plan:
         plan.provenance.update(provenance.record(self, remote, batch_size))
         engine, model = self, self.model
         with model.session(remote=remote):
-            # What comes home is plain — strings and tensors. The plan goes
-            # out by value, so a server can run it but cannot pickle one of
-            # its classes back; and the client already has the plan, so only
-            # what fills it in needs the trip. (`remote="local"` never
-            # noticed: it does not serialize the way back. FINDINGS §19.)
+            # What comes home is plain — strings and tensors. The client
+            # already has the plan, so only what fills it in needs the trip,
+            # and nothing of ours has to survive the way back. (`remote="local"`
+            # never noticed: it does not serialize the way back. FINDINGS §19.)
             home = nnsight.save({})
             steps.run(engine, plan, batch_size=batch_size)
             home.update(plan_module.results_of(plan))
@@ -498,7 +493,7 @@ out/logit_diff.json</code></pre>
         return plan</code></pre>
           </figure>
 
-          <!-- causalab_mini/engine/engines/nnterp/engine.py:83-96; causalab_mini/cli.py:34-37 -->
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:88-97; causalab_mini/cli.py:34-37 -->
           <p><strong><code>remote</code> is the only difference between running
           here and running on NDIF.</strong> There is no second code path: the
           flag is passed to that one session. What the command line changes
@@ -507,15 +502,17 @@ out/logit_diff.json</code></pre>
           <code>dispatch=False</code>, a shell with no local weights, because the
           weights are the server's.</p>
 
-          <!-- causalab_mini/engine/engines/nnterp/engine.py:8-13, 95 -->
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:8-13, 22-27, 96 -->
           <p>Results come home because the session saves a dict.
           <code>nnsight.save({})</code> hands back an object the block fills;
           locally that is the dict itself, remotely it is the copy that will be
           shipped home. What goes into it is <code>results_of(plan)</code> —
-          plain strings and tensors by step path. The plan itself cannot come
-          back: it went out by value, so a server can <em>run</em> its classes
-          but cannot pickle an instance of one home, and the client never gave
-          the plan up anyway.</p>
+          plain strings and tensors by step path. The plan itself does not come
+          back: the client never gave it up, so only what fills it in needs the
+          trip. Nothing of ours ships by value either way — the block's module
+          references and the plan's classes resolve by import on the server,
+          which is why it needs <code>causalab_mini</code> and <code>nnterp</code>
+          installed at the client's versions (FINDINGS §24).</p>
 
           <div class="note">
             <span class="label">what a traced block may name</span>
@@ -543,7 +540,7 @@ out/logit_diff.json</code></pre>
           forward touched and leaves a <code>.grad</code> the size of the model
           behind. Nothing reads it; the memory is real.</p>
 
-          <!-- causalab_mini/engine/engines/nnterp/engine.py:105-126 -->
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:106-127 -->
           <p>A forward with no <code>decode</code> is one
           <code>model.trace(...)</code>. A forward that generates is one
           <code>model.generate(...)</code> with <code>tracer.iter</code> walking
@@ -552,7 +549,7 @@ out/logit_diff.json</code></pre>
           with EOS held off so the bound holds and the loop never outruns the
           run.</p>
 
-          <!-- causalab_mini/engine/engines/nnterp/engine.py:61-70, 201-220 -->
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:67-76, 202-221 -->
           <p>An interior — one argument of one call inside a module's forward —
           is resolved at <code>locate</code> time, on the client, against the
           loaded checkpoint's <code>.source</code>. The match is on the

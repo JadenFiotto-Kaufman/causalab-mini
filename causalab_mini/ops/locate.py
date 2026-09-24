@@ -5,7 +5,8 @@ came from. It takes a tokenizer and integers and gives back integers, which is
 what lets it run **where the model is** — including inside someone else's
 process, where the tokenizer is the served checkpoint's own. For that to hold
 this file may import nothing but the standard library, `torch` and
-`shapes.py`: a stock NDIF server has our package by value and nothing else.
+`shapes.py`. On a server it resolves by reference, from the `causalab_mini`
+installed there (FINDINGS §24), and these imports are all it adds.
 
 A position is three independent questions and one function answers them:
 

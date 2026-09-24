@@ -373,7 +373,7 @@ for name in (&quot;v_cf&quot;, &quot;patch&quot;):
           <code>'day'</code> of the base's <em>Thursday</em> receives what the
           counterfactual's <em>Saturday</em> held.</p>
 
-          <!-- causalab_mini/ops/locate.py:244 — the window is the tokens that OVERLAP
+          <!-- causalab_mini/ops/locate.py:245 — the window is the tokens that OVERLAP
                the character span, so a value starting mid-piece brings its whole piece -->
           <div class="note">
             <span class="label">why the index is equal and the token is not</span>
@@ -389,8 +389,8 @@ for name in (&quot;v_cf&quot;, &quot;patch&quot;):
 
           <h2 id="a-row-whose-entity-is-not-in-its-prompt">A row whose entity is not in its prompt <a class="anchor" href="#a-row-whose-entity-is-not-in-its-prompt" aria-label="Link to this section">#</a></h2>
 
-          <!-- causalab_mini/ops/locate.py:234 no hits -> alignment_missing;
-               :236 more than one -> alignment_ambiguous; locate.py:39 the three -->
+          <!-- causalab_mini/ops/locate.py:235 no hits -> alignment_missing;
+               :237 more than one -> alignment_ambiguous; locate.py:40 the three -->
           <p>An anchor is a search in the decoded text. If the text is not there, the
           window is empty and the run says which of three reasons it was:
           <code>alignment_missing</code>, <code>alignment_ambiguous</code> — the value

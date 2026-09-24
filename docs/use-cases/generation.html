@@ -120,7 +120,7 @@
 
           <h2 id="the-decode-is-a-bound-not-a-stop">The decode is a bound, not a stop <a class="anchor" href="#the-decode-is-a-bound-not-a-stop" aria-label="Link to this section">#</a></h2>
 
-          <!-- causalab_mini/engine/engines/nnterp/engine.py:121 — min_new_tokens=decode,
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:122 — min_new_tokens=decode,
                max_new_tokens=decode, do_sample=False -->
           <p>A decoding forward is one <code>generate</code> trace with
           <code>max_new_tokens</code> and <code>min_new_tokens</code> both set to
@@ -128,7 +128,7 @@
           batch stays rectangular, which is what lets a step be a position at all: step 2 is
           step 2 on every row.</p>
 
-          <!-- causalab_mini/ops/locate.py:126 — `continuation`: the decode ran to the bound,
+          <!-- causalab_mini/ops/locate.py:127 — `continuation`: the decode ran to the bound,
                so how far a row *meant* to generate is a result -->
           <div class="note">
             <span class="label">EOS is held off</span>
@@ -139,7 +139,7 @@
             reported reason on the row rather than as an exception that ends the run.</p>
           </div>
 
-          <!-- causalab_mini/ops/locate.py:133 — the character map is built from the ids the
+          <!-- causalab_mini/ops/locate.py:134 — the character map is built from the ids the
                decode produced, never from re-encoding the finished text -->
           <p>The character map the frame uses is built from the ids the decode produced, not
           by re-encoding the text it decoded to. A tokenizer is free to merge across a
@@ -356,7 +356,7 @@ out/b-gen/index=2/generated.safetensors</code></pre>
 
           <h3 id="the-generated-ids-come-home">The generated ids come home <a class="anchor" href="#the-generated-ids-come-home" aria-label="Link to this section">#</a></h3>
 
-          <!-- causalab_mini/engine/engines/nnterp/engine.py:126 —
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:127 —
                values[f"{forward.name}.generated"] = tracer.result[:, prompt:].clone() -->
           <p>A decoding forward publishes one more value than a plain one:
           <code>&lt;model&gt;.generated</code>, the ids it produced, prompt stripped. The

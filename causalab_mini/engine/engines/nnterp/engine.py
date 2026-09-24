@@ -18,6 +18,12 @@ block loads as a whole pickled object, so a block that reads one of those
 ships it. The engine is bound to a local first and passed explicitly — it is
 the one object the block genuinely needs, and all it carries is the model,
 which ships as a reference to the loaded module either way.
+
+Nothing of ours ships by value. The block's module references — `steps`,
+`intervene`, `plan_module` — and the plan's own classes resolve by import on
+the far side, so an NDIF server has to have `causalab_mini` and `nnterp`
+installed at the client's versions. A server that does not is a
+`ModuleNotFoundError`, not a silent divergence.
 """
 
 from __future__ import annotations
@@ -80,18 +86,13 @@ class NNterpEngine(Engine):
     # ----------------------------------------------------------------- #
 
     def execute(self, plan: Plan, remote: bool | str = False, batch_size: int | None = None) -> Plan:
-        if remote:
-            # Our own package is not installed on an NDIF server, so the
-            # functions the block calls have to ship by value.
-            nnsight.register("causalab_mini")
         plan.provenance.update(provenance.record(self, remote, batch_size))
         engine, model = self, self.model
         with model.session(remote=remote):
-            # What comes home is plain — strings and tensors. The plan goes
-            # out by value, so a server can run it but cannot pickle one of
-            # its classes back; and the client already has the plan, so only
-            # what fills it in needs the trip. (`remote="local"` never
-            # noticed: it does not serialize the way back. FINDINGS §19.)
+            # What comes home is plain — strings and tensors. The client
+            # already has the plan, so only what fills it in needs the trip,
+            # and nothing of ours has to survive the way back. (`remote="local"`
+            # never noticed: it does not serialize the way back. FINDINGS §19.)
             home = nnsight.save({})
             steps.run(engine, plan, batch_size=batch_size)
             home.update(plan_module.results_of(plan))

@@ -147,7 +147,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
           where each row begins and ends. Which shape it is, is decided by the
           positions and never by the tensor.</p>
 
-          <!-- causalab_mini/engine/engines/nnterp/engine.py:175-190 -->
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:176-191 -->
           <p><code>width</code> is the site's, not the model's: a site of four heads is
           <code>4 · head_dim</code> wide and a site of four units is four wide. The
           read's featurizer is applied where the read happens, so what a later write
@@ -161,7 +161,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
 
           <h3 id="view-logits"><code>view: "logits"</code> <a class="anchor" href="#view-logits" aria-label="Link to this section">#</a></h3>
 
-          <!-- causalab_mini/engine/engines/nnterp/engine.py:180-189 -->
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:181-190 -->
           <!-- causalab_mini/ops/intervene.py:332-340 -->
           <p>With <code>view: "logits"</code> the gathered residual is pushed through
           <code>ln_final</code> and <code>lm_head</code> inside the trace, and through
@@ -337,7 +337,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
           <h3 id="one-site-several-writes">One site, several writes <a class="anchor" href="#one-site-several-writes" aria-label="Link to this section">#</a></h3>
 
           <!-- causalab_mini/plan/build.py:993-1005 -->
-          <!-- causalab_mini/engine/engines/nnterp/engine.py:157-175 -->
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:158-176 -->
           <p>Writes at one address apply <strong>in the order
           <code>models.&lt;name&gt;.writes</code> lists them</strong>, each one reading
           the value the one before it left. Before the first of them, the seam keeps the
