@@ -22,7 +22,7 @@ runs:
 A step's name is how everything after it reaches what it produced, by a
 dotted reference: `patched.logits` is the read `logits` of step `patched`,
 `iia` the metric, `fit.rot` the rotation `fit` trained, `fit.iia` the metric
-of the fit's body on its held-out pass. `steps.saves`, the one reserved key,
+of the fit's body on its held-out run. `steps.saves`, the one reserved key,
 names the references that go to disk. A step's name is unique where it is
 written and a reference says which step it means, so nothing needs a naming
 convention and no two values can collide.
@@ -491,7 +491,7 @@ class Optimizer(Node):
 
 
 class EarlyStop(Node):
-    #: A metric of the fit's body, watched on its held-out pass.
+    #: A metric of the fit's body, watched on its held-out run.
     metric: Name
     mode: Literal["max", "min"] = "max"
     patience: int = Field(gt=0)
@@ -507,7 +507,7 @@ class Anneal(Node):
 
 
 class Evaluation(Node):
-    """The held-out pass is the body again, with these datasets in place of
+    """The held-out run is the body again, with these datasets in place of
     the ones it trains on — the same experiment, so it cannot drift from the
     one it scores. A dataset mapped to itself is the train-equals-test
     ablation, and says so."""
@@ -859,7 +859,7 @@ def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, 
             for one in step.train:
                 publish(f"{name}.{one}", "trained", one, "")
             for ref, (kind, node, _) in body.items():
-                # the body's values, as its held-out pass left them
+                # the body's values, as its held-out run left them
                 publish(f"{name}.{ref}", kind, node, name)
             fits.add(name)
     return produced
@@ -1021,7 +1021,7 @@ def _operand(where: str, what: str, name: str, write: Write, visible: dict[str, 
     )
     _refuse(
         scope in (fit, ""),
-        f"{where}: {what}: operand {ref!r} is a value of {scope!r}'s held-out pass, which is saved, "
+        f"{where}: {what}: operand {ref!r} is a value of {scope!r}'s held-out run, which is saved, "
         "not written",
     )
     want, have = write.pos.width, source.pos.width  # None: ragged, known per row

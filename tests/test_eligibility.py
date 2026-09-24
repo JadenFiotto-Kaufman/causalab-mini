@@ -17,7 +17,6 @@ import torch
 from conftest import of_kind, same_numbers
 
 from causalab_mini import plan
-from causalab_mini.data import rows as rows_module
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.plan import explain
 from causalab_mini.plan.spec import Spec

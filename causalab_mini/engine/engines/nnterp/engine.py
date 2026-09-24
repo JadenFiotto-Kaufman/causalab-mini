@@ -141,7 +141,7 @@ def apply_taps(
     featurizers: dict[str, Any],
     step: int | None = None,
 ) -> None:
-    """One pass over the addresses of one forward, in forward order.
+    """One walk over the addresses of one forward, in forward order.
 
     `values` holds the operands this call's writes take, by name — each
     produced by an earlier step — and receives what it reads. A read's

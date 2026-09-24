@@ -189,9 +189,9 @@ def test_the_fit_reduces_its_own_objective(fitted):
     assert (losses[1:] < losses[:-1]).all(), losses
 
 
-def test_the_fit_records_every_pass_where_it_happened(fitted):
+def test_the_fit_records_every_update_where_it_happened(fitted):
     """A plan carries its own results, so a fit is not a black box that emits
-    two curves: every update and every eval pass is still there, on the step
+    two curves: every update and every evaluation is still there, on the step
     that scored it. The flat search deliberately stops before them — six `iia`
     in one document would make every lookup ambiguous — so they are reached by
     saying where."""
@@ -217,8 +217,8 @@ def test_the_fit_moved_the_rotation_off_its_start(fitted):
 def test_early_stopping_ends_the_fit_before_its_epoch_budget(fitted):
     """`steps.epochs` is 10 and one epoch is one update here, so a fit that ran
     to the budget would leave 10 losses. The watched metric (`iia`, mode max)
-    *falls* on every pass — the objective is `ce`, and on this model the two
-    disagree — so the first pass is the best and patience 3 ends it at 4."""
+    *falls* on every evaluation — the objective is `ce`, and on this model the
+    two disagree — so the first is the best and patience 3 ends it at 4."""
     assert len(fitted.result("train")["loss"]) == 4
     evaluated = fitted.result("train")["eval"][:, 0]
     assert (evaluated[1:] < evaluated[:-1]).all(), evaluated

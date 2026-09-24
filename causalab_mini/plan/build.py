@@ -570,7 +570,7 @@ def build(document: Document, data_root: str | Path, engine: Any) -> Plan:
     # there at all: a document with no featurizers has no `featurizers` step,
     # rather than one holding an empty tuple.
     # Each save goes on the step that produces its value: a metric on the
-    # scored pass, a fitted parameter on the step that publishes it. The
+    # metric, a fitted parameter on the fit that trained it. The
     # protocol's `save` is one flat list, so this is where the flat list
     # becomes a tree again.
     saves = [_save(entry, document, rows["base"], widths) for entry in document.saves]
@@ -928,7 +928,7 @@ def _schedule(document: Document) -> list[tuple[str, str]]:
 def _selection(pos: Where, anchors: tuple[str, ...], features: Any) -> Selection:
     """Where an op is: the spec, the per-row text it anchors to, and which
     part of the feature axis. Whether it gathers flat is decided *by the
-    form*, over every row of the pass, so a window of those rows cannot
+    form*, over every row of the step, so a window of those rows cannot
     decide differently.
 
     A continuation-frame tap never gathers flat: a decode step processes one

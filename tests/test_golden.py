@@ -2,7 +2,7 @@
 
 The corpus is the project's evidence that the library does what it says, so a
 change that moves a number in it has to be one somebody meant. This runs each
-document that the tiny CPU models can run — every plan-shaped one and every
+document that the tiny CPU models can run — every steps-first one and every
 protocol one but the 8B `das.json` — and compares each file it writes with a
 hash committed in `golden/outputs.json`.
 

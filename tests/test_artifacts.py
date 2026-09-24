@@ -46,7 +46,7 @@ def _apply_from(bundle):
 def test_a_loaded_rotation_scores_exactly_what_the_fit_scored_on_the_same_rows(
     tmp_path, data_root, model_engine
 ):
-    """The strongest check there is: the fit's own held-out pass and a later
+    """The strongest check there is: the fit's own held-out run and a later
     document loading the bundle onto the same rows are the same rotation on
     the same data, and agree to the bit."""
     fitted, bundle = _fit_into(tmp_path, data_root, model_engine)

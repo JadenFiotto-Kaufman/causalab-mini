@@ -36,9 +36,9 @@ It **imports nothing from causalab**. Only the JSON documents were copied.
 
 ## 2. State as of this handoff
 
-`master`, clean tree, pushed to GitHub (private). **568 tests passing**
+`master`, clean tree, pushed to GitHub (private). **579 tests passing**
 (`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~30 s), `uvx pyright` at 0
-errors. **8,136 lines** across 31 files in `causalab_mini/`.
+errors. **8,185 lines** across 31 files in `causalab_mini/`.
 
 The package is five sub-packages and a short spine, each named for what it is
 allowed to know:
@@ -209,16 +209,17 @@ token is a token the model produced). A bare `-1` is sugar for
   the continuation frame is given the one position its decode step
   processes, and where in the *continuation* that was is said by the code
   that has that frame. The prompt frame says nothing about it.
-- **The character map is built only for a pass that has a position the
+- **The character map is built only for a step that has a position the
   document does not already fix.** It is O(L) decode calls of O(L) work per
-  row and was built once per forward per pass; a fit whose every position is
-  a bare `-1` built 42 of them and read none.
-- **Eligibility is two halves meeting in the run.** `MetricOp.rows` is still
-  the column half, decided where the data is; the position half is what the
-  run could place; `results["eligible"]` is the intersection per metric and
-  `results["positions"]` the window, the reason and the decoded tokens per
-  op. A pass with no dynamic position and nothing out of range reports
-  neither, so an older document writes the table it always wrote.
+  row, once per forward; a fit whose every position is a bare `-1` would
+  build 42 of them and read none.
+- **Eligibility is two halves meeting in the run.** A metric step's `rows`
+  is the column half, decided where the data is; the position half is what
+  the run could place. A forward with a position the document leaves open
+  reports `results["positions"]` — the window, the reason and the decoded
+  tokens per op — and a metric of one of its reads carries its
+  `results["eligible"]`, the intersection, and that record. A step with no
+  such position reports neither.
 - **The continuation frame is cut per row at its first stop token.** A read
   whose cut only the finished text can settle (`{"index": -1}`, a scope)
   compiles to one ordinary read per decode step carrying a `stack` name, and

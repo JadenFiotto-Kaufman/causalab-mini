@@ -197,7 +197,7 @@ class Gate:
         otherwise  m = [θ > 0]      hard, so the score is of a real mask
 
     `training` is a plain attribute the fit loop sets around an update and
-    clears around its eval pass; `temperature` is `T`, which the fit anneals
+    clears around its evaluation; `temperature` is `T`, which the fit anneals
     toward zero so the soft mask the optimizer sees approaches the hard one
     the score uses. A gate nobody is fitting is always hard — including one
     loaded from a file, which is a mask and nothing else.

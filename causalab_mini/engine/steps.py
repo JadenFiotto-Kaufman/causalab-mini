@@ -233,8 +233,7 @@ def _dynamic(step: Forward) -> bool:
     cut of the continuation, because the continuation is what the decode
     turned out to produce. A step with neither resolves the same integers on
     every row and every run, and the document already says so: it needs no
-    character map and reports nothing, so a plan compiled before any of this
-    existed still writes the table it used to.
+    character map and reports nothing, and its tables say nothing of where.
     """
     return any(
         op.at.where is not None

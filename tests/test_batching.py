@@ -226,11 +226,11 @@ def test_a_read_stacked_over_the_decode_is_flat_too(data_root, model_engine):
 # --------------------------------------------------------------------- #
 
 
-def test_a_fit_still_trains_when_its_passes_are_windowed(data_root, model_engine):
+def test_a_fit_still_trains_when_its_updates_are_windowed(data_root, model_engine):
     """The loss is the mean over the concatenated rows, so the gradient is
     the whole minibatch's. (That also means windowing frees no memory inside
     an update: a fit's memory knob is its own `batch_size`. It does bound the
-    eval pass.)"""
+    evaluation.)"""
     raw = _point("das.json")
     whole = model_engine.execute(plan.build_request(raw, data_root, model_engine))
     windowed = model_engine.execute(plan.build_request(raw, data_root, model_engine), batch_size=1)

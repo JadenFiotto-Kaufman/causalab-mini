@@ -204,8 +204,9 @@ class Selection:
     take: tuple[int, ...] | None = None
     #: Gathered flat, `(total, width)`, because the windows' widths vary by
     #: row — or because a row may have none. Decided by the *form*, over
-    #: every row of the pass, and carried: a window of a ragged pass's rows
-    #: can happen to be rectangular and must still come back flat.
+    #: every row of the step, and carried: a window of a ragged read's rows,
+    #: or all of them, can happen to be one width and must still come back
+    #: flat.
     flat: bool = False
     #: The spec the positions come from. `None` only where a caller hands
     #: the tensor functions a bare `Positions`.

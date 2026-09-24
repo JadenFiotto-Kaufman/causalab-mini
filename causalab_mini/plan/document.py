@@ -122,7 +122,7 @@ def _pos(spec: Any, where: str) -> Where:
     """The only position form this slice runs: `pos: -1`, sugar for
     {"index": -1} — one token per row, counted from the end of the sequence.
 
-    The plan-shaped format (`spec.py`) is where the rest of the vocabulary
+    The steps-first format (`spec.py`) is where the rest of the vocabulary
     lives; this one carries the protocol's own documents, and every one of
     them names an index."""
     if isinstance(spec, dict) and set(spec) == {"index"}:

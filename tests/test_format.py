@@ -100,7 +100,7 @@ def test_a_save_lands_on_the_step_that_produces_its_value(das, data_root, model_
 
 
 def test_the_held_out_score_and_the_training_record_reach_disk(das, data_root, model_engine, tmp_path):
-    """The held-out score is a value of the fit's body on its held-out pass,
+    """The held-out score is a value of the fit's body on its held-out run,
     `fit.iia`; the fit itself is its training record, `fit`, one bundle."""
     das["steps"]["saves"]["fit"] = "fit.safetensors"
     executed = model_engine.execute(_compile(das, data_root, model_engine))
@@ -115,7 +115,7 @@ def test_the_held_out_score_and_the_training_record_reach_disk(das, data_root, m
     )
     assert {row["metric"] for row in held_out} == {"iia"}
     scored = [row["value"] for row in json.loads((tmp_path / "iia.json").read_text())]
-    assert scored != [row["value"] for row in held_out], "two passes, other rows, other numbers"
+    assert scored != [row["value"] for row in held_out], "two runs, other rows, other numbers"
 
     from safetensors import safe_open
 
