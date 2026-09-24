@@ -16,7 +16,7 @@ from causalab_mini import plan
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.plan.explain import explain
 from causalab_mini.plan import sweep
-from causalab_mini.plan.spec import Spec
+from causalab_mini.plan.spec_v2 import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 LENS = REPO / "documents" / "v2" / "logit_lens.json"

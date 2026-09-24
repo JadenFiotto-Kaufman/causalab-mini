@@ -22,8 +22,8 @@ from conftest import of_kind, same_numbers
 
 from causalab_mini import plan
 from causalab_mini.plan import document
-from causalab_mini.plan import spec as spec_module
-from causalab_mini.plan.spec import Spec
+from causalab_mini.plan import spec_v2 as spec_module
+from causalab_mini.plan.spec_v2 import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 V2_DAS = REPO / "documents" / "v2" / "das.json"
@@ -57,7 +57,7 @@ def test_the_documents_steps_are_the_plans_steps(das_spec_raw, data_root, model_
     in that order, with `featurizers` the one step the compiler adds because
     declaring a parameter set is what builds it."""
     spec = Spec.model_validate(das_spec_raw)
-    built = plan.build_spec(spec, data_root, model_engine)
+    built = plan.build_spec_v2(spec, data_root, model_engine)
 
     assert list(spec.steps) == ["fit", "score", "weights"]
     assert list(built.steps) == ["featurizers", "fit", "original", "patched", "iia", "ce", "weights"]
@@ -66,7 +66,7 @@ def test_the_documents_steps_are_the_plans_steps(das_spec_raw, data_root, model_
 def test_a_save_sits_on_the_step_that_produces_it(das_spec_raw, data_root, model_engine):
     """No prefixes, no search, no ambiguity rule. Two steps both produce
     `iia` and each saves its own."""
-    built = plan.build_spec(Spec.model_validate(das_spec_raw), data_root, model_engine)
+    built = plan.build_spec_v2(Spec.model_validate(das_spec_raw), data_root, model_engine)
 
     assert [s.file_path for name in ("iia", "ce") for s in built.steps[name].saves] == ["iia.json", "ce.json"]
     held_out = built.step("fit", plan.Fit).evaluation.steps["iia"].saves
@@ -78,7 +78,7 @@ def test_the_held_out_score_reaches_disk(das_spec_raw, data_root, model_engine, 
     is computed and unreachable: a save naming `iia` resolves to the scored
     pass, and the eval pass has no name of its own."""
     executed = model_engine.execute(
-        plan.build_spec(Spec.model_validate(das_spec_raw), data_root, model_engine)
+        plan.build_spec_v2(Spec.model_validate(das_spec_raw), data_root, model_engine)
     )
     written = {path.name for path in executed.write(tmp_path)}
     assert written == {
@@ -106,7 +106,7 @@ def test_both_formats_compile_to_the_same_run(das_spec_raw, das_raw, data_root, 
     so."""
     from_protocol = model_engine.execute(plan.build_request(das_raw, data_root, model_engine))
     from_spec = model_engine.execute(
-        plan.build_spec(Spec.model_validate(das_spec_raw), data_root, model_engine)
+        plan.build_spec_v2(Spec.model_validate(das_spec_raw), data_root, model_engine)
     )
 
     assert torch.equal(
@@ -121,7 +121,7 @@ def test_the_patching_document_matches_its_protocol_twin(
 ):
     from_protocol = model_engine.execute(plan.build_request(minimal_raw, data_root, model_engine))
     from_spec = model_engine.execute(
-        plan.build_spec(Spec.model_validate(patching_spec_raw), data_root, model_engine)
+        plan.build_spec_v2(Spec.model_validate(patching_spec_raw), data_root, model_engine)
     )
     for name in ("iia", "logit_diff"):
         assert torch.equal(from_protocol.result(name), from_spec.result(name)), name

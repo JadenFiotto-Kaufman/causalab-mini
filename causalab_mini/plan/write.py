@@ -67,6 +67,16 @@ def _json(path: Path, payload: object) -> Path:
 def _file(step: Step, save: SaveFile, out: Path) -> Path:
     path = out / save.file_path
     path.parent.mkdir(parents=True, exist_ok=True)
+    if save.value.endswith("/"):
+        # A prefix: every result under it, one tensor each, keyed by the
+        # rest of its name — a fit's record is `train/loss` and `train/eval`.
+        tensors = {
+            name[len(save.value) :]: one.contiguous()
+            for name, one in step.results.items()
+            if name.startswith(save.value)
+        }
+        save_file(tensors, str(path), metadata=save.identity)
+        return path
     # A save names a result of the step it sits on. No search, so no
     # ambiguity: two steps may both produce `iia` and each saves its own.
     value = step.results[save.value]

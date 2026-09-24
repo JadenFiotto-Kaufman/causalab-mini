@@ -24,7 +24,7 @@ from causalab_mini import plan
 from causalab_mini.data import rows as rows_module, tokens
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.ops import locate
-from causalab_mini.plan.spec import Spec
+from causalab_mini.plan.spec_v2 import Spec
 from causalab_mini.shapes import Anchor, Where
 
 REPO = pathlib.Path(__file__).resolve().parents[1]

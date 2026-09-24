@@ -25,7 +25,7 @@ from causalab_mini.address import AddressError
 from causalab_mini.engine import NNterpEngine
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.ops import intervene
-from causalab_mini.plan.spec import Spec
+from causalab_mini.plan.spec_v2 import Spec
 from causalab_mini.shapes import Selection
 
 REPO = pathlib.Path(__file__).resolve().parents[1]

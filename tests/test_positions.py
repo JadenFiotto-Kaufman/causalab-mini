@@ -23,7 +23,8 @@ from conftest import of_kind
 from causalab_mini import ops, plan
 from causalab_mini.engine import steps
 from causalab_mini.engine.engines.hooks import HooksEngine
-from causalab_mini.plan.spec import Position, Spec
+from causalab_mini.plan.spec import Position
+from causalab_mini.plan.spec_v2 import Spec
 from causalab_mini.shapes import Where
 
 REPO = pathlib.Path(__file__).resolve().parents[1]

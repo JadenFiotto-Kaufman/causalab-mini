@@ -34,7 +34,8 @@ from .plan import document, sweep
 from .plan.document import DocumentError
 from .plan.explain import explain
 from .plan.plan import PlanError
-from .plan.spec import METRIC_COLUMNS, Model, Spec
+from .plan.spec import METRIC_COLUMNS, Model
+from .plan.spec_v2 import Spec
 from .shapes import Where
 
 #: What `--engine` means: the class, how it is loaded to *run*, and where it
@@ -313,7 +314,7 @@ def _compile(args: argparse.Namespace, **options: Any) -> tuple[Any, Any]:
     # The model is the same at every point of a sweep — a sweep may not touch
     # it — so the first point says what to load, in either format.
     first = sweep.points(raw)[0][1]
-    model_block = Spec.model_validate(first).model if "steps" in raw else document.Document.from_json(first).model
+    model_block = Model.model_validate(first.get("model")) if "steps" in raw else document.Document.from_json(first).model
     engine = engine_class.load(model_block, **options)
     return engine, plan_module.build_request(raw, args.data_root, engine)
 

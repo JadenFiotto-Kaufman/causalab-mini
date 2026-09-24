@@ -20,7 +20,7 @@ from causalab_mini import plan
 from causalab_mini.engine import steps
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.ops import featurizer
-from causalab_mini.plan.spec import Spec
+from causalab_mini.plan.spec_v2 import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 DBM = REPO / "documents" / "v2" / "dbm.json"

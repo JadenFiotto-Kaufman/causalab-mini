@@ -22,7 +22,7 @@ Nothing in here knows how to execute anything: that is an engine's job, and a
 plan that knew would only work on one engine.
 """
 
-from .build import build, build_request, build_spec
+from .build import build, build_request, build_spec, build_spec_v2
 from .document import Document, DocumentError
 from .plan import (
     FeaturizerOp,
@@ -66,6 +66,7 @@ __all__ = [
     "build",
     "build_request",
     "build_spec",
+    "build_spec_v2",
     "children",
     "steps_of",
 ]

@@ -15,7 +15,7 @@ from conftest import same_numbers
 
 from causalab_mini import ops, plan
 from causalab_mini.engine.engines.hooks import HooksEngine
-from causalab_mini.plan.spec import Spec
+from causalab_mini.plan.spec_v2 import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 ZERO = REPO / "documents" / "v2" / "zero_ablation.json"

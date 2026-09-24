@@ -106,7 +106,7 @@ def test_the_run_record_says_what_dtype_was_served(data_root, model_engine):
 
 def test_the_real_documents_are_valid_and_compile_without_weights(data_root):
     from causalab_mini.plan import sweep
-    from causalab_mini.plan.spec import Spec
+    from causalab_mini.plan.spec_v2 import Spec
 
     found = sorted((REPO / "documents" / "real").glob("*.json"))
     assert len(found) == 5

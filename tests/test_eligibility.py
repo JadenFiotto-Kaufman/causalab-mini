@@ -20,7 +20,7 @@ from causalab_mini import plan
 from causalab_mini.data import rows as rows_module
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.plan import explain
-from causalab_mini.plan.spec import Spec
+from causalab_mini.plan.spec_v2 import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 PATCHING = REPO / "documents" / "v2" / "patching.json"

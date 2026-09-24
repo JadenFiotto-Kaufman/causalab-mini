@@ -24,7 +24,7 @@ from causalab_mini import ops, plan
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.ops import featurizer
 from causalab_mini.plan import sweep
-from causalab_mini.plan.spec import Spec
+from causalab_mini.plan.spec_v2 import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 DOCUMENT = REPO / "documents" / "v2" / "sae_feature_ablation.json"

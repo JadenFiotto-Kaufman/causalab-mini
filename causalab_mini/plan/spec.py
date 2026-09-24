@@ -1,26 +1,36 @@
-"""The authored document, shaped like the plan it compiles to.
+"""The authored document: the data, the places, and the steps that run.
 
-The protocol's own JSON (`document.py`) is a flat description of one
-experiment: sites, reads, writes, metrics and one `save` list, with the order
-of execution implied. This is the other way round — **the document is the
-tree**. Its `steps` are the plan's steps, in order, and a `save` sits on the
-step whose result it names. Nothing needs a naming convention, because two
-steps that both produce `iia` are two different places.
+A document is seven keys. Four of them are vocabulary, and nothing in them
+runs:
+
+    data           the datasets, by name — a table of rows on disk
+    sites          the places a read or a write may name
+    featurizers    the parameter sets, by name
+    interventions  bundles of reads and writes, by name
+
+`steps` is what runs, in the order written, and a step is one of five kinds:
+
+    forward    one model call over one dataset's column, with the writes of
+               the interventions it lists in force, taking its reads
+    generate   the same call, decoding: it also produces the ids it said
+    metric     a score of one read, per row
+    reduce     a mean, or a principal basis, of one read over its rows
+    fit        a body of steps, run once per minibatch with an optimizer
+               between; it produces the parameters it trained
+
+A step's name is how everything after it reaches what it produced, by a
+dotted reference: `patched.logits` is the read `logits` of step `patched`,
+`iia` the metric, `fit.rot` the rotation `fit` trained, `fit.iia` the metric
+of the fit's body on its held-out pass. `steps.saves`, the one reserved key,
+names the references that go to disk. A step's name is unique where it is
+written and a reference says which step it means, so nothing needs a naming
+convention and no two values can collide.
 
 What is *not* here, deliberately: the resolved values. A plan holds
 `pos=(10, 10)` and token ids, and this holds `pos: -1` and a column name,
-because resolving them is what a compiler does against a loaded model. So
-there are still two types, and the honest claim is that their *shapes* now
-match — not that a document is a plan.
-
-The three sections above `steps` are the vocabulary the steps share:
-
-    roles         which column of a row each input role reads
-    sites         the places a read or a write may name
-    featurizers   the parameter sets, by name
-    intervention  the experiment itself: reads, writes, models, metrics
-
-and each step says which rows it runs over and what it writes out.
+because resolving them is what a compiler does against a loaded model — so
+checks that need the rows or the model (how many rows, how wide a site)
+are the compiler's, and everything that is about the document alone is here.
 
 pydantic does two things a hand-written checker was doing badly: `extra=
 "forbid"` refuses an unknown key *anywhere* with the path to it, which is
@@ -30,11 +40,13 @@ model dump is a JSON Schema — which the protocol itself does not have.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
-from typing import Annotated, Any, Literal, Union
+import re
+from typing import Annotated, Any, Iterator, Literal, Union
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints, model_validator
 
 from .. import address
 from ..ops.metrics import COLUMNS as METRIC_COLUMNS
@@ -48,8 +60,19 @@ class Node(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+#: What a name is: it cannot hold a `.`, which is how a reference reaches
+#: into a step, or a `/`, which is a directory — a step's results are found
+#: by its path in the plan.
+NAME = r"[A-Za-z_][A-Za-z0-9_-]*"
+Name = Annotated[str, StringConstraints(pattern=f"^{NAME}$")]
+
+#: Step names the plan already uses: `saves` is a key of `steps` itself, and
+#: `featurizers` is the step the compiler adds to build the parameter sets.
+RESERVED = frozenset({"saves", "featurizers"})
+
+
 # --------------------------------------------------------------------- #
-# the shared vocabulary
+# the vocabulary
 # --------------------------------------------------------------------- #
 
 
@@ -68,9 +91,12 @@ class Model(Node):
     attn_implementation: Literal["eager", "sdpa"] | None = None
 
 
-class Role(Node):
-    #: The column a row's text comes from, e.g. `counterfactual_inputs[0]`.
-    field: str
+class Dataset(Node):
+    """A table of rows: `<dir>/<table>[#split]` under the run's data root.
+    The same shape declared under `data` and written in place on a step, so
+    a string on a step is always a *name*."""
+
+    path: str
 
 
 class Site(Node):
@@ -112,6 +138,12 @@ class Site(Node):
             raise ValueError(wrong)
         return self
 
+    @property
+    def spelling(self) -> str:
+        """The site as a document writes it, and so what names one written
+        in place: two sites that spell the same are the same place."""
+        return json.dumps(self.model_dump(exclude_none=True), separators=(",", ":"))
+
 
 #: Kinds that exist only as a file: a basis someone computed, a dictionary
 #: someone trained elsewhere. A fit may not name one. (`sae` and `linear` are
@@ -130,7 +162,8 @@ class Featurizer(Node):
     #: The rank of a basis. A gate has none: its features are the units.
     k: int | None = Field(default=None, gt=0)
     parametrization: Literal["cayley"] = "cayley"
-    #: The draw the initial basis comes from. Absent, the fit's seed, or 0.
+    #: The draw the initial basis comes from. Absent, the seed of the fit
+    #: that trains it, or 0.
     seed: int | None = None
     #: Load the parameter from a safetensors bundle a previous run wrote,
     #: instead of drawing it. Its header is checked against this document —
@@ -174,10 +207,11 @@ Position = Annotated[Where, BeforeValidator(_spelling)]
 
 
 class Read(Node):
-    site: str
+    #: A site declared under `sites`, by name, or one written here in place.
+    site: Name | Site
     pos: Position
-    model: str = "original"
-    input: str
+    #: `identity`, a declared featurizer, or `<fit>.<name>` — the one a fit
+    #: trains, which is how every read and write of it names it.
     featurizer: str = "identity"
     #: `"logits"` projects a residual-stream read through the model's final
     #: norm and head. With a layer sweep and a `token_prob` metric that is
@@ -185,26 +219,19 @@ class Read(Node):
     view: Literal["raw", "logits"] = "raw"
 
 
-class Reference(Node):
-    """A value an earlier sibling step published under `outputs`."""
-
-    ref: str
-
-
 class Write(Node):
     """`mechanism` and `operand` are two fields, not the protocol's
     `{"swap": "v_cf"}`, because a key that is itself the mechanism's name
     cannot be enumerated by a schema — and the schema is what an agent
-    reads. The operand is a read of this intervention, or a reference to
-    what an earlier step output."""
+    reads."""
 
-    site: str
+    site: Name | Site
     pos: Position
     mechanism: Literal["swap", "add_scaled", "lerp", "gaussian", "clamp", "renormalize"]
-    #: A read of this intervention, a `{"ref": …}` to an earlier step's
-    #: output, a literal number (zero ablation is `0.0`), or nothing for a
+    #: A read of an earlier step, `<step>.<read>`; a mean, by its step's
+    #: name; a literal number (zero ablation is `0.0`); or nothing, for a
     #: mechanism that takes none.
-    operand: str | float | Reference | None = None
+    operand: str | float | None = None
     featurizer: str = "identity"
     #: Which coordinates of the featurizer's space the mechanism acts on —
     #: SAE latents, directions of a rotation. The others pass through, and
@@ -231,12 +258,6 @@ class Write(Node):
             raise ValueError("mechanism 'clamp' needs a bound: params lo, hi or both")
         return self
 
-    @property
-    def operand_name(self) -> str | float | None:
-        """The operand as the compiler carries it: a name for a read or a
-        reference, the number itself for a literal."""
-        return self.operand.ref if isinstance(self.operand, Reference) else self.operand
-
 
 #: (required, optional) params per mechanism.
 MECHANISM_PARAMS: dict[str, tuple[set[str], set[str]]] = {
@@ -253,72 +274,14 @@ MECHANISM_PARAMS: dict[str, tuple[set[str], set[str]]] = {
 NO_OPERAND = frozenset({"gaussian", "clamp", "renormalize"})
 
 
-class IntervenedModel(Node):
-    input: str
-    writes: list[str]
-
-
-class Match(Node):
-    kind: Literal["match"]
-    of: str
-    expected: str
-    token_form: Literal["space_prefixed"] = "space_prefixed"
-
-
-class LogitDiff(Node):
-    kind: Literal["logit_diff"]
-    of: str
-    a: str
-    b: str
-    token_form: Literal["space_prefixed"] = "space_prefixed"
-
-
-class CrossEntropy(Node):
-    kind: Literal["cross_entropy"]
-    of: str
-    target: str
-    token_form: Literal["space_prefixed"] = "space_prefixed"
-
-
-class TokenLogit(Node):
-    kind: Literal["token_logit"]
-    of: str
-    token: str
-    token_form: Literal["space_prefixed"] = "space_prefixed"
-
-
-class TokenProb(Node):
-    kind: Literal["token_prob"]
-    of: str
-    token: str
-    token_form: Literal["space_prefixed"] = "space_prefixed"
-
-
-for _cls in (Match, LogitDiff, CrossEntropy, TokenLogit, TokenProb):
-    # The data columns this kind names, in the order `ops.metrics.compute`
-    # takes them — read off the one table, so a class and the `compute` it
-    # feeds cannot disagree about which column is which.
-    _cls.columns = property(  # type: ignore[attr-defined]
-        lambda self: tuple(getattr(self, one) for one in METRIC_COLUMNS[self.kind])
-    )
-
-
-Metric = Annotated[
-    Union[Match, LogitDiff, CrossEntropy, TokenLogit, TokenProb], Field(discriminator="kind")
-]
-
 class Intervention(Node):
-    """The experiment, declared once. Every step runs *this*, over its own
-    rows — which is why a fit and the run it scores cannot drift apart."""
+    """Reads and writes, and nothing else: an experiment is what the steps
+    that list it do with it. A reference in here is resolved where it is
+    used, so one declared intervention serves a fit's body and the steps
+    that score what it trained."""
 
-    reads: dict[str, Read]
-    writes: dict[str, Write] = Field(default_factory=dict)
-    models: dict[str, IntervenedModel] = Field(default_factory=dict)
-    metrics: dict[str, Metric] = Field(default_factory=dict)
-    #: Generate this many tokens after the prompt, greedily, on every
-    #: forward of this intervention. 0 is one forward pass. With it, a
-    #: position may name the continuation frame, `{"frame": "generated"}`.
-    decode: int = Field(default=0, ge=0)
+    reads: dict[Name, Read] = Field(default_factory=dict)
+    writes: dict[Name, Write] = Field(default_factory=dict)
 
 
 # --------------------------------------------------------------------- #
@@ -326,35 +289,174 @@ class Intervention(Node):
 # --------------------------------------------------------------------- #
 
 
-class Output(Node):
-    """One value a pass publishes for the steps after it: a read, kept as it
-    is (`rows x width`), averaged over rows to one vector — which is how a
-    corpus mean gets made without the un-reduced activations ever leaving —
-    or reduced to its top-k principal directions, a basis a later document
-    loads as a `pca` featurizer."""
+class _Call(Node):
+    """What a forward and a generate share: one model call over one
+    dataset's column, with some writes in force and some reads taken."""
 
-    read: str
-    reduce: Literal["none", "mean", "pca"] = "none"
-    k: int | None = Field(default=None, gt=0)
+    #: A dataset declared under `data`, by name, or one written in place.
+    #: Forwards over one dataset see its rows paired by index, as the
+    #: counterfactual and the base of one example are.
+    data: Name | Dataset
+    #: Which column is the prompt: `input`, `counterfactual_inputs[0]`, or a
+    #: column of chat messages, which renders through the chat template.
+    field: str
+    #: The interventions whose writes are in force, in the order they apply,
+    #: and whose reads are taken: a declared name, one written in place, or
+    #: a list of either.
+    interventions: Name | Intervention | list[Name | Intervention] = Field(default_factory=list)
+    #: Reads of this call that belong to no intervention.
+    reads: dict[Name, Read] = Field(default_factory=dict)
+
+    @property
+    def decode(self) -> int:
+        """How many tokens the call generates, at most: 0 is one forward."""
+        return 0
+
+
+class Forward(_Call):
+    kind: Literal["forward"]
+
+
+#: `model.generate` arguments a step may not pass, and why: each changes how
+#: many rows come back, what comes back, or what bounds the decode — which
+#: `max_new_tokens` does, alone.
+REFUSED_GENERATION = {
+    "max_length": "the bound is `max_new_tokens`, and a second one would disagree with it",
+    "return_dict_in_generate": "the step's result is the generated ids",
+    "output_attentions": "a read is how a generate step keeps a tensor",
+    "output_hidden_states": "a read is how a generate step keeps a tensor",
+    "output_scores": "a read of the head is how a generate step keeps the scores",
+    "output_logits": "a read of the head is how a generate step keeps the logits",
+    "_from_model_config": "it is the config's bookkeeping, not an argument",
+    "transformers_version": "it is the config's bookkeeping, not an argument",
+}
+
+#: Arguments that would turn one row into several.
+ONE_ROW_EACH = ("num_beams", "num_return_sequences")
+
+
+class Generate(_Call):
+    """A call that decodes. Every key beyond the ones above is an argument of
+    `model.generate`, passed as written — `do_sample`, `temperature`,
+    `min_new_tokens` — and checked against transformers' `GenerationConfig`,
+    so a misspelling is refused with its path. Nothing is defaulted: what the
+    step does not say comes from the checkpoint's own generation config."""
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    kind: Literal["generate"]
+    #: The bound: at most this many tokens, and the continuation frame's
+    #: steps are numbered below it.
+    max_new_tokens: int = Field(gt=0)
+    __pydantic_extra__: dict[str, int | float | bool | str | list[int] | None]  # pyright: ignore[reportIncompatibleVariableOverride]
+
+    @property
+    def decode(self) -> int:
+        return self.max_new_tokens
+
+    @property
+    def generation(self) -> dict[str, Any]:
+        """The arguments beyond the bound, as written."""
+        return dict(self.model_extra or {})
 
     @model_validator(mode="after")
-    def _k_iff_pca(self) -> "Output":
-        if (self.reduce == "pca") != (self.k is not None):
-            raise ValueError("`k` is for `reduce: pca`, and pca needs it")
+    def _generate_arguments(self) -> "Generate":
+        for key, value in self.generation.items():
+            if key in REFUSED_GENERATION:
+                raise ValueError(f"`{key}` is not a generate step's to set: {REFUSED_GENERATION[key]}")
+            if key not in _generation_arguments():
+                raise ValueError(
+                    f"`{key}` is neither a field of a generate step nor an argument of "
+                    "model.generate (transformers' GenerationConfig)"
+                )
+            if key in ONE_ROW_EACH and value != 1:
+                raise ValueError(f"`{key}: {value}` makes several rows of one; a step keeps its rows")
         return self
 
 
-class Save(Node):
-    """One file. `value` names a result **of the step this sits on**.
+@functools.cache
+def _generation_arguments() -> frozenset[str]:
+    from transformers import GenerationConfig  # here: only a generate step needs it
 
-    The field that holds these is `saves`, not `save`, for a reason worth
-    knowing: nnsight mounts a `.save()` method onto `object`, so every
-    pydantic model in a process that imports nnsight inherits one, and a
-    field called `save` shadows it. FINDINGS §9.
-    """
+    return frozenset(GenerationConfig().to_dict())
 
-    value: str
-    file_path: str
+
+class _Metric(Node):
+    """A score of one read, per row. Every other field names a column, as
+    `<dataset>.<column>`: the one dataset whose row i is scored against row
+    i of the read."""
+
+    kind: Literal["metric"]
+    #: The read it scores, `<step>.<read>`, at one position per row.
+    of: str
+    token_form: Literal["space_prefixed"] = "space_prefixed"
+
+    @property
+    def references(self) -> tuple[str, ...]:
+        """Its column fields, as written, in the order `ops.metrics.compute`
+        takes them — read off the one table, so a class and the function it
+        feeds cannot disagree about which is which."""
+        return tuple(getattr(self, one) for one in METRIC_COLUMNS[getattr(self, "metric")])
+
+    @property
+    def columns(self) -> tuple[str, ...]:
+        """The column names, each without its dataset."""
+        return tuple(one.partition(".")[2] for one in self.references)
+
+    @property
+    def dataset(self) -> str:
+        """The one dataset the columns are of — `Spec` refuses two."""
+        return self.references[0].partition(".")[0]
+
+
+class Match(_Metric):
+    metric: Literal["match"]
+    expected: str
+
+
+class LogitDiff(_Metric):
+    metric: Literal["logit_diff"]
+    a: str
+    b: str
+
+
+class CrossEntropy(_Metric):
+    metric: Literal["cross_entropy"]
+    target: str
+
+
+class TokenLogit(_Metric):
+    metric: Literal["token_logit"]
+    token: str
+
+
+class TokenProb(_Metric):
+    metric: Literal["token_prob"]
+    token: str
+
+
+Metric = Annotated[
+    Union[Match, LogitDiff, CrossEntropy, TokenLogit, TokenProb], Field(discriminator="metric")
+]
+
+
+class Reduce(Node):
+    """One read, reduced over its rows: averaged to one vector — which is how
+    a corpus mean gets made without the unreduced activations ever leaving —
+    or to its top-k principal directions, a basis a later document loads as a
+    `pca` featurizer. A rectangle keeps its window; a ragged read, which has
+    none, is over every position it found."""
+
+    kind: Literal["reduce"]
+    reduce: Literal["mean", "pca"]
+    of: str
+    k: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _k_iff_pca(self) -> "Reduce":
+        if (self.reduce == "pca") != (self.k is not None):
+            raise ValueError("`k` is for `reduce: pca`, and pca needs it")
+        return self
 
 
 class Optimizer(Node):
@@ -364,39 +466,10 @@ class Optimizer(Node):
 
 
 class EarlyStop(Node):
-    metric: str
+    #: A metric of the fit's body, watched on its held-out pass.
+    metric: Name
     mode: Literal["max", "min"] = "max"
     patience: int = Field(gt=0)
-
-
-class Evaluation(Node):
-    """The fit's held-out pass: its own rows, and its own saves. This is the
-    whole reason the format changed — the held-out score is a result of a
-    place, not a name that has to avoid colliding with another."""
-
-    rows: dict[str, str]
-    saves: list[Save] = Field(default_factory=list)
-
-
-class Observe(Node):
-    kind: Literal["observe"]
-    rows: dict[str, str]
-    #: Which experiments this pass runs: the name of one declared under the
-    #: document's `interventions`, one written here in place, or a list of
-    #: either. Every step that runs a forward says which, and a list runs
-    #: each over these rows — lowered by `Spec.lower` to one child per entry.
-    interventions: "str | Intervention | list[str | Intervention]"
-    #: name -> what to publish. A bare read name is shorthand for keeping it
-    #: unreduced.
-    outputs: dict[str, Output] = Field(default_factory=dict)
-    saves: list[Save] = Field(default_factory=list)
-
-    @field_validator("outputs", mode="before")
-    @classmethod
-    def _shorthand(cls, raw: Any) -> Any:
-        if isinstance(raw, dict):
-            return {name: {"read": one} if isinstance(one, str) else one for name, one in raw.items()}
-        return raw
 
 
 class Anneal(Node):
@@ -408,35 +481,82 @@ class Anneal(Node):
     end: float = Field(gt=0)
 
 
+class Evaluation(Node):
+    """The held-out pass is the body again, with these datasets in place of
+    the ones it trains on — the same experiment, so it cannot drift from the
+    one it scores. A dataset mapped to itself is the train-equals-test
+    ablation, and says so."""
+
+    data: dict[Name, Name]
+
+
 class Fit(Node):
     kind: Literal["fit"]
-    rows: dict[str, str]
-    #: The experiment the fit trains through, by name or in place — the
-    #: same one the score after it names, which is what makes the score
-    #: measure what was trained. A list fits through each in turn.
-    interventions: "str | Intervention | list[str | Intervention]"
-    params: list[str]
-    #: Σ wᵢ·termᵢ, minimized. A term is a metric, or `<gate>.mask` for a gate
-    #: this fit trains — the mean of its soft mask, which is its L1 penalty.
+    #: The declared featurizers this fit trains. Everywhere they are used,
+    #: including in the body, they are `<fit>.<name>`.
+    train: list[Name]
+    #: Σ wᵢ·termᵢ, minimized. A term is a metric of the body, or
+    #: `<gate>.mask` for a gate this fit trains — the mean of its soft mask,
+    #: which is its L1 penalty.
     objective: list[tuple[float, str]]
     #: gate name -> its temperature schedule. A gate without one stays at 1.
-    anneal: dict[str, Anneal] = Field(default_factory=dict)
+    anneal: dict[Name, Anneal] = Field(default_factory=dict)
     epochs: int = Field(gt=0)
-    pairs: int = Field(gt=0)
+    #: Rows per update, drawn from every dataset of the body by one shuffle.
+    batch_size: int = Field(gt=0)
     seed: int = 0
     optimizer: Optimizer
     early_stop: EarlyStop
     eval: Evaluation
-    saves: list[Save] = Field(default_factory=list)
+    #: The body: its steps, run once per minibatch. It saves nothing itself —
+    #: what it produces is `<fit>.<ref>` at the root.
+    steps: Steps
+
+    @model_validator(mode="after")
+    def _one_body(self) -> "Fit":
+        if self.steps.saves:
+            raise ValueError("a fit's body saves nothing; save `<fit>.<ref>` under the root's `saves`")
+        if any(isinstance(one, Fit) for _, one in self.steps.items()):
+            raise ValueError("a fit's body holds no fit")
+        return self
 
 
-class Weights(Node):
-    kind: Literal["weights"]
-    names: list[str]
-    saves: list[Save] = Field(default_factory=list)
+Step = Annotated[Union[Forward, Generate, Metric, Reduce, Fit], Field(discriminator="kind")]
 
 
-Step = Annotated[Union[Observe, Fit, Weights], Field(discriminator="kind")]
+class Steps(Node):
+    """The steps, by name, in the order they run — and `saves`, the one key
+    that is not a step: `{reference: file}`, relative to the output
+    directory. A table for a metric (`.json`), a tensor for anything else
+    (`.safetensors`)."""
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    saves: dict[str, str] = Field(default_factory=dict)
+    __pydantic_extra__: dict[str, Step]  # pyright: ignore[reportIncompatibleVariableOverride]
+
+    def items(self) -> Iterator[tuple[str, Any]]:
+        return iter((self.model_extra or {}).items())
+
+    def __getitem__(self, name: str) -> Any:
+        return (self.model_extra or {})[name]
+
+    def __contains__(self, name: object) -> bool:
+        return name in (self.model_extra or {})
+
+    @model_validator(mode="after")
+    def _names(self) -> "Steps":
+        for name, _ in self.items():
+            _refuse(
+                re.fullmatch(NAME, name),
+                f"step {name!r}: a name is a letter or `_`, then letters, digits, `_` or `-` — "
+                "a `.` is how a reference reaches into a step",
+            )
+            _refuse(name not in RESERVED, f"step {name!r}: the name is reserved ({sorted(RESERVED)})")
+        return self
+
+
+Fit.model_rebuild()
 
 
 # --------------------------------------------------------------------- #
@@ -444,20 +564,25 @@ Step = Annotated[Union[Observe, Fit, Weights], Field(discriminator="kind")]
 # --------------------------------------------------------------------- #
 
 
+#: What a reference resolves to: its kind (`read`, `ids`, `metric`, `mean`,
+#: `pca`, `fit`, `trained`), the node that says what it is (for a read, the
+#: `Read`; for a mean or a basis, the `Read` it reduced), and the scope it
+#: belongs to — `""` for the root, a fit's name for its body.
+Ref = tuple[str, Any, str]
+
+
 class Spec(Node):
-    """A document. `steps` run in the order written, and that order is
-    checked: a step may not use a featurizer before the step that trains it
-    has run, or it would score an untrained rotation without complaint."""
+    """A document. Its checks are the ones that need no model and no rows."""
 
     header: Header = Field(default_factory=Header)
     model: Model
-    roles: dict[str, Role]
-    sites: dict[str, Site]
-    #: The experiments, by name. Nothing here runs: a step names the ones it
-    #: runs, and one a step writes in place is declared here by `_inline`.
-    interventions: dict[str, Intervention]
-    steps: dict[str, Step]
-    featurizers: dict[str, Featurizer] = Field(default_factory=dict)
+    data: dict[Name, Dataset] = Field(default_factory=dict)
+    sites: dict[Name, Site] = Field(default_factory=dict)
+    featurizers: dict[Name, Featurizer] = Field(default_factory=dict)
+    #: Bundles of reads and writes, by name. Nothing here runs: a step lists
+    #: the ones it runs.
+    interventions: dict[Name, Intervention] = Field(default_factory=dict)
+    steps: Steps
 
     @property
     def digest(self) -> str:
@@ -470,102 +595,60 @@ class Spec(Node):
             json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
 
-    def intervention_of(self, step: Any) -> Intervention:
-        """The one experiment a step runs, resolved. An inline one was
-        hoisted before anything else looked (`_inline`), so this is a lookup;
-        a list step has no one experiment and is asked through `lower`."""
-        name = step.interventions
-        if isinstance(name, list):
-            raise ValueError("a step that lists interventions runs each through `Spec.lower`")
-        if name not in self.interventions:
-            raise ValueError(f"undeclared intervention {name!r}; declared: {sorted(self.interventions)}")
-        return self.interventions[name]
+    def site(self, ref: str | Site) -> tuple[str, Site]:
+        """A read's or a write's site, as `(label, site)`: a declared one
+        under its name, one written in place under its own spelling."""
+        return (ref, self.sites[ref]) if isinstance(ref, str) else (ref.spelling, ref)
 
-    def runs(self) -> list[tuple[str, Any, bool]]:
-        """Every step as it will run, in order: `(path, step, nested)`.
+    def dataset(self, ref: str | Dataset) -> str:
+        """A step's dataset, by the key its rows are held under: a declared
+        one's name, or the path of one written in place — which nothing else
+        can name."""
+        return ref if isinstance(ref, str) else ref.path
 
-        A step with one intervention is itself. A step with a list is the
-        children `lower` makes, at `<step>/<intervention>` — the path the
-        nested plan they compile to gives them, and so the name its checks
-        refuse under. `nested` says the step runs inside its own plan, whose
-        outputs are its own (`engine.steps.State.child`).
-        """
-        found: list[tuple[str, Any, bool]] = []
-        for name, step in self.steps.items():
-            if isinstance(getattr(step, "interventions", None), list):
-                found.extend((f"{name}/{child}", one, True) for child, one in self.lower(name, step).items())
-            else:
-                found.append((name, step, False))
-        return found
+    def path(self, key: str) -> str:
+        """Where a dataset's rows are, by its key."""
+        return self.data[key].path if key in self.data else key
 
-    def produces(self, step: Any) -> set[str]:
-        """The value names a single-intervention observe or fit puts in its
-        own results — what a save on it may name."""
-        one = self.intervention_of(step)
-        produced = set(one.metrics)
-        if one.decode:
-            produced |= {f"{model}.generated" for model in {"original"} | set(one.models)}
-        if isinstance(step, Observe):
-            produced |= set(step.outputs)
-        if isinstance(step, Fit):
-            produced = set(_publishes(step))
-        return produced
-
-    def lower(self, name: str, step: Any) -> dict[str, Any]:
-        """A step that lists interventions, as one step per intervention.
-
-        Each child is the step with that one intervention: the same rows and
-        every other field, and the outputs and saves that belong to it. A
-        value is qualified the way a nested plan's path is, `<child>/<value>`
-        — `patching/logit_diff` — and an unqualified name goes to the one
-        child that has it. A name that no child has, or several do, is
-        refused with the qualified names it could have been.
-        """
-        children = list(step.interventions)
-
-        def resolve(value: str, has: dict[str, set[str]], what: str) -> tuple[str, str]:
-            head, _, rest = value.partition("/")
-            if rest and head in has and rest in has[head]:
-                return head, rest
-            owners = [child for child in children if value in has[child]]
-            if len(owners) == 1:
-                return owners[0], value
-            candidates = sorted(f"{child}/{one}" for child in children for one in has[child])
-            if owners:
-                raise ValueError(
-                    f"step {name!r}: {what} {value!r} is produced by {len(owners)} of its "
-                    f"interventions {owners}; qualify it as one of "
-                    f"{[f'{child}/{value}' for child in owners]}"
+    def ops(self, step: Any) -> tuple[dict[str, Read], dict[str, Write]]:
+        """A forward's reads and the writes in force, each by name: its own
+        reads, then each listed intervention's reads and writes, in the order
+        the list gives. One name means one op of the step, so a name two of
+        them share is refused, naming both."""
+        listed = step.interventions if isinstance(step.interventions, list) else [step.interventions]
+        reads: dict[str, Read] = dict(step.reads)
+        writes: dict[str, Write] = {}
+        origin = dict.fromkeys(reads, "the step")
+        for index, one in enumerate(listed):
+            if isinstance(one, str):
+                label = f"intervention {one!r}"
+                _refuse(
+                    one in self.interventions,
+                    f"undeclared intervention {one!r}; declared: {sorted(self.interventions)}",
                 )
-            raise ValueError(f"step {name!r}: {what} {value!r} names nothing it runs; one of {candidates}")
+                one = self.interventions[one]
+            else:
+                label = "the intervention written in place" + (f" at [{index}]" if len(listed) > 1 else "")
+            for kind, names in (("read", one.reads), ("write", one.writes)):
+                for name in names:
+                    _refuse(
+                        name not in origin,
+                        f"{kind} {name!r} is named by both {origin.get(name)} and {label}; "
+                        "a name is one op of the step",
+                    )
+                    origin[name] = label
+            reads.update(one.reads)
+            writes.update(one.writes)
+        return reads, writes
 
-        outputs: dict[str, dict[str, Any]] = {child: {} for child in children}
-        if isinstance(step, Observe):
-            reads = {child: set(self.interventions[child].reads) for child in children}
-            for out_name, out in step.outputs.items():
-                child, read = resolve(out.read, reads, "output read")
-                outputs[child][out_name] = out.model_copy(update={"read": read})
-        single = {
-            child: step.model_copy(update={"interventions": child, "saves": [], **({"outputs": outputs[child]} if isinstance(step, Observe) else {})})
-            for child in children
-        }
-        saves: dict[str, list[Save]] = {child: [] for child in children}
-        has = {child: self.produces(single[child]) for child in children}
-        for save in step.saves:
-            child, value = resolve(save.value, has, "save")
-            saves[child].append(save.model_copy(update={"value": value}))
-        lowered = {child: single[child].model_copy(update={"saves": saves[child]}) for child in children}
-        if isinstance(step, Fit):
-            evals: dict[str, list[Save]] = {child: [] for child in children}
-            metrics = {child: set(self.interventions[child].metrics) for child in children}
-            for save in step.eval.saves:
-                child, value = resolve(save.value, metrics, "eval save")
-                evals[child].append(save.model_copy(update={"value": value}))
-            lowered = {
-                child: one.model_copy(update={"eval": step.eval.model_copy(update={"saves": evals[child]})})
-                for child, one in lowered.items()
-            }
-        return lowered
+    def forwards(self) -> Iterator[tuple[str, _Call]]:
+        """Every forward and generate in the document, a fit's body included,
+        by its reference: `patched`, `fit.patched`."""
+        for name, step in self.steps.items():
+            if isinstance(step, _Call):
+                yield name, step
+            if isinstance(step, Fit):
+                yield from ((f"{name}.{inner}", one) for inner, one in step.steps.items() if isinstance(one, _Call))
 
     @model_validator(mode="before")
     @classmethod
@@ -578,347 +661,71 @@ class Spec(Node):
             )
         return raw
 
-    @model_validator(mode="before")
-    @classmethod
-    def _inline(cls, raw: Any) -> Any:
-        """Every step names its experiments, and one written in place is
-        declared under a name derived from its step.
-
-        That is the whole of what inline costs: after this, a step's
-        `interventions` is a name or a list of names and every experiment is
-        under the document's `interventions`, so every check, the compiler, a
-        sweep and a fit's eval see one path and cannot tell the spellings
-        apart. A lone inline intervention is named after its step — already
-        unique in the document, and what an error will print. One at index
-        `i` of a list is `<step>[i]`, the bracket `rows.field_text` already
-        uses for a list.
-        """
-        if not isinstance(raw, dict) or not isinstance(raw.get("steps"), dict):
-            return raw
-        declared = dict(raw.get("interventions") or {})
-        steps = {}
-        for name, step in raw["steps"].items():
-            if isinstance(step, dict) and step.get("kind") in ("observe", "fit"):
-                if "interventions" not in step:
-                    raise ValueError(
-                        f"step {name!r} runs a forward and names no intervention; say which "
-                        f"with `interventions` — declared: {sorted(declared)} — or write one "
-                        "there in place"
-                    )
-
-                def hoist(one: Any, label: str) -> Any:
-                    if not isinstance(one, dict):
-                        return one
-                    if label in declared:
-                        raise ValueError(
-                            f"step {name!r} writes an intervention in place that would be named "
-                            f"{label!r}, and one is already declared under that name; rename one "
-                            "of them"
-                        )
-                    declared[label] = one
-                    return label
-
-                given = step["interventions"]
-                if isinstance(given, list):
-                    if not given:
-                        raise ValueError(f"step {name!r} lists no interventions")
-                    named = [hoist(one, f"{name}[{index}]") for index, one in enumerate(given)]
-                    repeated = sorted({one for one in named if isinstance(one, str) and named.count(one) > 1})
-                    if repeated:
-                        raise ValueError(f"step {name!r} lists {repeated} more than once")
-                    step = {**step, "interventions": named}
-                else:
-                    step = {**step, "interventions": hoist(given, name)}
-            steps[name] = step
-        return {**raw, "interventions": declared, "steps": steps}
-
     @model_validator(mode="after")
     def _cross_check(self) -> "Spec":
         """Everything that is about two pieces at once. No single node owns
         any of it, so none of it is a field validator."""
-        _refuse(bool(self.interventions), "a document declares at least one intervention")
-        known = set(self.featurizers) | {"identity"}
-        for label, one in self.interventions.items():
-            self._check_intervention(label, one, known)
+        # who trains what, before anything is resolved: a trained featurizer
+        # is named `<fit>.<name>` everywhere, and the bare name nowhere
+        trainers: dict[str, str] = {}
+        for name, step in self.steps.items():
+            if not isinstance(step, Fit):
+                continue
+            for one in step.train:
+                _refuse(
+                    one in self.featurizers,
+                    f"step {name!r}: trains {one!r}, which is not a declared featurizer",
+                )
+                _refuse(
+                    self.featurizers[one].kind not in LOADED_ONLY,
+                    f"step {name!r}: trains {one!r}, a {self.featurizers[one].kind}, which is fixed "
+                    "by definition — a pca basis can be fine-tuned as a subspace loaded from it",
+                )
+                _refuse(
+                    one not in trainers,
+                    f"featurizer {one!r} is trained by both {trainers.get(one)!r} and {name!r}; one "
+                    "parameter set is trained once — declare a second featurizer",
+                )
+                trainers[one] = name
+        produced = _scope(self, self.steps, {}, trainers)
 
         # one featurizer name is one parameter set, so it acts at one site
+        at: dict[str, set[str]] = {}
+        for _, step in self.forwards():
+            reads, writes = self.ops(step)
+            for op in (*reads.values(), *writes.values()):
+                if op.featurizer != "identity":
+                    at.setdefault(op.featurizer.rpartition(".")[2], set()).add(self.site(op.site)[1].spelling)
         for name in self.featurizers:
-            at = {
-                read.site
-                for one in self.interventions.values()
-                for read in one.reads.values()
-                if read.featurizer == name
-            }
-            at |= {
-                write.site
-                for one in self.interventions.values()
-                for write in one.writes.values()
-                if write.featurizer == name
-            }
-            _refuse(len(at) == 1, f"featurizer {name!r} is used at {sorted(at)}; one name is one site")
+            _refuse(
+                len(at.get(name, ())) == 1,
+                f"featurizer {name!r} is used at {len(at.get(name, ()))} site(s) {sorted(at.get(name, ()))}; "
+                "one name is one parameter set at one site",
+            )
 
-        for name, step in self.steps.items():
-            listed = getattr(step, "interventions", None)
-            for one in listed if isinstance(listed, list) else [listed] if listed else []:
-                _refuse(
-                    one in self.interventions,
-                    f"step {name!r}: undeclared intervention {one!r}; declared: {sorted(self.interventions)}",
-                )
-        # output name -> the step that publishes it, to every later step
-        # (`published`), or only inside its own nested plan (`taken`)
-        published: dict[str, str] = {}
-        taken: dict[str, str] = {}
-        all_reads = {name for one in self.interventions.values() for name in one.reads}
-        for name, step, nested in self.runs():
-            if isinstance(step, (Observe, Fit)):
-                intervention = self.intervention_of(step)
-                for role in self.roles:
-                    _refuse(role in step.rows, f"step {name!r}: no rows for role {role!r}")
-                for role, dataset in step.rows.items():
-                    _refuse(role in self.roles, f"step {name!r}: undeclared role {role!r}")
-                    _refuse(bool(dataset), f"step {name!r}: role {role!r} has no dataset")
-                # a reference must be to something an EARLIER sibling published
-                for write_name, write in intervention.writes.items():
-                    if isinstance(write.operand, Reference):
-                        _refuse(
-                            write.operand.ref in published,
-                            f"step {name!r}: write {write_name!r} references "
-                            f"{write.operand.ref!r}, which no earlier step outputs "
-                            f"(published so far: {sorted(published)})",
-                        )
-            produced = self.produces(step) if isinstance(step, Observe) else set()
-            if isinstance(step, Fit):
-                one = self.intervention_of(step)
-                produced = set(one.metrics)
-                if one.decode:
-                    produced |= {f"{model}.generated" for model in {"original"} | set(one.models)}
-            if isinstance(step, Observe):
-                for output_name, output in step.outputs.items():
-                    _refuse(
-                        output.read in self.intervention_of(step).reads,
-                        f"step {name!r}: output {output_name!r} keeps read {output.read!r}, "
-                        "which its intervention does not have",
-                    )
-                    _refuse(
-                        output_name not in taken,
-                        f"step {name!r}: output {output_name!r} is already published by "
-                        f"step {taken.get(output_name)!r}",
-                    )
-                    _refuse(
-                        output_name not in all_reads,
-                        f"step {name!r}: output {output_name!r} shares its name with a "
-                        "read; an operand names one or the other",
-                    )
-                    taken[output_name] = name
-                    if not nested:
-                        published[output_name] = name
-            if isinstance(step, Fit):
-                for role in self.roles:
-                    _refuse(
-                        role in step.eval.rows, f"step {name!r}.eval: no rows for role {role!r}"
-                    )
-                _refuse(
-                    set(step.params) <= set(self.featurizers),
-                    f"step {name!r}: trains {sorted(set(step.params) - set(self.featurizers))}, "
-                    "which is not a declared featurizer",
-                )
-                for param in step.params:
-                    _refuse(
-                        self.featurizers[param].kind not in LOADED_ONLY,
-                        f"step {name!r}: trains {param!r}, a {self.featurizers[param].kind}, which is "
-                        "fixed by definition — a pca basis can be fine-tuned as a subspace loaded from it",
-                    )
-                gates = {p for p in step.params if self.featurizers[p].kind == "gate"}
-                _refuse(
-                    set(step.anneal) <= gates,
-                    f"step {name!r}: anneals {sorted(set(step.anneal) - gates)}; only a gate "
-                    f"this fit trains has a temperature (those are {sorted(gates)})",
-                )
-                terms = produced | {f"{gate}.mask" for gate in gates}
-                _refuse(
-                    step.early_stop.metric in produced,
-                    f"step {name!r}: early_stop watches {step.early_stop.metric!r}, not a metric",
-                )
-                for _, term in step.objective:
-                    _refuse(
-                        term in terms,
-                        f"step {name!r}: objective names {term!r}, which is neither a metric "
-                        f"nor the mask of a gate this fit trains (one of {sorted(terms)})",
-                    )
-                for save in step.eval.saves:
-                    _refuse(
-                        save.value in produced,
-                        f"step {name!r}.eval: saves {save.value!r}, which that pass does not produce",
-                    )
-                produced = set(_publishes(step))
-            if isinstance(step, Weights):
-                _refuse(
-                    set(step.names) <= set(self.featurizers),
-                    f"step {name!r}: names {sorted(set(step.names) - set(self.featurizers))}, "
-                    "which is not a declared featurizer",
-                )
-                for one in step.names:
-                    _refuse(
-                        self.featurizers[one].kind not in ("sae", "linear"),
-                        f"step {name!r}: {one!r} is a loaded {self.featurizers[one].kind}; its "
-                        "tensors are the file it came from, and there is no fitted weight to publish",
-                    )
-                produced = set(step.names)
-            for save in step.saves:
-                _refuse(
-                    save.value in produced,
-                    f"step {name!r}: saves {save.value!r}, which it does not produce "
-                    f"(it produces {sorted(produced)})",
-                )
-        self._check_order()
+        files: dict[str, str] = {}
+        for ref, file in self.steps.saves.items():
+            found = produced.get(ref)
+            _refuse(
+                found is not None,
+                f"saves: {ref!r} is nothing this document produces; it produces {sorted(produced)}",
+            )
+            assert found is not None
+            _refuse(
+                not file.startswith("/") and ".." not in file.split("/"),
+                f"saves: {ref!r} -> {file!r}: a file is a path inside the output directory",
+            )
+            _refuse(file not in files, f"saves: {files.get(file)!r} and {ref!r} are both saved to {file!r}")
+            files[file] = ref
+            table = found[0] == "metric"
+            _refuse(
+                file.endswith(".json" if table else ".safetensors"),
+                f"saves: {ref!r} is " + (
+                    "a metric, one row per example: a table, saved to a .json file"
+                    if table else f"a tensor ({found[0]}): saved to a .safetensors file"
+                ) + f", not {file!r}",
+            )
         return self
-
-    def _check_intervention(self, label: str, one: Intervention, known: set[str]) -> None:
-        where = f"interventions.{label}"
-        for name, read in one.reads.items():
-            _refuse(read.site in self.sites, f"{where}: read {name!r}: undeclared site {read.site!r}")
-            if read.view == "logits":
-                component = self.sites[read.site].component if read.site in self.sites else ""
-                _refuse(
-                    component in RESIDUAL_STREAM,
-                    f"{where}: read {name!r}: view 'logits' projects the residual stream "
-                    f"through the head, and {component!r} is not the residual stream "
-                    f"(one of {sorted(RESIDUAL_STREAM)})",
-                )
-                _refuse(
-                    read.featurizer == "identity",
-                    f"{where}: read {name!r}: a featurized read cannot also be viewed as logits",
-                )
-            _refuse(read.input in self.roles, f"{where}: read {name!r}: undeclared role {read.input!r}")
-            _refuse(
-                read.model == "original" or read.model in one.models,
-                f"{where}: read {name!r}: model {read.model!r} is neither 'original' nor declared",
-            )
-            _refuse(read.featurizer in known, f"{where}: read {name!r}: undeclared featurizer")
-        for name, write in one.writes.items():
-            _refuse(write.site in self.sites, f"{where}: write {name!r}: undeclared site {write.site!r}")
-            component = self.sites[write.site].component if write.site in self.sites else ""
-            _refuse(
-                not address.describe().get(component, {}).get("read_only", False),
-                f"{where}: write {name!r}: {component!r} is read-only — the model's input, "
-                "not an activation",
-            )
-            if isinstance(write.operand, str):
-                _refuse(
-                    write.operand in one.reads,
-                    f"{where}: write {name!r}: operand {write.operand!r} is not a read of "
-                    'this intervention; a value from an earlier step is {"ref": …}',
-                )
-                _refuse(
-                    write.operand not in one.reads or one.reads[write.operand].view == "raw",
-                    f"{where}: write {name!r}: operand {write.operand!r} is a logits view, "
-                    "which is vocabulary-wide and cannot be written back at a site",
-                )
-            _refuse(write.featurizer in known, f"{where}: write {name!r}: undeclared featurizer")
-        for name, model in one.models.items():
-            for index, write_name in enumerate(model.writes):
-                write = one.writes.get(write_name)
-                if write is None or write.mechanism != "renormalize":
-                    continue
-                here = [w for w in model.writes if w in one.writes and one.writes[w].site == write.site]
-                _refuse(
-                    len(here) > 1 and here[-1] == write_name,
-                    f"{where}: model {name!r}: renormalize {write_name!r} restores the norm the "
-                    f"other writes at site {write.site!r} changed, so it comes after at least one "
-                    "of them and last among them; first, or alone, it is the identity",
-                )
-        for name, model in one.models.items():
-            _refuse(model.input in self.roles, f"{where}: model {name!r}: undeclared role")
-            for write in model.writes:
-                _refuse(write in one.writes, f"{where}: model {name!r}: undeclared write {write!r}")
-        for name, read in one.reads.items():
-            if read.pos.frame == "generated":
-                _refuse(one.decode > 0, f"{where}: read {name!r}: a generated position needs `decode` > 0")
-                _refuse(
-                    read.pos.index is None or read.pos.index < one.decode,
-                    f"{where}: read {name!r}: step {read.pos.index} of a {one.decode}-token decode",
-                )
-        for name, write in one.writes.items():
-            if write.pos.frame == "generated":
-                _refuse(one.decode > 0, f"{where}: write {name!r}: a generated position needs `decode` > 0")
-                # A write happens *during* the decode, so it may only name a
-                # step the run has already reached. Every other form of the
-                # continuation frame is a cut of the finished text — the last
-                # real token, the row's stop token, where it said the answer
-                # — and there is nothing to write into a step that has not
-                # happened yet.
-                _refuse(
-                    write.pos.all or (write.pos.index is not None and write.pos.index >= 0),
-                    f"{where}: write {name!r}: a write in the continuation frame is at a step "
-                    "the decode has reached — {'index': k} with k >= 0, or {'all': true}. "
-                    f"{write.pos.spelling()} names a cut of the finished continuation, which is "
-                    "something to read and not something to write into",
-                )
-                _refuse(
-                    write.pos.scope is None,
-                    f"{where}: write {name!r}: a write in the continuation frame takes no scope; "
-                    f"{write.pos.spelling()} is only known once the decode has finished",
-                )
-                _refuse(
-                    write.pos.index is None or write.pos.index < one.decode,
-                    f"{where}: write {name!r}: step {write.pos.index} of a {one.decode}-token decode",
-                )
-        for name, metric in one.metrics.items():
-            _refuse(
-                metric.of in one.reads,
-                f"{where}: metric {name!r}: `of` must be a read name, got {metric.of!r}",
-            )
-            _refuse(
-                one.reads[metric.of].pos.width == 1,
-                f"{where}: metric {name!r} reads {metric.of!r}, a window of "
-                f"{one.reads[metric.of].pos.width or 'varying'} positions; "
-                "a metric scores one position per row",
-            )
-        for name, write in one.writes.items():
-            if isinstance(write.operand, str):
-                have, want = one.reads[write.operand].pos.width, write.pos.width
-                # a ragged side has no width until the rows are known; the
-                # compiler checks those row by row
-                _refuse(
-                    have is None or want is None or have == want,
-                    f"{where}: write {name!r} covers {want} position(s) but its operand "
-                    f"{write.operand!r} was read over {have}; the windows must match",
-                )
-
-    def _check_order(self) -> None:
-        """A trained featurizer may not be used before it is trained.
-
-        A step that runs a forward uses every featurizer its intervention
-        names. If a later fit trains one of them, an earlier step scored it
-        untrained — a valid document with a silently wrong number. Refused,
-        with the fix: a deliberate untrained baseline is a *second* featurizer
-        that no fit names (see documents/random_subspace_cpu.json).
-        """
-        runs = self.runs()
-        trained_at: dict[str, int] = {}
-        for index, (name, step, _) in enumerate(runs):
-            if isinstance(step, Fit):
-                for param in step.params:
-                    trained_at.setdefault(param, index)
-        for index, (name, step, _) in enumerate(runs):
-            if isinstance(step, (Observe, Fit)):
-                one = self.intervention_of(step)
-                touches = {read.featurizer for read in one.reads.values()}
-                touches |= {write.featurizer for write in one.writes.values()}
-            elif isinstance(step, Weights):
-                touches = set(step.names)
-            else:
-                continue
-            for featurizer in sorted(touches):
-                first = trained_at.get(featurizer)
-                _refuse(
-                    first is None or first <= index,
-                    f"step {name!r} uses featurizer {featurizer!r} before step "
-                    f"{runs[first or 0][0]!r} trains it, so it would run on "
-                    "the untrained parameter. Move it after the fit — or, for a "
-                    "deliberate untrained baseline, declare a second featurizer that "
-                    "no fit names",
-                )
 
 
 def _refuse(condition: object, message: str) -> None:
@@ -926,10 +733,311 @@ def _refuse(condition: object, message: str) -> None:
         raise ValueError(message)
 
 
-def _publishes(step: Any) -> tuple[str, ...]:
-    """What a non-observing step puts in its own results."""
-    if isinstance(step, Fit):
-        return ("train/loss", "train/eval")
-    if isinstance(step, Weights):
-        return tuple(step.names)
-    return ()
+def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, str], fit: str = "") -> dict[str, Ref]:
+    """Check one `steps`, in order, and return what it produces, by reference.
+
+    A reference names an *earlier* step, of this `steps` or of the one around
+    it — a fit's body sees the root's steps written before the fit — so
+    walking in order and adding each step's references after checking it is
+    the whole scoping rule. `fit` is the body's fit, or `""` at the root.
+    """
+    visible = dict(outer)
+    produced: dict[str, Ref] = {}
+    #: the fits a `<fit>.<name>` may name here: those already run, and the
+    #: one whose body this is — inside it, the parameter it is training
+    fits = {ref for ref, (kind, _, _) in outer.items() if kind == "fit"} | ({fit} if fit else set())
+
+    def publish(ref: str, kind: str, node: Any, scope: str = fit) -> None:
+        visible[ref] = produced[ref] = (kind, node, scope)
+
+    for name, step in steps.items():
+        where = f"step {(f'{fit}.' if fit else '') + name!r}"
+        if isinstance(step, _Call):
+            reads, _ = _call(spec, where, name, step, visible, fit, trainers, fits)
+            for read_name, read in reads.items():
+                publish(f"{name}.{read_name}", "read", read)
+            if isinstance(step, Generate):
+                publish(name, "ids", step)
+        elif isinstance(step, (_Metric, Reduce)):
+            found = visible.get(step.of)
+            _refuse(
+                found is not None and found[0] == "read" and found[2] == fit,
+                f"{where}: `of` is {step.of!r}, which is not a read of a step before it in this "
+                "`steps`; a metric or a reduce is of `<step>.<read>`",
+            )
+            assert found is not None
+            if isinstance(step, Reduce):
+                publish(name, step.reduce, found[1])
+                continue
+            _refuse(
+                found[1].pos.width == 1,
+                f"{where} scores {step.of!r}, a window of {found[1].pos.width or 'varying'} "
+                "positions; a metric scores one position per row",
+            )
+            datasets = {one.partition(".")[0] for one in step.references}
+            for one in step.references:
+                _refuse(
+                    "." in one and one.partition(".")[0] in spec.data,
+                    f"{where}: {one!r} is not `<dataset>.<column>` of a dataset declared under `data` "
+                    f"({sorted(spec.data)}); a dataset written in place on a step has no name to name it by",
+                )
+            _refuse(
+                len(datasets) == 1,
+                f"{where}: its columns come from {sorted(datasets)}; a metric's columns are one "
+                "dataset's, row i against row i of the read",
+            )
+            publish(name, "metric", step)
+        elif isinstance(step, Fit):
+            body = _scope(spec, step.steps, visible, trainers, name)
+            _fit(spec, where, name, step, body)
+            publish(name, "fit", step, "")
+            for one in step.train:
+                publish(f"{name}.{one}", "trained", one, "")
+            for ref, (kind, node, _) in body.items():
+                # the body's values, as its held-out pass left them
+                publish(f"{name}.{ref}", kind, node, name)
+            fits.add(name)
+    return produced
+
+
+def _call(
+    spec: Spec,
+    where: str,
+    name: str,
+    step: _Call,
+    visible: dict[str, Ref],
+    fit: str,
+    trainers: dict[str, str],
+    fits: set[str],
+) -> tuple[dict[str, Read], dict[str, Write]]:
+    """One forward or generate: its data, and every read and write in force,
+    each resolved where this step is."""
+    try:
+        reads, writes = spec.ops(step)
+    except ValueError as refusal:
+        raise ValueError(f"{where}: {refusal}") from None
+    if isinstance(step.data, str):
+        _refuse(
+            step.data in spec.data,
+            f"{where}: undeclared dataset {step.data!r}; declared: {sorted(spec.data)} — or "
+            'write one in place, {"path": …}',
+        )
+    decode = step.decode
+
+    def site(what: str, ref: str | Site) -> Site:
+        _refuse(
+            not isinstance(ref, str) or ref in spec.sites,
+            f"{where}: {what}: undeclared site {ref!r}; declared: {sorted(spec.sites)}",
+        )
+        return spec.site(ref)[1]
+
+    def frame(what: str, pos: Where) -> None:
+        if pos.frame != "generated":
+            return
+        _refuse(decode, f"{where}: {what}: a position in the continuation frame needs a generate step")
+        _refuse(
+            pos.index is None or pos.index < decode,
+            f"{where}: {what}: step {pos.index} of a {decode}-token decode",
+        )
+
+    for read_name, read in reads.items():
+        what = f"read {read_name!r}"
+        component = site(what, read.site).component
+        _featurizer(spec, f"{where}: {what}", read.featurizer, trainers, fits)
+        if read.view == "logits":
+            _refuse(
+                component in RESIDUAL_STREAM,
+                f"{where}: {what}: view 'logits' projects the residual stream through the head, "
+                f"and {component!r} is not the residual stream (one of {sorted(RESIDUAL_STREAM)})",
+            )
+            _refuse(
+                read.featurizer == "identity",
+                f"{where}: {what}: a featurized read cannot also be viewed as logits",
+            )
+        frame(what, read.pos)
+
+    for write_name, write in writes.items():
+        what = f"write {write_name!r}"
+        component = site(what, write.site).component
+        _refuse(
+            not address.describe().get(component, {}).get("read_only", False),
+            f"{where}: {what}: {component!r} is read-only — the model's input, not an activation",
+        )
+        _featurizer(spec, f"{where}: {what}", write.featurizer, trainers, fits)
+        if isinstance(write.operand, str):
+            _operand(where, what, name, write, visible, fit)
+        frame(what, write.pos)
+        if write.pos.frame == "generated":
+            # A write happens *during* the decode, so it may only name a step
+            # the run has already reached. Every other form of the
+            # continuation frame is a cut of the finished text — the last
+            # real token, the row's stop token, where it said the answer —
+            # and there is nothing to write into a step that has not happened.
+            _refuse(
+                write.pos.all or (write.pos.index is not None and write.pos.index >= 0),
+                f"{where}: {what}: a write in the continuation frame is at a step the decode has "
+                f"reached — {{'index': k}} with k >= 0, or {{'all': true}}. {write.pos.spelling()} "
+                "names a cut of the finished continuation, which is something to read and not "
+                "something to write into",
+            )
+            _refuse(
+                write.pos.scope is None,
+                f"{where}: {what}: a write in the continuation frame takes no scope; "
+                f"{write.pos.spelling()} is only known once the decode has finished",
+            )
+
+    # renormalize restores the norm the writes before it at its site changed
+    order = list(writes.items())
+    for index, (write_name, write) in enumerate(order):
+        if write.mechanism != "renormalize":
+            continue
+        here = [one for one, other in order if spec.site(other.site)[1] == spec.site(write.site)[1]]
+        _refuse(
+            len(here) > 1 and here[-1] == write_name,
+            f"{where}: renormalize {write_name!r} restores the norm the other writes at its site "
+            "changed, so it comes after at least one of them and last among them; first, or "
+            "alone, it is the identity",
+        )
+
+    if isinstance(step, Generate) and (reads or writes):
+        # The engine walks a tapped decode step by step, and an early EOS
+        # makes that walk outrun the run and drop what follows it — the
+        # step's own ids among it (FINDINGS §12.4).
+        _refuse(
+            step.generation.get("min_new_tokens") == step.max_new_tokens,
+            f"{where}: a generate step with reads or writes decodes exactly `max_new_tokens`: say "
+            f"`min_new_tokens: {step.max_new_tokens}`. An early stop would end the decode before "
+            "the taps have run",
+        )
+    return reads, writes
+
+
+def _operand(where: str, what: str, name: str, write: Write, visible: dict[str, Ref], fit: str) -> None:
+    """A write's operand, when it is a reference: a read of an earlier step,
+    or a mean — and, either way, of a window this write can take."""
+    ref = str(write.operand)
+    _refuse(
+        not ref.startswith(f"{name}."),
+        f"{where}: {what}: operand {ref!r} is read by this same step; a write takes a value "
+        "that exists before the call it is in",
+    )
+    found = visible.get(ref)
+    _refuse(
+        found is not None,
+        f"{where}: {what}: operand {ref!r} is nothing before this step; an operand is "
+        "`<step>.<read>` of an earlier step, the name of a mean, or a number",
+    )
+    assert found is not None
+    kind, source, scope = found
+    _refuse(
+        kind in ("read", "mean"),
+        f"{where}: {what}: operand {ref!r} is a {kind}; an operand is a read of an earlier step "
+        "or a mean" + ("; a pca basis is loaded as a featurizer, not written at a site" if kind == "pca" else ""),
+    )
+    _refuse(
+        scope in (fit, ""),
+        f"{where}: {what}: operand {ref!r} is a value of {scope!r}'s held-out pass, which is saved, "
+        "not written",
+    )
+    want, have = write.pos.width, source.pos.width  # None: ragged, known per row
+    if kind == "read":
+        _refuse(
+            scope == fit,
+            f"{where}: {what}: operand {ref!r} is a read from outside the fit's body, whose rows "
+            "the fit shuffles; reduce it to a mean, or read it in the body",
+        )
+        _refuse(
+            source.view == "raw",
+            f"{where}: {what}: operand {ref!r} is a logits view, which is vocabulary-wide and "
+            "cannot be written back at a site",
+        )
+        # a ragged side has no width until the rows are known; the run
+        # checks those row by row
+        _refuse(
+            have is None or want is None or have == want,
+            f"{where}: {what} covers {want} position(s) but its operand {ref!r} was read over "
+            f"{have}; the windows must match",
+        )
+        return
+    # A mean over a ragged read is one vector and lands anywhere; a mean
+    # over a rectangle keeps its window, and the write must match it.
+    _refuse(
+        have is None or want == have or (want is None and have == 1),
+        f"{where}: {what} covers {want if want is not None else 'a varying number of'} "
+        f"position(s) but the mean {ref!r} keeps a window of {have}; the windows must match",
+    )
+
+
+def _featurizer(spec: Spec, where: str, ref: str, trainers: dict[str, str], fits: set[str]) -> None:
+    """A featurizer, as a read or a write names it: `identity`, a declared
+    one no fit trains, or `<fit>.<name>` of a fit that has run — or of the
+    fit whose body this is, where it is the parameter being trained.
+
+    One spelling for a trained parameter everywhere is what lets a fit's
+    body and the scoring after it list one declared intervention. And a
+    parameter named before its fit has run would score untrained without
+    complaint, so that is refused, with the fix.
+    """
+    if ref == "identity":
+        return
+    head, dot, tail = ref.partition(".")
+    if not dot:
+        _refuse(
+            ref in spec.featurizers,
+            f"{where}: undeclared featurizer {ref!r}; declared: {sorted(spec.featurizers)}",
+        )
+        _refuse(
+            ref not in trainers,
+            f"{where}: featurizer {ref!r} is trained by step {trainers.get(ref)!r}; name it "
+            f"{trainers.get(ref)}.{ref} — or, for a deliberate untrained baseline, declare a "
+            "second featurizer that no fit names",
+        )
+        return
+    _refuse(
+        trainers.get(tail) == head,
+        f"{where}: featurizer {ref!r}: step {head!r} trains no {tail!r} "
+        f"(trained: {sorted(f'{fit}.{one}' for one, fit in trainers.items())})",
+    )
+    _refuse(
+        head in fits,
+        f"{where}: featurizer {ref!r} is used before step {head!r} trains it, so it would run "
+        "on the untrained parameter. Move it after the fit — or, for a deliberate untrained "
+        "baseline, declare a second featurizer that no fit names",
+    )
+
+
+def _fit(spec: Spec, where: str, name: str, fit: Fit, body: dict[str, Ref]) -> None:
+    """A fit's own fields, against its body."""
+    clash = sorted(set(fit.train) & {step for step, _ in fit.steps.items()})
+    _refuse(
+        not clash,
+        f"{where}: {clash} is both a step of its body and a featurizer it trains, and "
+        f"`{name}.{clash[0] if clash else ''}` can name only one of them",
+    )
+    metrics = {ref for ref, (kind, _, _) in body.items() if kind == "metric"}
+    gates = {one for one in fit.train if spec.featurizers[one].kind == "gate"}
+    _refuse(
+        set(fit.anneal) <= gates,
+        f"{where}: anneals {sorted(set(fit.anneal) - gates)}; only a gate this fit trains has a "
+        f"temperature (those are {sorted(gates)})",
+    )
+    terms = metrics | {f"{gate}.mask" for gate in gates}
+    for _, term in fit.objective:
+        _refuse(
+            term in terms,
+            f"{where}: objective names {term!r}, which is neither a metric of its body nor the "
+            f"mask of a gate it trains (one of {sorted(terms)})",
+        )
+    _refuse(
+        fit.early_stop.metric in metrics,
+        f"{where}: early_stop watches {fit.early_stop.metric!r}, which is not a metric of its "
+        f"body ({sorted(metrics)})",
+    )
+    named = {one.data for _, one in fit.steps.items() if isinstance(one, _Call) and isinstance(one.data, str)}
+    named |= {one.dataset for _, one in fit.steps.items() if isinstance(one, _Metric)}
+    for trained, held_out in fit.eval.data.items():
+        _refuse(
+            trained in named,
+            f"{where}: eval replaces {trained!r}, which its body does not use ({sorted(named)})",
+        )
+        _refuse(held_out in spec.data, f"{where}: eval: undeclared dataset {held_out!r}")

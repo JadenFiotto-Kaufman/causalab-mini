@@ -16,7 +16,7 @@ from safetensors.torch import save_file
 
 from causalab_mini import ops, plan
 from causalab_mini.ops import featurizer
-from causalab_mini.plan.spec import Spec
+from causalab_mini.plan.spec_v2 import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 DAS = REPO / "documents" / "v2" / "das.json"
