@@ -5,7 +5,7 @@ comes from the same place the run does. In the prompt frame that is a chat
 turn named by the message's own `role`; in the continuation it is `eos`.
 Nothing enumerates the names: a conversation says them.
 
-What makes it a chat is the data. A role's field may hold a string or a list
+What makes it a chat is the data. A forward's field may hold a string or a list
 of `{"role", "content"}` messages, and a list is rendered through the
 checkpoint's own template — the same way an anchor's text is whatever the row
 carries under that name. There is no flag on the document.
@@ -24,11 +24,11 @@ from causalab_mini import plan
 from causalab_mini.data import rows as rows_module, tokens
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.ops import locate
-from causalab_mini.plan.spec_v2 import Spec
+from causalab_mini.plan.spec import Spec
 from causalab_mini.shapes import Anchor, Where
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-CHAT = REPO / "tests" / "fixtures" / "v2_old" / "chat_turn.json"
+CHAT = REPO / "documents" / "v2" / "chat_turn.json"
 
 
 @pytest.fixture
@@ -125,11 +125,11 @@ def test_the_document_reads_the_question_and_not_the_template(chat_raw, data_roo
     template's closing `[/INST]`, which is what a document without segments
     would have had to read."""
     executed = model_engine.execute(plan.build_request(chat_raw, data_root, model_engine))
-    where = executed.step("zeroed", plan.Forward).results["positions"]
+    where = executed.step("blanked", plan.Forward).results["positions"]
 
-    assert where["asked"]["tokens"] == ("' is'",) * 4
-    assert where["logits"]["tokens"] == ("']'",) * 4, "the template's own last token"
-    assert set(where["asked"]["reason"]) == {""}
+    assert where["blanked.asked"]["tokens"] == ("' is'",) * 4
+    assert where["blanked.logits"]["tokens"] == ("']'",) * 4, "the template's own last token"
+    assert set(where["blanked.asked"]["reason"]) == {""}
     assert executed.result("p_answer").shape == (4,)
 
 
@@ -172,7 +172,7 @@ def test_a_conversation_needs_a_template(chat_raw, data_root):
 
 def test_a_field_that_is_neither_a_string_nor_a_conversation_is_refused(model):
     with pytest.raises(tokens.TokenError, match="a list of"):
-        tokens.rendered(model.tokenizer, [{"role": "user"}], "role 'base'")
+        tokens.rendered(model.tokenizer, [{"role": "user"}], "step 'blanked'")
 
 
 @pytest.mark.parametrize(
@@ -185,6 +185,6 @@ def test_a_field_that_is_neither_a_string_nor_a_conversation_is_refused(model):
     ids=["eos in the prompt", "a turn in the continuation"],
 )
 def test_each_frame_locates_its_own_runs(chat_raw, pos, message):
-    chat_raw["interventions"]["ask"]["reads"]["asked"]["pos"] = pos
+    chat_raw["steps"]["blanked"]["reads"]["asked"]["pos"] = pos
     with pytest.raises(ValidationError, match=message):
         Spec.model_validate(chat_raw)

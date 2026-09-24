@@ -14,7 +14,7 @@ import pytest
 from causalab_mini import cli
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-DAS = str(REPO / "tests" / "fixtures" / "v2_old" / "das.json")
+DAS = str(REPO / "documents" / "v2" / "das.json")
 PATCHING = str(REPO / "documents" / "minimal_cpu.json")
 DATA = str(REPO / "documents" / "data")
 TINY = "hf-internal-testing/tiny-random-LlamaForCausalLM"
@@ -108,16 +108,16 @@ def test_validate_refuses_with_a_path(tmp_path, capsys):
     """A refusal is a message, not a traceback: the entry point catches this
     package's own error types, prints what they say, and exits 1."""
     broken = json.loads(pathlib.Path(DAS).read_text())
-    broken["interventions"]["das"]["reads"]["v_cf"]["shuffle"] = {"seed": 1}
+    broken["interventions"]["cf_read"]["reads"]["v_cf"]["shuffle"] = {"seed": 1}
     path = tmp_path / "broken.json"
     path.write_text(json.dumps(broken))
 
     assert cli.main(["validate", str(path), "--data-root", DATA]) == 1
     said = capsys.readouterr()
-    assert "interventions.das.reads.v_cf.shuffle" in said.err
+    assert "interventions.cf_read.reads.v_cf.shuffle" in said.err
     assert "Traceback" not in said.err and said.out == ""
 
-    with pytest.raises(Exception, match="interventions.das.reads.v_cf.shuffle"):
+    with pytest.raises(Exception, match="interventions.cf_read.reads.v_cf.shuffle"):
         cli.main(["--traceback", "validate", str(path), "--data-root", DATA])
 
 
@@ -136,7 +136,7 @@ def test_validate_compiles_so_a_misspelled_component_fails_there(tmp_path, capsy
 
 def test_explain_prints_the_compiled_plan_without_weights(capsys):
     out = _json(capsys, ["explain", DAS, "--data-root", DATA])
-    assert out["steps"] == ["featurizers", "fit", "original", "patched", "iia", "ce", "weights"]
+    assert out["steps"] == ["featurizers", "fit", "fit.weights", "counterfactual", "patched", "iia", "ce"]
     text = out["text"]
     assert "rot: subspace k=8 d=16" in text  # d derived, never authored
     # the spec, not the rows: every pass of this document reads at the last

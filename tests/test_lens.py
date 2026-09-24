@@ -16,10 +16,10 @@ from causalab_mini import plan
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.plan.explain import explain
 from causalab_mini.plan import sweep
-from causalab_mini.plan.spec_v2 import Spec
+from causalab_mini.plan.spec import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-LENS = REPO / "tests" / "fixtures" / "v2_old" / "logit_lens.json"
+LENS = REPO / "documents" / "v2" / "logit_lens.json"
 
 
 @pytest.fixture
@@ -85,23 +85,21 @@ def test_the_lens_projection_matches_the_head_within_an_ulp(model_engine):
     [
         (lambda raw: raw["sites"].update(resid={"component": "lm_head"}), "'lm_head' is not the residual stream"),
         (lambda raw: raw["sites"].update(resid={"component": "attention_query", "layers": [0]}), "'attention_query' is not the residual stream"),
-        (lambda raw: raw["interventions"]["lens"]["reads"]["lens"].update(featurizer="rot"), "cannot also be viewed as logits"),
+        (lambda raw: raw["steps"]["lens"]["reads"]["logits"].update(featurizer="rot"), "cannot also be viewed as logits"),
     ],
     ids=["the head itself", "an interior", "a featurized read"],
 )
 def test_where_a_logits_view_is_refused(lens_raw, edit, message):
     lens_raw["sites"]["resid"]["layers"] = [0]  # un-sweep so it is one document
     lens_raw["featurizers"] = {"rot": {"kind": "subspace", "k": 4, "parametrization": "cayley"}}
-    lens_raw["interventions"]["lens"]["reads"]["rot_user"] = {
-        "site": "resid", "pos": -1, "input": "base", "featurizer": "rot"
-    }
+    lens_raw["steps"]["lens"]["reads"]["rot_user"] = {"site": "resid", "pos": -1, "featurizer": "rot"}
     edit(lens_raw)
     with pytest.raises(ValidationError, match=message):
         Spec.model_validate(lens_raw)
 
 
 def test_a_logits_view_cannot_be_written_back():
-    raw = json.loads((REPO / "tests" / "fixtures" / "v2_old" / "patching.json").read_text())
-    raw["interventions"]["patching"]["reads"]["v_cf"]["view"] = "logits"
+    raw = json.loads((REPO / "documents" / "v2" / "patching.json").read_text())
+    raw["steps"]["counterfactual"]["reads"]["v_cf"]["view"] = "logits"
     with pytest.raises(ValidationError, match="is a logits view, which is vocabulary-wide"):
         Spec.model_validate(raw)

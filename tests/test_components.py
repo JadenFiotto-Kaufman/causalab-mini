@@ -370,17 +370,17 @@ def test_the_token_ids_can_be_read_and_never_written(minimal_raw, data_root, mod
     means nothing."""
     from pydantic import ValidationError
 
-    from causalab_mini.plan.spec_v2 import Spec
+    from causalab_mini.plan.spec import Spec
 
-    raw = __import__("json").loads((REPO / "tests" / "fixtures" / "v2_old" / "patching.json").read_text())
+    raw = json.loads((REPO / "documents" / "v2" / "patching.json").read_text())
     raw["sites"]["ids"] = {"component": "input_ids"}
-    raw["interventions"]["patching"]["reads"]["tokens"] = {"site": "ids", "pos": {"last": 2}, "input": "base"}
-    raw["steps"]["score"]["outputs"] = {"last_two": "tokens"}
+    raw["steps"]["patched"]["reads"]["tokens"] = {"site": "ids", "pos": {"last": 2}}
+    raw["steps"]["saves"]["patched.tokens"] = "tokens.safetensors"
     executed = model_engine.execute(plan.build_request(raw, data_root, model_engine))
-    tokens = executed.result("tokens")
+    tokens = executed.result("patched.tokens")
     assert tokens.shape == (4, 2) and not tokens.is_floating_point()
 
-    raw["interventions"]["patching"]["writes"]["patch"]["site"] = "ids"
+    raw["steps"]["patched"]["interventions"]["writes"]["patch"]["site"] = "ids"
     with pytest.raises(ValidationError, match="'input_ids' is read-only"):
         Spec.model_validate(raw)
 
@@ -417,23 +417,17 @@ def _both_heads(model: dict) -> dict:
     it twice: once where the head put it, once where the model reads it."""
     return {
         "model": model,
-        "roles": {"base": {"field": "input"}},
+        "data": {"prompts": {"path": "weekdays/train"}},
         "sites": {"head": {"component": "lm_head"}, "out": {"component": "logits"}},
-        "interventions": {
-            "one": {
-                "reads": {
-                    "raw": {"site": "head", "pos": -1, "model": "loud", "input": "base"},
-                    "capped": {"site": "out", "pos": -1, "model": "loud", "input": "base"},
-                },
-                "writes": {"shout": {"site": "head", "pos": -1, "mechanism": "swap", "operand": 100.0}},
-                "models": {"loud": {"input": "base", "writes": ["shout"]}},
-                "metrics": {
-                    "at_head": {"kind": "token_logit", "of": "raw", "token": "base_answer"},
-                    "at_logits": {"kind": "token_logit", "of": "capped", "token": "base_answer"},
-                },
-            }
+        "steps": {
+            "loud": {
+                "kind": "forward", "data": "prompts", "field": "input",
+                "interventions": {"writes": {"shout": {"site": "head", "pos": -1, "mechanism": "swap", "operand": 100.0}}},
+                "reads": {"raw": {"site": "head", "pos": -1}, "capped": {"site": "out", "pos": -1}},
+            },
+            "at_head": {"kind": "metric", "metric": "token_logit", "of": "loud.raw", "token": "prompts.base_answer"},
+            "at_logits": {"kind": "metric", "metric": "token_logit", "of": "loud.capped", "token": "prompts.base_answer"},
         },
-        "steps": {"score": {"kind": "observe", "interventions": "one", "rows": {"base": "weekdays/train"}}},
     }
 
 

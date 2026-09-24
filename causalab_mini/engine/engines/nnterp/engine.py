@@ -140,8 +140,8 @@ def apply_taps(
 ) -> None:
     """One pass over the addresses of one forward, in forward order.
 
-    `values` carries reads between the forwards of one pass: an operand is a
-    read name, and its tensor was produced by an earlier forward. A read's
+    `values` holds the operands this call's writes take, by name — each
+    produced by an earlier step — and receives what it reads. A read's
     featurizer is applied here too — `v_cf` is `Qᵀx`, not `x` — and it is the
     same object the write's `inverse` will use, which is what makes one
     featurizer name one parameter set.

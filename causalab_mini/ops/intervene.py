@@ -256,7 +256,7 @@ def _window(tensor: Any, at: Selection, seq_axis: int) -> Any:
 
 def _is_flat(at: Selection) -> bool:
     """Ragged positions can only come back flat; `flat` says so for a window
-    of a ragged pass whose own rows happen to line up."""
+    of a ragged read whose own rows happen to line up."""
     return at.flat or is_ragged(at.positions)
 
 

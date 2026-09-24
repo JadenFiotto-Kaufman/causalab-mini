@@ -25,11 +25,12 @@ from causalab_mini.data import rows as rows_module
 from causalab_mini.engine import steps
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.plan.explain import explain
-from causalab_mini.plan.spec_v2 import Spec
+from causalab_mini.plan.spec import Spec
 from causalab_mini.shapes import Anchor, Where
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-ENTITY = REPO / "tests" / "fixtures" / "v2_old" / "entity_mean_ablation.json"
+V2 = REPO / "documents" / "v2"
+ENTITY = V2 / "entity_mean_ablation.json"
 
 
 @pytest.fixture
@@ -105,8 +106,8 @@ def test_entity_mean_ablation_runs_and_both_engines_agree(entity_raw, data_root,
 
     traced = model_engine.execute(built)
     assert tuple(traced.result("mean").shape) == (16,)
-    clean = traced.result("clean.logit_diff")
-    ablated = traced.result("ablated.logit_diff")
+    clean = traced.result("clean_ld")
+    ablated = traced.result("ablated_ld")
     assert not torch.equal(clean, ablated)
 
     hooks = HooksEngine.load(Spec.model_validate(entity_raw).model, device_map="cpu")
@@ -117,7 +118,7 @@ def test_entity_mean_ablation_runs_and_both_engines_agree(entity_raw, data_root,
     # (FINDINGS §8) is not about how many positions are replaced, as that
     # section first inferred; it depends on the values written. Zero and the
     # unit-window mean were exact. The tolerance is the measurement.
-    other = hooked.result("ablated.logit_diff")
+    other = hooked.result("ablated_ld")
     assert torch.allclose(ablated, other, rtol=0, atol=1e-7)
     assert (ablated - other).abs().max() < 2e-8
 
@@ -128,7 +129,7 @@ def test_entity_mean_ablation_runs_and_both_engines_agree(entity_raw, data_root,
 
 
 def test_a_metric_may_not_read_a_ragged_window(entity_raw):
-    entity_raw["interventions"]["clean"]["reads"]["logits"]["pos"] = {"all": True}
+    entity_raw["steps"]["clean"]["reads"]["logits"]["pos"] = {"all": True}
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError, match="a window of varying positions"):
@@ -144,7 +145,7 @@ def test_a_write_with_nothing_to_write_on_a_row_is_refused_at_the_write(
     The refusal is at the write now, not at compile time: which rows a text
     anchor is in is a question about the model's own tokenization, so the
     compiler cannot answer it and no longer pretends to."""
-    entity_raw["interventions"]["ablated"]["writes"]["ablate"]["pos"] = {
+    entity_raw["steps"]["ablated"]["interventions"]["writes"]["ablate"]["pos"] = {
         "all": True, "scope": {"variable": "label"}
     }
     # `label` is " Sunday" etc. — an answer, never in the prompt
@@ -159,21 +160,25 @@ def test_an_entity_patch_between_rows_of_different_widths_is_refused_by_row(data
     the windows differ and no landing policy exists here. Refused, naming
     the rows — the protocol's `exact_length_buckets` and `padded_masked` are
     what would make it land."""
-    raw = json.loads((REPO / "tests" / "fixtures" / "v2_old" / "patching.json").read_text())
-    reads = raw["interventions"]["patching"]["reads"]
+    raw = json.loads((V2 / "patching.json").read_text())
     entity = {"all": True, "scope": {"variable": "entity"}}
-    reads["v_cf"]["pos"] = entity
-    raw["interventions"]["patching"]["writes"]["patch"]["pos"] = entity
+    raw["steps"]["counterfactual"]["reads"]["v_cf"]["pos"] = entity
+    raw["steps"]["patched"]["interventions"]["writes"]["patch"]["pos"] = entity
     built = plan.build_request(raw, data_root, model_engine)
     with pytest.raises(plan.PlanError, match="rows \\[.*\\] differ.*exact_length_buckets"):
         model_engine.execute(built)
 
 
-def test_an_unreduced_ragged_output_cannot_be_an_operand(entity_raw, data_root, model_engine):
-    entity_raw["steps"]["harvest"]["outputs"]["mean"] = {"read": "acts"}  # not reduced
-    entity_raw["steps"]["harvest"]["saves"] = []
-    with pytest.raises(plan.PlanError, match="unreduced; the windows must match, or reduce the output"):
-        plan.build_request(entity_raw, data_root, model_engine)
+def test_an_unreduced_ragged_read_is_checked_against_the_write_row_by_row(entity_raw, data_root, model_engine):
+    """Every entity token of every row, taken as it is: the harvest's read is
+    a different width on each row, and the write it is swapped in at is one
+    token. That is checked where the rows' windows are — at the write — and
+    refused naming the row that differs."""
+    ablate = entity_raw["steps"]["ablated"]["interventions"]["writes"]["ablate"]
+    ablate["operand"] = "harvest.acts"  # not reduced
+    built = plan.build_request(entity_raw, data_root, model_engine)
+    with pytest.raises(plan.PlanError, match=r"operand 'harvest.acts' was read over \[3, 1, 1, 1\]; rows \[0\] differ"):
+        model_engine.execute(built)
 
 
 # --------------------------------------------------------------------- #
@@ -183,7 +188,7 @@ def test_an_unreduced_ragged_output_cannot_be_an_operand(entity_raw, data_root, 
 
 @pytest.fixture
 def patch_raw():
-    return json.loads((REPO / "tests" / "fixtures" / "v2_old" / "entity_patch.json").read_text())
+    return json.loads((V2 / "entity_patch.json").read_text())
 
 
 def _holed(data_root, tmp_path, entity="Neptune", drop=None):
@@ -209,21 +214,21 @@ def test_an_entity_patch_at_the_last_token_of_the_entity_lands_on_every_row(
     The same interchange refused above — each row's entity swapped in from
     its counterfactual — runs, because `{"index": -1}` *inside* the entity is
     one token on every row however many tokens the entity is. One spec, two
-    roles, and each role resolves its own row's text: the base patches the
+    forwards, and each resolves its own row's text: `patched` patches the
     piece `day` of ` Thursday` where the counterfactual read ` Saturday`
     whole.
     """
     executed = model_engine.execute(plan.build_request(patch_raw, data_root, model_engine))
     where = {
-        **executed.step("original", plan.Forward).results["positions"],
+        **executed.step("counterfactual", plan.Forward).results["positions"],
         **executed.step("patched", plan.Forward).results["positions"],
     }
 
-    assert where["patch"]["tokens"] == ("'day'", "' Friday'", "' Saturday'", "' Sunday'")
-    assert where["v_cf"]["tokens"] == ("' Saturday'", "' Sunday'", "'day'", "' Friday'")
+    assert where["patched.patch"]["tokens"] == ("'day'", "' Friday'", "' Saturday'", "' Sunday'")
+    assert where["counterfactual.v_cf"]["tokens"] == ("' Saturday'", "' Sunday'", "'day'", "' Friday'")
     # One token per row on both sides — which is why the swap lands at all.
-    assert [len(one) for one in where["patch"]["rows"]] == [1] * 4
-    assert set(where["patch"]["reason"]) == {""}
+    assert [len(one) for one in where["patched.patch"]["rows"]] == [1] * 4
+    assert set(where["patched.patch"]["reason"]) == {""}
     # These prompts differ only in the entity and are padded on the left, so
     # the *index* coincides while the token addressed does not. Where the
     # tail varies, so does the index — tests/test_locate.py.
@@ -277,7 +282,7 @@ def test_a_text_anchor_resolves_the_same_way_through_the_serialized_path(
         plan.build_request(patch_raw, data_root, model_engine), remote="local"
     )
     assert provenance(here) == provenance(shipped)
-    assert shipped.step("patched", plan.Forward).results["positions"]["patch"]["tokens"] == (
+    assert shipped.step("patched", plan.Forward).results["positions"]["patched.patch"]["tokens"] == (
         "'day'", "' Friday'", "' Saturday'", "' Sunday'"
     )
     assert torch.equal(here.result("logit_diff"), shipped.result("logit_diff"))

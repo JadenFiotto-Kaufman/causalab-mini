@@ -20,7 +20,7 @@ no table to live in: it is in the returned plan, at
 one that never gets there, because a write that could not land refuses the run
 and names the rows and the reason. Letting a save name `positions` would give
 it a file through the mechanism that already exists; it is not built, because
-a pass with no dynamic position records nothing and the save would then be a
+a step with no dynamic position records nothing and the save would then be a
 refusal the document could not have predicted.
 """
 

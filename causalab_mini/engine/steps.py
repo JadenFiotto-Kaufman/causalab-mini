@@ -455,7 +455,7 @@ def _writes_land(forward: Forward, record: Record, start: int) -> None:
     landing policies are not implemented.
 
     Both are checked here, at the write, because here is where the positions
-    are. `start` puts the row numbers back in the pass's own terms, so a
+    are. `start` puts the row numbers back in the step's own terms, so a
     batched run names the row an author would count to.
     """
     for tap in forward.taps:
@@ -524,7 +524,7 @@ def fit(engine: Any, step: Fit, state: State) -> None:
             loss.backward()
             optimizer.step()
             losses.append(loss.detach().cpu())
-        # The eval pass runs in eval mode: no gradients, and on rows the fit
+        # The evaluation runs in eval mode: no gradients, and on rows the fit
         # never saw.
         _training(featurizers, step.params, False)
         with torch.no_grad():

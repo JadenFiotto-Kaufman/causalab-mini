@@ -16,13 +16,13 @@ from safetensors.torch import save_file
 
 from causalab_mini import ops, plan
 from causalab_mini.ops import featurizer
-from causalab_mini.plan.spec_v2 import Spec
+from causalab_mini.plan.spec import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-DAS = REPO / "tests" / "fixtures" / "v2_old" / "das.json"
-APPLY = REPO / "tests" / "fixtures" / "v2_old" / "das_apply.json"
-HARVEST = REPO / "tests" / "fixtures" / "v2_old" / "pca_harvest.json"
-CONTROL = REPO / "tests" / "fixtures" / "v2_old" / "pca_control.json"
+DAS = REPO / "documents" / "v2" / "das.json"
+APPLY = REPO / "documents" / "v2" / "das_apply.json"
+HARVEST = REPO / "documents" / "v2" / "pca_harvest.json"
+CONTROL = REPO / "documents" / "v2" / "pca_control.json"
 
 
 def _fit_into(tmp_path, data_root, engine):
@@ -163,21 +163,18 @@ def test_a_pca_basis_cannot_be_trained_or_written():
     with pytest.raises(ValidationError, match="a pca, which is fixed by definition"):
         Spec.model_validate(raw)
     harvest = json.loads(HARVEST.read_text())
-    harvest["interventions"]["ablate"] = {
-        "reads": {"logits": {"site": "target", "pos": -1, "model": "m", "input": "base"}},
-        "writes": {"w": {"site": "target", "pos": -1, "mechanism": "swap", "operand": {"ref": "basis"}}},
-        "models": {"m": {"input": "base", "writes": ["w"]}},
+    harvest["steps"]["ablated"] = {
+        "kind": "forward", "data": "prompts", "field": "input",
+        "interventions": {"writes": {"w": {"site": "target", "pos": -1, "mechanism": "swap", "operand": "basis"}}},
     }
-    harvest["steps"]["harvest"]["interventions"] = "harvest"  # two interventions now: each step says which
-    harvest["steps"]["ablate"] = {"kind": "observe", "interventions": "ablate", "rows": {"base": "weekdays/train"}}
-    with pytest.raises(plan.PlanError, match="a basis is loaded as a featurizer, not written"):
-        plan.build_request(harvest, REPO / "documents" / "data", __import__("causalab_mini.engine", fromlist=["NNterpEngine"]).NNterpEngine.load(Spec.model_validate(json.loads(DAS.read_text())).model, dispatch=False))
+    with pytest.raises(ValidationError, match="a pca basis is loaded as a featurizer, not written"):
+        Spec.model_validate(harvest)
 
 
 def test_a_pca_of_too_few_vectors_is_refused_before_any_forward(data_root, model_engine):
     """Four rows at one position each are four vectors; centered, they span
     three directions. The compiler knows the count from the positions."""
     raw = json.loads(HARVEST.read_text())
-    raw["interventions"]["harvest"]["reads"]["acts"]["pos"] = -1
+    raw["steps"]["harvest"]["reads"]["acts"]["pos"] = -1
     with pytest.raises(plan.PlanError, match="4 principal directions of 4 vector"):
         plan.build_request(raw, data_root, model_engine)

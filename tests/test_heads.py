@@ -25,14 +25,14 @@ from causalab_mini.address import AddressError
 from causalab_mini.engine import NNterpEngine
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.ops import intervene
-from causalab_mini.plan.spec_v2 import Spec
+from causalab_mini.plan.spec import Spec
 from causalab_mini.shapes import Selection
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-PATCHING = REPO / "tests" / "fixtures" / "v2_old" / "patching.json"
-HEADS = REPO / "tests" / "fixtures" / "v2_old" / "head_patching.json"
-KNOCKOUT = REPO / "tests" / "fixtures" / "v2_old" / "attention_knockout.json"
-DAS = REPO / "tests" / "fixtures" / "v2_old" / "das.json"
+PATCHING = REPO / "documents" / "v2" / "patching.json"
+HEADS = REPO / "documents" / "v2" / "head_patching.json"
+KNOCKOUT = REPO / "documents" / "v2" / "attention_knockout.json"
+DAS = REPO / "documents" / "v2" / "das.json"
 
 
 def _at(component, heads=None):
@@ -111,10 +111,10 @@ def test_two_sites_of_disjoint_heads_are_one_tap_and_add_up(data_root, model_eng
     place. Two sites at one component share its address, hence its tap."""
     raw = _at("attention_z", [0, 1])
     raw["sites"]["rest"] = {"component": "attention_z", "layers": [0], "heads": [2, 3]}
-    one = raw["interventions"]["patching"]
-    one["reads"]["v_rest"] = {**one["reads"]["v_cf"], "site": "rest"}
-    one["writes"]["patch_rest"] = {**one["writes"]["patch"], "site": "rest", "operand": "v_rest"}
-    one["models"]["patched"]["writes"] = ["patch", "patch_rest"]
+    reads = raw["steps"]["counterfactual"]["reads"]
+    reads["v_rest"] = {**reads["v_cf"], "site": "rest"}
+    writes = raw["steps"]["patched"]["interventions"]["writes"]
+    writes["patch_rest"] = {**writes["patch"], "site": "rest", "operand": "counterfactual.v_rest"}
 
     built = plan.build_request(raw, data_root, model_engine)
     (tap,) = [t for t in of_kind(built, plan.Forward)[-1].taps if t.writes]
@@ -183,7 +183,7 @@ def test_the_pattern_is_a_distribution_over_keys_per_head(data_root, eager_engin
     raw = json.loads(KNOCKOUT.read_text())
     raw["sites"]["one_head"]["heads"] = [0]
     executed = eager_engine.execute(plan.build_request(raw, data_root, eager_engine))
-    pattern = executed.result("pattern")
+    pattern = executed.result("clean.pattern")
 
     rows, window, flat = pattern.shape
     assert (rows, window) == (4, 1) and flat % 4 == 0
@@ -195,15 +195,15 @@ def test_the_scores_are_what_the_softmax_turns_into_the_pattern(data_root, eager
     raw = json.loads(KNOCKOUT.read_text())
     raw["sites"]["one_head"]["heads"] = [0]
     raw["sites"]["scores"] = {"component": "attention_scores", "layers": [0]}
-    one = raw["interventions"]["knockout"]
-    one["reads"]["scores"] = {**one["reads"]["pattern"], "site": "scores"}
-    one["models"]["patched"]["writes"] = []
-    raw["steps"]["score"]["outputs"]["last_scores"] = {"read": "scores"}
+    reads = raw["steps"]["clean"]["reads"]
+    reads["scores"] = {**reads["pattern"], "site": "scores"}
+    del raw["steps"]["patched"]["interventions"]
+    raw["steps"]["saves"]["clean.scores"] = "scores.safetensors"
     executed = eager_engine.execute(plan.build_request(raw, data_root, eager_engine))
 
-    rows = executed.result("scores").shape[0]
-    scores = executed.result("scores").reshape(rows, 4, -1)
-    assert torch.equal(scores.softmax(-1), executed.result("pattern").reshape(rows, 4, -1))
+    rows = executed.result("clean.scores").shape[0]
+    scores = executed.result("clean.scores").reshape(rows, 4, -1)
+    assert torch.equal(scores.softmax(-1), executed.result("clean.pattern").reshape(rows, 4, -1))
 
 
 def test_knocking_out_a_head_is_zeroing_its_z(data_root, eager_engine):
@@ -219,7 +219,7 @@ def test_knocking_out_a_head_is_zeroing_its_z(data_root, eager_engine):
     assert torch.allclose(via_pattern, _score(via_z, data_root, eager_engine), rtol=0, atol=1e-6)
 
     unpatched = copy.deepcopy(knock)
-    unpatched["interventions"]["knockout"]["models"]["patched"]["writes"] = []
+    del unpatched["steps"]["patched"]["interventions"]
     assert not torch.equal(via_pattern, _score(unpatched, data_root, eager_engine))
 
 
@@ -231,7 +231,7 @@ def test_the_pattern_survives_being_shipped(data_root, eager_engine):
     raw["sites"]["one_head"]["heads"] = [1]
     here = eager_engine.execute(plan.build_request(raw, data_root, eager_engine))
     shipped = eager_engine.execute(plan.build_request(raw, data_root, eager_engine), remote="local")
-    for name in ("logit_diff", "pattern"):
+    for name in ("logit_diff", "clean.pattern"):
         assert torch.equal(here.result(name), shipped.result(name)), name
 
 
@@ -293,7 +293,7 @@ def test_a_gate_over_neurons_is_a_gate_at_a_site_of_units(data_root, model_engin
     """DBM over a chosen set of neurons: nothing but the site changed."""
     from causalab_mini.plan import sweep
 
-    _, raw = sweep.points(json.loads((REPO / "tests" / "fixtures" / "v2_old" / "dbm.json").read_text()))[0]
+    _, raw = sweep.points(json.loads((REPO / "documents" / "v2" / "dbm.json").read_text()))[0]
     raw["sites"]["target"] = {"component": "mlp_activation", "layers": [0], "units": [0, 2, 4, 6]}
     built = plan.build_request(raw, data_root, model_engine)
     (spec,) = built.step("featurizers", plan.Featurizers).specs
@@ -316,7 +316,7 @@ def test_what_a_site_of_units_may_not_say(data_root, model_engine):
 # swapping a counterfactual's pattern in
 # --------------------------------------------------------------------- #
 
-PATTERN = REPO / "tests" / "fixtures" / "v2_old" / "attention_pattern_patching.json"
+PATTERN = REPO / "documents" / "v2" / "attention_pattern_patching.json"
 
 
 def _pattern_raw(heads):
@@ -328,30 +328,31 @@ def _pattern_raw(heads):
 
 
 def test_the_patched_head_looks_where_it_did_on_the_counterfactual(data_root, eager_engine):
-    """Read the pattern back in the patched model — a read sees its model's
-    writes — for the patched head and for a bystander."""
+    """Read the pattern back in the patched forward — a read sees its step's
+    writes — for the patched head and for a bystander, which a clean forward
+    over the same prompts reads too."""
     raw = _pattern_raw([2])
     raw["sites"]["bystander"] = {"component": "attention_probs", "layers": [0], "heads": [1]}
-    one = raw["interventions"]["pattern_patching"]
-    one["reads"]["ours_after"] = {"site": "one_head", "pos": -1, "model": "patched", "input": "base"}
-    one["reads"]["bystander_after"] = {"site": "bystander", "pos": -1, "model": "patched", "input": "base"}
-    one["reads"]["bystander_before"] = {"site": "bystander", "pos": -1, "model": "original", "input": "base"}
-    raw["steps"]["score"]["outputs"] = {name: {"read": read} for name, read in (
-        ("theirs", "their_pattern"), ("after", "ours_after"), ("by_after", "bystander_after"), ("by_before", "bystander_before"))}
-    got = eager_engine.execute(plan.build_request(raw, data_root, eager_engine)).result
+    clean = {"kind": "forward", "data": "pairs", "field": "input", "reads": {"bystander": {"site": "bystander", "pos": -1}}}
+    raw["steps"] = {"clean": clean, **raw["steps"]}
+    raw["steps"]["patched"]["reads"]["ours"] = {"site": "one_head", "pos": -1}
+    raw["steps"]["patched"]["reads"]["bystander"] = {"site": "bystander", "pos": -1}
+    for read in ("counterfactual.their_pattern", "patched.ours", "patched.bystander", "clean.bystander"):
+        raw["steps"]["saves"][read] = f"{read}.safetensors"
+    got = eager_engine.execute(plan.build_request(raw, data_root, eager_engine)).all_results()
 
-    assert torch.equal(got("ours_after"), got("their_pattern")), "head 2 now attends as it did on the counterfactual"
-    assert torch.equal(got("bystander_after"), got("bystander_before")), "head 1 was not touched"
-    after = got("ours_after")
+    after = got["patched.ours"]
+    assert torch.equal(after, got["counterfactual.their_pattern"]), "head 2 now attends as it did on the counterfactual"
+    assert torch.equal(got["patched.bystander"], got["clean.bystander"]), "head 1 was not touched"
     assert torch.allclose(after.sum(-1), torch.ones(after.shape[:2]), atol=1e-6), "still a distribution"
 
 
 def test_a_pattern_from_the_same_prompt_changes_nothing(data_root, eager_engine):
     raw = _pattern_raw([0, 1, 2, 3])
     patched = _score(raw, data_root, eager_engine)
-    raw["roles"]["counterfactual"]["field"] = raw["roles"]["base"]["field"]
+    raw["steps"]["counterfactual"]["field"] = raw["steps"]["patched"]["field"]
     same = _score(raw, data_root, eager_engine)
-    raw["interventions"]["pattern_patching"]["models"]["patched"]["writes"] = []
+    del raw["steps"]["patched"]["interventions"]
     clean = _score(raw, data_root, eager_engine)
     assert torch.allclose(same, clean, rtol=0, atol=1e-6)
     assert not torch.allclose(patched, clean, rtol=0, atol=1e-6)
@@ -362,19 +363,19 @@ def test_prompts_laid_out_differently_are_refused_before_any_forward(data_root, 
     counterfactual days tokenize to different lengths, so key j there is a
     different word — or a pad — here, and every shape would still be right."""
     raw = _pattern_raw([0])
-    raw["steps"]["score"]["rows"] = {"base": "weekdays/train", "counterfactual": "weekdays/train"}
+    raw["data"]["pairs"]["path"] = "weekdays/train"
     with pytest.raises(plan.PlanError, match="must tokenize to the same length, row by row"):
         plan.build_request(raw, data_root, eager_engine)
 
 
-def test_a_pattern_published_by_an_earlier_step_cannot_be_checked(data_root, eager_engine):
+def test_a_pattern_with_no_prompts_behind_it_cannot_be_checked(data_root, eager_engine):
+    """A mean of the pattern is a tensor with no prompts behind it, so there
+    is no layout to check it against, and a write that swaps it in is
+    refused."""
     raw = _pattern_raw([0])
-    one = raw["interventions"]["pattern_patching"]
-    raw["interventions"]["harvest"] = {"reads": {"their_pattern": one["reads"].pop("their_pattern")}}
-    one["writes"]["look_there"]["operand"] = {"ref": "kept"}
-    score = raw["steps"].pop("score")
-    raw["steps"] = {"harvest": {"kind": "observe", "interventions": "harvest", "rows": score["rows"],
-                                "outputs": {"kept": {"read": "their_pattern"}}},
-                    "score": {**score, "interventions": "pattern_patching"}}
-    with pytest.raises(plan.PlanError, match="swap one read in the same pass"):
+    steps = raw["steps"]
+    raw["steps"] = {"counterfactual": steps.pop("counterfactual"),
+                    "kept": {"kind": "reduce", "reduce": "mean", "of": "counterfactual.their_pattern"}, **steps}
+    steps["patched"]["interventions"]["writes"]["look_there"]["operand"] = "kept"
+    with pytest.raises(plan.PlanError, match="has no prompts to check its layout against"):
         plan.build_request(raw, data_root, eager_engine)

@@ -332,8 +332,8 @@ def test_a_fit_leaves_no_gradient_on_the_model(model_engine, das_plan):
 def das_plan_model():
     import json, pathlib
 
-    from causalab_mini.plan.spec_v2 import Spec
+    from causalab_mini.plan.spec import Spec
 
     return Spec.model_validate(
-        json.loads((pathlib.Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "v2_old" / "das.json").read_text())
+        json.loads((pathlib.Path(__file__).resolve().parents[1] / "documents" / "v2" / "das.json").read_text())
     ).model

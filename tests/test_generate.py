@@ -1,7 +1,8 @@
 """The continuation frame: a forward that decodes, and taps at its steps.
 
-`decode: N` on an intervention makes every forward a prefill plus N greedy
-steps, and `{"frame": "generated", …}` is a position along what it said.
+A `generate` step is a forward that decodes — a prefill plus
+`max_new_tokens` steps — and `{"frame": "generated", …}` is a position along
+what it said.
 
 Two halves, and the difference between them is what the *run* has to have
 seen. `{"index": k}` with k >= 0 is a step the decode reaches, so a tap
@@ -13,7 +14,7 @@ and `engine/steps.py` cuts the stack afterwards. A write may not name one
 of those at all, and says so.
 
 Prompt-frame taps apply at the prefill and reach the continuation only
-through the cache. The generated ids come home under the forward's own name.
+through the cache. The generated ids come home under the step's own name.
 """
 
 import json
@@ -28,10 +29,10 @@ from causalab_mini import plan
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.plan import sweep
 from causalab_mini.plan.explain import explain
-from causalab_mini.plan.spec_v2 import Spec
+from causalab_mini.plan.spec import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-PROBE = REPO / "tests" / "fixtures" / "v2_old" / "generate_probe.json"
+PROBE = REPO / "documents" / "v2" / "generate_probe.json"
 
 
 @pytest.fixture
@@ -41,15 +42,13 @@ def probe_raw():
 
 def _unswept(raw, step=1):
     raw = json.loads(json.dumps(raw))
-    raw["interventions"]["generate"]["reads"]["logits"]["pos"] = {
-        "frame": "generated", "index": step
-    }
+    raw["steps"]["patched"]["reads"]["logits"]["pos"] = {"frame": "generated", "index": step}
     return raw
 
 
 def _at(raw, pos):
     raw = json.loads(json.dumps(raw))
-    raw["interventions"]["generate"]["reads"]["logits"]["pos"] = pos
+    raw["steps"]["patched"]["reads"]["logits"]["pos"] = pos
     return raw
 
 
@@ -65,7 +64,7 @@ def test_a_decoding_forward_yields_ids_and_a_per_step_read(probe_raw, data_root,
 
     executed = model_engine.execute(built)
     assert tuple(executed.result("patched").shape) == (4, 3)
-    assert tuple(executed.result("original").shape) == (4, 3)
+    assert tuple(executed.result("counterfactual").shape) == (4, 3)
     assert executed.result("p_answer").shape == (4,)
 
 
@@ -80,16 +79,10 @@ def test_a_prefill_write_reaches_the_continuation_through_the_cache(probe_raw, d
     patched = model_engine.execute(plan.build_request(raw, data_root, model_engine))
 
     clean = json.loads(json.dumps(raw))
-    one = clean["interventions"]["generate"]
-    del one["writes"], one["models"], one["reads"]["v_cf"]
-    one["reads"]["logits"]["model"] = "original"
-    clean["steps"]["score"]["saves"] = [{"value": "p_answer", "file_path": "p_answer.json"}]
+    del clean["steps"]["patched"]["interventions"]
     plain = model_engine.execute(plan.build_request(clean, data_root, model_engine))
 
-    assert not torch.equal(
-        patched.result("p_answer"),
-        plain.result("p_answer"),
-    )
+    assert not torch.equal(patched.result("p_answer"), plain.result("p_answer"))
 
 
 def test_sweeping_the_step_is_one_point_per_decode_step(probe_raw, data_root, model_engine):
@@ -115,10 +108,10 @@ def test_steering_is_a_write_at_every_step(probe_raw, data_root, model_engine):
     """`{"frame": "generated", "all": true}` with add_scaled: the last-token
     residual, scaled, added at every decode step at the last position."""
     raw = _unswept(probe_raw, step=2)
-    one = raw["interventions"]["generate"]
-    one["writes"]["patch"] = {"site": "target", "pos": {"frame": "generated", "all": True},
-                              "mechanism": "add_scaled", "operand": "v_cf",
-                              "params": {"scale": 4.0}}
+    raw["steps"]["patched"]["interventions"]["writes"]["patch"] = {
+        "site": "target", "pos": {"frame": "generated", "all": True},
+        "mechanism": "add_scaled", "operand": "counterfactual.v_cf", "params": {"scale": 4.0},
+    }
     built = plan.build_request(raw, data_root, model_engine)
     tap = of_kind(built, plan.Forward)[1].taps[0]
     assert tap.step == "all" and tap.writes[0].mechanism == "add_scaled"
@@ -129,18 +122,25 @@ def test_steering_is_a_write_at_every_step(probe_raw, data_root, model_engine):
 GENERATED = {"frame": "generated"}
 
 
+def _forward(step):
+    """The same step, as a forward that does not decode."""
+    for key in ("max_new_tokens", "min_new_tokens", "do_sample"):
+        del step[key]
+    step["kind"] = "forward"
+
+
 @pytest.mark.parametrize(
     "edit, message",
     [
-        (lambda one: one["reads"]["logits"].update(pos={**GENERATED, "index": 3}),
+        (lambda step: step["reads"]["logits"].update(pos={**GENERATED, "index": 3}),
          "step 3 of a 3-token decode"),
-        (lambda one: one.update(decode=0), "a generated position needs `decode` > 0"),
-        (lambda one: one["writes"]["patch"].update(pos={**GENERATED, "index": -1}),
+        (_forward, "a position in the continuation frame needs a generate step"),
+        (lambda step: step["interventions"]["writes"]["patch"].update(pos={**GENERATED, "index": -1}),
          "a write in the continuation frame is at a step the decode has reached"),
-        (lambda one: one["writes"]["patch"].update(pos={**GENERATED, "all": True,
-                                                        "scope": {"segment": "eos"}}),
+        (lambda step: step["interventions"]["writes"]["patch"].update(pos={**GENERATED, "all": True,
+                                                                           "scope": {"segment": "eos"}}),
          "takes no scope"),
-        (lambda one: one["writes"]["patch"].update(pos={**GENERATED, "index": 9}),
+        (lambda step: step["interventions"]["writes"]["patch"].update(pos={**GENERATED, "index": 9}),
          "step 9 of a 3-token decode"),
     ],
     ids=["past the budget", "no decode", "a write at the last token",
@@ -151,7 +151,7 @@ def test_what_a_continuation_position_may_not_be(probe_raw, edit, message):
     whole of it by the time it chooses. A write happens during the decode,
     so it may only name a step the decode has reached."""
     raw = _unswept(probe_raw, step=1)
-    edit(raw["interventions"]["generate"])
+    edit(raw["steps"]["patched"])
     with pytest.raises(ValidationError, match=message):
         Spec.model_validate(raw)
 
@@ -169,12 +169,12 @@ def test_the_last_generated_token_is_read_out_of_every_step(probe_raw, data_root
     dynamic = plan.build_request(_at(probe_raw, {**GENERATED, "index": -1}), data_root, model_engine)
     taps = of_kind(dynamic, plan.Forward)[1].taps
     stacked = [op for tap in taps for op in tap.reads if op.stack]
-    assert [(op.name, op.stack) for op in stacked] == [(f"logits@{k}", "logits") for k in range(3)]
+    assert [(op.name, op.stack) for op in stacked] == [(f"patched.logits@{k}", "patched.logits") for k in range(3)]
 
     last = model_engine.execute(dynamic)
     static = model_engine.execute(plan.build_request(_unswept(probe_raw, step=2), data_root, model_engine))
     assert torch.equal(last.result("p_answer"), static.result("p_answer"))
-    assert last.step("patched", plan.Forward).results["positions"]["logits"]["rows"] == ((2,),) * 4
+    assert last.step("patched", plan.Forward).results["positions"]["patched.logits"]["rows"] == ((2,),) * 4
 
 
 def test_a_read_over_a_stack_is_refused_when_it_would_hold_too_much(
@@ -200,7 +200,7 @@ def test_a_read_over_a_stack_is_refused_when_it_would_hold_too_much(
 # --------------------------------------------------------------------- #
 
 
-ANSWER = REPO / "tests" / "fixtures" / "v2_old" / "generated_answer.json"
+ANSWER = REPO / "documents" / "v2" / "generated_answer.json"
 
 
 def test_whether_the_model_said_it_is_a_result_and_not_an_exception(data_root, model_engine):
@@ -211,7 +211,7 @@ def test_whether_the_model_said_it_is_a_result_and_not_an_exception(data_root, m
     raw = json.loads(ANSWER.read_text())
     executed = model_engine.execute(plan.build_request(raw, data_root, model_engine))
     assert executed.step("p_answer", plan.Metric).results["eligible"]["p_answer"] == (True, True, False, False)
-    said = executed.step("original", plan.Forward).results["positions"]["at_said"]
+    said = executed.step("answer", plan.Forward).results["positions"]["answer.at_said"]
     assert said["reason"] == ("", "", "alignment_missing", "alignment_missing")
     assert said["tokens"] == ("' substr'", "' energ'", "", "")
     # and the step it landed on is the row's own, not a number counted once
@@ -220,13 +220,13 @@ def test_whether_the_model_said_it_is_a_result_and_not_an_exception(data_root, m
 
 
 def test_a_row_that_never_stopped_says_so_rather_than_ending_the_run(data_root, model_engine):
-    """`{"scope": {"segment": "eos"}}` is where the row stopped. Mini holds
-    EOS off so the decode runs to its bound and the batch stays rectangular
-    — a deliberate difference — so no row stops here, and every row comes
-    back `alignment_missing` instead of the run failing."""
+    """`{"scope": {"segment": "eos"}}` is where the row stopped. A tapped
+    generate step holds EOS off — `min_new_tokens` is its bound — so the
+    decode runs to it and the batch stays rectangular; no row stops here,
+    and every row comes back `alignment_missing` instead of the run failing."""
     raw = json.loads(ANSWER.read_text())
     executed = model_engine.execute(plan.build_request(raw, data_root, model_engine))
-    stop = executed.step("original", plan.Forward).results["positions"]["at_stop"]
+    stop = executed.step("answer", plan.Forward).results["positions"]["answer.at_stop"]
     assert stop["rows"] == ((),) * 4
     assert set(stop["reason"]) == {"alignment_missing"}
 
@@ -235,7 +235,7 @@ def test_the_continuation_frame_prints_as_itself(data_root, model_engine):
     """And a read the run cuts out of the continuation prints as the one
     read the document wrote, not as the six ops the plan carries."""
     text = explain(plan.build_request(json.loads(ANSWER.read_text()), data_root, model_engine))
-    assert "read  'at_said' at lm_head over 6 steps" in text
+    assert "read  'answer.at_said' at lm_head over 6 steps" in text
     assert "pos={generated index:-1 scope:{variable:said}}" in text
     assert "pos={generated index:-1 scope:{segment:eos}}" in text
     assert "at_said@" not in text
@@ -249,22 +249,21 @@ def test_a_tap_in_the_continuation_frame_reports_where_it_was(
     the step, and the token the model produced there. The table carries it,
     which is where a reader asks "of what token" about a number."""
     raw = _at(probe_raw, {**GENERATED, "index": 2})
-    one = raw["interventions"]["generate"]
-    one["writes"]["patch"]["pos"] = {**GENERATED, "all": True}
-    one["writes"]["patch"].update(mechanism="add_scaled", params={"scale": 4.0})
+    patch = raw["steps"]["patched"]["interventions"]["writes"]["patch"]
+    patch.update(pos={**GENERATED, "all": True}, mechanism="add_scaled", params={"scale": 4.0})
     executed = model_engine.execute(plan.build_request(raw, data_root, model_engine))
     where = executed.step("patched", plan.Forward).results["positions"]
 
-    assert where["logits"]["rows"] == ((2,),) * 4, "the decode step, not a prompt index"
-    assert where["patch"]["rows"] == ((0, 1, 2),) * 4, "a steering write is every step"
-    assert set(where["logits"]["reason"]) == {""}
-    # the counterfactual's forward has no position the document leaves
-    # open, so it reports nothing
-    assert "positions" not in executed.step("original", plan.Forward).results
+    assert where["patched.logits"]["rows"] == ((2,),) * 4, "the decode step, not a prompt index"
+    assert where["patched.patch"]["rows"] == ((0, 1, 2),) * 4, "a steering write is every step"
+    assert set(where["patched.logits"]["reason"]) == {""}
+    # the counterfactual's step has no position the document leaves open,
+    # so it reports nothing
+    assert "positions" not in executed.step("counterfactual", plan.Forward).results
     # and what the model said at step 2 is what the provenance shows
     generated = executed.result("patched")
     said = model_engine.tokenizer.decode([int(generated[0][2])])
-    assert said in where["logits"]["tokens"][0]
+    assert said in where["patched.logits"]["tokens"][0]
 
     executed.write(tmp_path)
     row = json.loads((tmp_path / "p_answer.json").read_text())[0]

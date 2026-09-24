@@ -79,7 +79,7 @@ class ReadOp:
 class WriteOp:
     name: str
     at: Selection
-    #: A name — a read of this pass, or an output published before it — a
+    #: The name of a value an earlier step produced — a read, a mean — a
     #: literal number (zero ablation is `0.0`), or nothing for a mechanism
     #: that takes none.
     operand: str | float | None
@@ -353,10 +353,10 @@ class Plan(Step):
         """The one result called `name` in this subtree.
 
         The search descends through **steps** and stops at them: a `Fit`'s own
-        results are found, the hundreds of per-update passes inside it are not,
+        results are found, the hundreds of per-update plans inside it are not,
         or every fitted document would have an ambiguous `iia`. Those are still
         there to read, by attribute, where they happened —
-        `root.steps["fit"].epochs[0][0].results["iia"]`.
+        `root.step("fit", Fit).epochs[0][0].result("iia")`.
 
         Result names come from the document and are unique within a plan; a
         sweep repeats them across its points, and naming the point
@@ -393,7 +393,7 @@ class Plan(Step):
 
 def steps_of(step: Step) -> tuple[Step, ...]:
     """The steps one step contains, for a *name* lookup: what a plan
-    declares, and nothing else. A `Fit`'s passes are its own workings rather
+    declares, and nothing else. A `Fit`'s updates are its own workings rather
     than steps of the plan, so a name search stops there — see
     `Plan.result`. `children` is the wider walk, for writing.
     """
@@ -404,8 +404,8 @@ def children(step: Step) -> tuple[tuple[str, Step], ...]:
     """Every step inside this one, named, for a walk that is about *places*
     rather than names: writing files, or reading what a run produced.
 
-    Unlike `steps_of` this descends into a fit, because a fit's eval pass is
-    a place a save may sit. It stops at the per-update passes, which are the
+    Unlike `steps_of` this descends into a fit, because a fit's evaluation is
+    a place a save may sit. It stops at the per-update plans, which are the
     fit's own workings and carry no saves.
     """
     if isinstance(step, Plan):

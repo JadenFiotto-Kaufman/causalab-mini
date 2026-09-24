@@ -5,10 +5,11 @@ the tokenizer, the rows on disk, the model's layer count and hidden width, the
 shuffle a seed defines — is decided here, once, on the client. What comes out
 the other side is `plan.Plan`: strings and integers.
 
-The order of the work is the order of the file: resolve every site to an
-`Address`, load every role's rows, derive each featurizer's width, compile one
-`_pass` per set of rows (the scored run, and one per training update), and
-finally the save manifest.
+Each front end resolves every site to an `Address`, loads the rows, derives
+each featurizer's width and compiles its document's steps — once for the
+scored run, and once per training update and evaluation of a fit — and hands
+every model call to `_forward` in one shape, so what a call is cannot differ
+between them. `build_request` is the entry point, and tells them apart.
 """
 
 from __future__ import annotations
@@ -270,7 +271,7 @@ def _spec_fit(spec: Spec, name: str, fit: Any, table: Any, sites: _Sites, tokeni
         return table(fit.eval.data.get(key, key))
 
     evaluation = body(held)
-    # a body's value a save names, `<fit>.<ref>`, is its held-out pass's;
+    # a body's value a save names, `<fit>.<ref>`, is its held-out run's;
     # `<fit>` and `<fit>.<featurizer>` are the fit's own
     for ref, file in spec.steps.saves.items():
         head, _, inner = ref.partition(".")
@@ -1288,8 +1289,9 @@ def _check_keys(write: Any, forward: Forward, source: Forward | None) -> None:
     """
     if source is None:
         raise PlanError(
-            f"write {write.name!r}: an attention pattern from an earlier step cannot be checked "
-            "against these prompts' layout; swap one read in the same pass"
+            f"write {write.name!r}: an attention pattern that is not a forward's read here — a "
+            "reduction, or a value from outside these steps — has no prompts to check its layout "
+            "against; swap in a read of the pattern itself"
         )
     rows = tokens.same_layout(source.attention_mask, forward.attention_mask)
     if rows is None:

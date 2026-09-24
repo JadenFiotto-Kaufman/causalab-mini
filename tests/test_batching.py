@@ -2,9 +2,9 @@
 
 It is a property of the run, not of the experiment, so it arrives with
 `execute` and is absent from the plan. The shared walk does the windowing —
-a window of rows is a whole small pass, handed to an unchanged
-`engine.forward` — so every engine gets it, and everything after the
-forwards (metrics, outputs, saves, a fit's loss) sees one pass.
+a window of rows is the same model call over fewer rows, handed to an
+unchanged `engine.forward` — so every engine gets it, and every step after
+the call (metrics, reduces, saves, a fit's loss) sees all its rows.
 """
 
 import json
@@ -18,10 +18,10 @@ from causalab_mini import plan
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.ops import intervene
 from causalab_mini.plan import sweep
-from causalab_mini.plan.spec_v2 import Spec
+from causalab_mini.plan.spec import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-V2 = REPO / "tests" / "fixtures" / "v2_old"
+V2 = REPO / "documents" / "v2"
 
 
 def _point(name):
@@ -88,7 +88,7 @@ def test_rows_of_a_value_follow_its_layout():
 
 
 # --------------------------------------------------------------------- #
-# every kind of pass, windowed
+# every kind of step, windowed
 # --------------------------------------------------------------------- #
 
 
@@ -142,28 +142,18 @@ def test_a_ragged_harvest_is_concatenated_in_row_order(data_root, model_engine):
     _same_everywhere(whole, windowed)
 
 
-def test_a_per_row_output_reaches_the_window_of_its_own_rows(data_root, model_engine):
-    """The case a careless windowing gets wrong: step one publishes a value
-    that still has its rows, step two swaps it in. Window k of step two must
-    be handed rows k of it — were it handed the whole thing, or window 0's,
-    the patch would land on the wrong examples and still have the right
-    shape."""
+def test_a_per_row_value_reaches_the_window_of_its_own_rows(data_root, model_engine):
+    """The case a careless windowing gets wrong: one step reads a value that
+    still has its rows, a later step swaps it in, and each step is windowed
+    on its own. Window k of the later step must be handed rows k of it —
+    were it handed the whole thing, or window 0's, the patch would land on
+    the wrong examples and still have the right shape. In `patching.json`
+    that value is `counterfactual.v_cf`, taken by `patched`, and one row at
+    a time is the whole run's numbers."""
     raw = _point("patching.json")
-    one = raw["interventions"]["patching"]
-    raw["interventions"] = {
-        "harvest": {"reads": {"v_cf": one["reads"]["v_cf"]}, "writes": {}, "models": {}, "metrics": {}},
-        "apply": {**one, "reads": {"logits": one["reads"]["logits"]},
-                  "writes": {"patch": {**one["writes"]["patch"], "operand": {"ref": "kept"}}}},
-    }
-    score = raw["steps"].pop("score")
-    raw["steps"] = {
-        "harvest": {"kind": "observe", "interventions": "harvest", "rows": score["rows"],
-                    "outputs": {"kept": {"read": "v_cf"}}},
-        "score": {**score, "interventions": "apply"},
-    }
-    direct = model_engine.execute(plan.build_request(_point("patching.json"), data_root, model_engine))
-    chained = model_engine.execute(plan.build_request(raw, data_root, model_engine), batch_size=1)
-    assert _agree(direct.result("logit_diff"), chained.result("score.logit_diff"))
+    whole = model_engine.execute(plan.build_request(raw, data_root, model_engine))
+    one_by_one = model_engine.execute(plan.build_request(raw, data_root, model_engine), batch_size=1)
+    assert _agree(whole.result("logit_diff"), one_by_one.result("logit_diff"))
 
 
 # --------------------------------------------------------------------- #
@@ -174,7 +164,8 @@ def test_a_per_row_output_reaches_the_window_of_its_own_rows(data_root, model_en
 def test_a_fit_still_trains_when_its_passes_are_windowed(data_root, model_engine):
     """The loss is the mean over the concatenated rows, so the gradient is
     the whole minibatch's. (That also means windowing frees no memory inside
-    an update: a fit's memory knob is `pairs`. It does bound the eval pass.)"""
+    an update: a fit's memory knob is its own `batch_size`. It does bound the
+    eval pass.)"""
     raw = _point("das.json")
     whole = model_engine.execute(plan.build_request(raw, data_root, model_engine))
     windowed = model_engine.execute(plan.build_request(raw, data_root, model_engine), batch_size=1)

@@ -20,11 +20,11 @@ from causalab_mini import plan
 from causalab_mini.engine import steps
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.ops import featurizer
-from causalab_mini.plan.spec_v2 import Spec
+from causalab_mini.plan.spec import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-DBM = REPO / "tests" / "fixtures" / "v2_old" / "dbm.json"
-PATCHING = REPO / "tests" / "fixtures" / "v2_old" / "patching.json"
+DBM = REPO / "documents" / "v2" / "dbm.json"
+PATCHING = REPO / "documents" / "v2" / "patching.json"
 
 
 @pytest.fixture
@@ -137,9 +137,14 @@ def test_the_two_engines_learn_the_same_mask(dbm_raw, data_root, model_engine):
 
 
 def _apply(dbm_raw, bundle):
+    """The document with its fit taken out: the score after it, on a mask
+    loaded from `bundle` — which nothing trains, so it is named `mask`."""
     raw = copy.deepcopy(dbm_raw)
     raw["featurizers"]["mask"]["file_path"] = str(bundle)
-    raw["steps"] = {"score": raw["steps"]["score"]}
+    raw["interventions"]["cf_read"]["reads"]["v_cf"]["featurizer"] = "mask"
+    raw["interventions"]["dbm"]["writes"]["patch"]["featurizer"] = "mask"
+    del raw["steps"]["fit"]
+    raw["steps"]["saves"] = {"iia": "iia.json"}
     return raw
 
 
@@ -160,9 +165,9 @@ def test_an_all_on_gate_is_plain_patching_and_an_all_off_gate_is_nothing(
     interchange `patching.json` does, bit for bit; every unit off is the
     un-intervened model."""
     patching = json.loads(PATCHING.read_text())
-    patching["steps"]["score"]["rows"] = dbm_raw["steps"]["score"]["rows"]
+    patching["data"]["pairs"] = dbm_raw["data"]["train"]
     whole = model_engine.execute(plan.build_request(patching, data_root, model_engine)).result("logit_diff")
-    patching["interventions"]["patching"]["models"]["patched"]["writes"] = []
+    del patching["steps"]["patched"]["interventions"]
     nothing = model_engine.execute(plan.build_request(patching, data_root, model_engine)).result("logit_diff")
 
     scored = {}
