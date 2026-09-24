@@ -77,7 +77,7 @@
   "steps": {
     "score": {
       "kind": "observe",
-      "intervention": "ask",
+      "interventions": "ask",
       "rows": {
         "base": "weekdays/chat"
       },

@@ -48,7 +48,7 @@
   "steps": {
     "score": {
       "kind": "observe",
-      "intervention": "behavior",
+      "interventions": "behavior",
       "rows": {
         "base": "weekdays_full/data"
       },

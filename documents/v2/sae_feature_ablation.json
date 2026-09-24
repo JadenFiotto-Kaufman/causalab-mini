@@ -97,7 +97,7 @@
   "steps": {
     "ablate": {
       "kind": "observe",
-      "intervention": "ablate",
+      "interventions": "ablate",
       "rows": {
         "base": "weekdays/train"
       },

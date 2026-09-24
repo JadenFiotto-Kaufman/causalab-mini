@@ -78,7 +78,7 @@
   "steps": {
     "score": {
       "kind": "observe",
-      "intervention": "patching",
+      "interventions": "patching",
       "rows": {
         "base": "weekdays/train",
         "counterfactual": "weekdays/train"

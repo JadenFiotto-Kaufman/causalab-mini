@@ -169,9 +169,13 @@ def test_a_hooks_shell_refuses_to_run_because_it_has_nowhere_to(minimal_raw, dat
 
 
 def test_a_nested_plan_gets_its_own_outputs_but_the_same_featurizers():
-    """The state is scoped to a `steps` list. A sweep point is a nested plan:
-    it shares the live parameter sets and sees none of its siblings' outputs."""
+    """The state is scoped to a `steps` list. A sweep point, or one entry of a
+    step's `interventions` list, is a nested plan: it shares the live
+    parameter sets, reads what was published before it, and what it
+    publishes stays its own — so no sibling sees another's outputs."""
     parent = steps.State(featurizers={"rot": object()}, outputs={"mean": object()})
     child = parent.child()
     assert child.featurizers is parent.featurizers
-    assert child.outputs == {} and child.outputs is not parent.outputs
+    assert child.outputs == parent.outputs and child.outputs is not parent.outputs
+    child.outputs["delta"] = object()
+    assert "delta" not in parent.outputs and "delta" not in parent.child().outputs

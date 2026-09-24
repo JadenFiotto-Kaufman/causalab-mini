@@ -80,7 +80,7 @@
   "steps": {
     "score": {
       "kind": "observe",
-      "intervention": "generate",
+      "interventions": "generate",
       "rows": {
         "base": "weekdays/train",
         "counterfactual": "weekdays/train"
