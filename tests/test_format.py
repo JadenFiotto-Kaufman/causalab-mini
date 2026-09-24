@@ -185,6 +185,34 @@ def test_a_site_declared_or_written_in_place_is_the_same_place(patching, data_ro
     assert torch.equal(one, other)
 
 
+def test_a_forwards_own_value_is_its_logits_and_comes_home_when_saved(patching, data_root, model_engine, tmp_path):
+    """`patched` — the step itself — is the logits the model produced over
+    every position, and nothing keeps them unless something names them: a
+    save is what does. The head read at the last position is the last
+    column of them."""
+    assert not _compile(patching, data_root, model_engine).step("patched", plan.Forward).logits
+    patching["steps"]["saves"].update({"patched": "logits.safetensors", "patched.logits": "last.safetensors"})
+    built = _compile(patching, data_root, model_engine)
+    assert built.step("patched", plan.Forward).logits
+    executed = model_engine.execute(built)
+    logits = executed.result("patched")
+    assert logits.shape == (4, 11, 32000)
+    assert torch.equal(logits[:, -1:], executed.result("patched.logits"))
+    assert "logits.safetensors" in {path.name for path in executed.write(tmp_path)}
+
+    from causalab_mini.engine.engines.hooks import HooksEngine
+
+    hooks = HooksEngine.load(Spec.model_validate(patching).model, device_map="cpu")
+    assert same_numbers(logits, hooks.execute(_compile(patching, data_root, hooks)).result("patched"))
+
+
+def test_a_forwards_logits_are_saved_and_not_taken(patching):
+    """They are a tensor to save, not a read: an operand or a metric names a
+    read, and the logits of every position are neither."""
+    patching["steps"]["iia"]["of"] = "patched"
+    _refused(patching, "`of` is 'patched', which is not a read")
+
+
 # --------------------------------------------------------------------- #
 # the two formats meet
 # --------------------------------------------------------------------- #

@@ -115,7 +115,7 @@ class HooksEngine(Engine):
         steps.run(self, plan, batch_size=batch_size)
         return plan
 
-    def forward(self, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any]) -> None:
+    def forward(self, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
         """One forward with its taps applied.
 
         The taps arrive in forward order and nothing here depends on it: a
@@ -124,7 +124,8 @@ class HooksEngine(Engine):
         which is a silently wrong number rather than an error.
         """
         with _hooked(self._names, forward, values, featurizers, {"step": None}):
-            self.model(**batch(forward, self.model.get_input_embeddings().weight.device))
+            output = self.model(**batch(forward, self.model.get_input_embeddings().weight.device))
+        return output.logits if forward.logits else None
 
     def generate(self, step: Generate, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
         """One decode with its taps applied at their steps. A hook on the root

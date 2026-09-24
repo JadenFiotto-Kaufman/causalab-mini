@@ -194,8 +194,9 @@ def _spec_save(
 ) -> None:
     """Put one save on the step that produces its value: a metric's table on
     the metric, carrying its rows' labels; a reduction's tensor on the
-    reduction; a decode's ids on the decode; and a read on the forward that
-    reads it, which then brings it home."""
+    reduction; a decode's ids on the decode; a read on the forward that reads
+    it, and a forward's logits on the forward — which then brings them home,
+    and only then."""
     head, _, read = ref.partition(".")
     step, target = steps[head], scope[head]
     save = SaveFile(file_path=file, value=ref)
@@ -213,6 +214,8 @@ def _spec_save(
     elif read:
         assert isinstance(target, Forward)
         target = replace(target, keep=(*target.keep, ref))
+    elif step.kind == "forward":
+        target = replace(target, logits=True)
     scope[head] = replace(target, saves=(*target.saves, save))
 
 

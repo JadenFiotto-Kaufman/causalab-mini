@@ -170,8 +170,8 @@ def call(engine: Any, name: str, step: Forward, state: State) -> None:
         if isinstance(step, Generate):
             values[name] = engine.generate(ready, values, state.featurizers)
             found.update(_continuation(engine, ready, values, values[name]))
-        else:
-            engine.forward(ready, values, state.featurizers)
+        elif (logits := engine.forward(ready, values, state.featurizers)) is not None:
+            values[name] = logits
         produced.append({one: value for one, value in values.items() if one not in operands})
         windows.append(found)
     record: Record = {
@@ -181,9 +181,9 @@ def call(engine: Any, name: str, step: Forward, state: State) -> None:
     state.records.update(record)
     for one in produced[0] if produced else ():
         whole = produced[0][one] if len(produced) == 1 else torch.cat([part[one] for part in produced])
-        # a read has its rows where its record says; a decode's ids are a rectangle
+        # a read has its rows where its record says; a call's own result is a rectangle
         state.publish(one, whole, record[one]["rows"] if one in record else ((0,),) * rows)
-    if isinstance(step, Generate):
+    if isinstance(step, Generate) or step.logits:
         step.results[name] = state.values[name].detach().cpu()
     step.results.update({one: state.values[one].detach().cpu() for one in step.keep})
     if dynamic:

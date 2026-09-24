@@ -11,8 +11,9 @@ runs:
 `steps` is what runs, in the order written, and a step is one of five kinds:
 
     forward    one model call over one dataset's column, with the writes of
-               the interventions it lists in force, taking its reads
-    generate   the same call, decoding: it also produces the ids it said
+               the interventions it lists in force, taking its reads; the
+               step itself is the logits it produced
+    generate   the same call, decoding: the step itself is the ids it said
     metric     a score of one read, per row
     reduce     a mean, or a principal basis, of one read over its rows
     fit        a body of steps, run once per minibatch with an optimizer
@@ -565,8 +566,8 @@ Fit.model_rebuild()
 # --------------------------------------------------------------------- #
 
 
-#: What a reference resolves to: its kind (`read`, `ids`, `metric`, `mean`,
-#: `pca`, `fit`, `trained`), the node that says what it is (for a read, the
+#: What a reference resolves to: its kind (`read`, `ids`, `logits`,
+#: `metric`, `mean`, `pca`, `fit`, `trained`), the node that says what it is (for a read, the
 #: `Read`; for a mean or a basis, the `Read` it reduced), and the scope it
 #: belongs to — `""` for the root, a fit's name for its body.
 Ref = tuple[str, Any, str]
@@ -757,8 +758,8 @@ def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, 
             reads, _ = _call(spec, where, name, step, visible, fit, trainers, fits)
             for read_name, read in reads.items():
                 publish(f"{name}.{read_name}", "read", read)
-            if isinstance(step, Generate):
-                publish(name, "ids", step)
+            # the call's own result: a decode's ids, a forward's logits
+            publish(name, "ids" if isinstance(step, Generate) else "logits", step)
         elif isinstance(step, (_Metric, Reduce)):
             found = visible.get(step.of)
             _refuse(

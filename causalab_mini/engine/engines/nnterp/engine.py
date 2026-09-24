@@ -103,10 +103,13 @@ class NNterpEngine(Engine):
         plan_module.fill(plan, home)
         return plan
 
-    def forward(self, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any]) -> None:
-        model = self.model
+    def forward(self, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
+        model, made = self.model, {}
         with model.trace(batch(forward)):
             apply_taps(model, forward, values, featurizers)
+            if forward.logits:
+                made["logits"] = model.logits.clone()
+        return made.get("logits")
 
     def generate(self, step: Generate, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
         # The continuation frame: one generate trace, `tracer.iter` walking
