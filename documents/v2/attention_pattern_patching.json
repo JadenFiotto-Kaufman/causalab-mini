@@ -95,6 +95,7 @@
   "steps": {
     "score": {
       "kind": "observe",
+      "intervention": "pattern_patching",
       "rows": {
         "base": "weekdays_aligned/data",
         "counterfactual": "weekdays_aligned/data"

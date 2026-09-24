@@ -99,6 +99,7 @@
   "steps": {
     "fit": {
       "kind": "fit",
+      "intervention": "das",
       "rows": {
         "base": "weekdays_full/data#train",
         "counterfactual": "weekdays_full/data#train"
@@ -140,6 +141,7 @@
     },
     "score": {
       "kind": "observe",
+      "intervention": "das",
       "rows": {
         "base": "weekdays_full/data#test",
         "counterfactual": "weekdays_full/data#test"

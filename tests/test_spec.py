@@ -28,6 +28,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 V2_DAS = REPO / "documents" / "v2" / "das.json"
 V2_PATCHING = REPO / "documents" / "v2" / "patching.json"
 V2_MEAN = REPO / "documents" / "v2" / "mean_ablation.json"
+V2_TWO = REPO / "documents" / "v2" / "two_observes.json"
 
 
 @pytest.fixture
@@ -250,18 +251,67 @@ def test_a_write_is_two_fields_a_schema_can_enumerate():
 # --------------------------------------------------------------------- #
 
 
-def test_a_step_names_its_intervention_or_there_is_only_one(das_spec_raw, mean_raw):
-    """One intervention: steps need not say. Several: they must, and an
-    unknown name is refused."""
-    assert Spec.model_validate(das_spec_raw).intervention_of(Spec.model_validate(das_spec_raw).steps["score"])
+def test_every_step_names_its_intervention(das_spec_raw, mean_raw):
+    """However many the document declares — one is not a licence to leave it
+    out — and the refusal names the step and what it could have said."""
+    unnamed = json.loads(json.dumps(das_spec_raw))
+    del unnamed["steps"]["score"]["intervention"]
+    with pytest.raises(ValidationError, match=r"step 'score' runs a forward and names no intervention.*\['das'\]"):
+        Spec.model_validate(unnamed)
     unnamed = json.loads(json.dumps(mean_raw))
     del unnamed["steps"]["clean"]["intervention"]
-    with pytest.raises(ValidationError, match="must name its intervention when the document declares 3"):
+    with pytest.raises(ValidationError, match=r"step 'clean' .*\['ablated', 'clean', 'harvest'\]"):
         Spec.model_validate(unnamed)
     wrong = json.loads(json.dumps(mean_raw))
     wrong["steps"]["clean"]["intervention"] = "nope"
     with pytest.raises(ValidationError, match="undeclared intervention 'nope'"):
         Spec.model_validate(wrong)
+
+
+def test_an_inline_intervention_is_a_declared_one_named_after_its_step(patching_spec_raw, data_root, model_engine):
+    """Written in place, the experiment compiles to the same plan it does
+    declared at the root, and the step's name is what it is declared under."""
+    inline = json.loads(json.dumps(patching_spec_raw))
+    inline["steps"]["score"]["intervention"] = inline["interventions"].pop("patching")
+    inline["interventions"] = {}
+    spec = Spec.model_validate(inline)
+    assert list(spec.interventions) == ["score"] and spec.intervention_of(spec.steps["score"]) is spec.interventions["score"]
+    named = plan.build_request(patching_spec_raw, data_root, model_engine)
+    written = plan.build_request(inline, data_root, model_engine)
+    assert repr(written.step("score", plan.Observe).forwards) == repr(named.step("score", plan.Observe).forwards)
+
+
+def test_an_inline_intervention_may_not_take_a_declared_name(patching_spec_raw):
+    clash = json.loads(json.dumps(patching_spec_raw))
+    clash["steps"]["patching"] = clash["steps"].pop("score")
+    clash["steps"]["patching"]["intervention"] = clash["interventions"]["patching"]
+    with pytest.raises(ValidationError, match="step 'patching' writes its intervention in place, and one is already declared"):
+        Spec.model_validate(clash)
+
+
+
+def test_a_baseline_is_an_intervention_with_no_writes(data_root, model_engine):
+    """No intervention is not a null: it is reads and metrics and nothing
+    written, reading `original`. One forward, and it scores."""
+    raw = json.loads(V2_TWO.read_text())
+    built = plan.build_request(raw, data_root, model_engine)
+    assert [f.name for f in built.step("clean", plan.Observe).forwards] == ["original"]
+    assert all(not tap.writes for tap in built.step("clean", plan.Observe).forwards[0].taps)
+    executed = model_engine.execute(built)
+    assert executed.step("clean", plan.Observe).results["logit_diff"].shape == (4,)
+
+
+def test_two_observes_run_two_named_interventions_in_one_document(data_root, model_engine):
+    """Each step names its own experiment. `patched` runs a source pass and
+    the patched one; `ablated` swaps in the mean the baseline published, so it
+    runs one forward. The three scores are three different numbers."""
+    raw = json.loads(V2_TWO.read_text())
+    built = plan.build_request(raw, data_root, model_engine)
+    assert [f.name for f in built.step("patched", plan.Observe).forwards] == ["original", "patched"]
+    assert [f.name for f in built.step("ablated", plan.Observe).forwards] == ["ablated"]
+    executed = model_engine.execute(built)
+    clean, patched, ablated = (executed.step(n, plan.Observe).results["logit_diff"] for n in ("clean", "patched", "ablated"))
+    assert not torch.equal(clean, patched) and not torch.equal(clean, ablated) and not torch.equal(patched, ablated)
 
 
 def test_mean_ablation_is_three_steps_and_the_mean_never_needs_a_file(
