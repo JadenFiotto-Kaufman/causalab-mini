@@ -971,7 +971,7 @@ without a policy, and the protocol has two (`exact_length_buckets`,
 This is not an edge case: it is the *default* outcome of an entity patch on
 real text — and scoping the cut (`{"index": -1, "scope": {"variable":
 "entity"}}`) is what makes the same interchange land, because "the last
-token of" is a question about tokens. §24.
+token of" is a question about tokens. §25.
 
 ### 11.3 A read may skip a row; a write may not
 
@@ -981,7 +981,7 @@ a harvest, the run reports `alignment_missing` for it, and it stays a row.
 For a write it is refused: writing nothing somewhere is not an
 intervention, and the row would score as if one had happened. That
 asymmetry is causalab's, and it is correct. The refusal is at the write,
-because that is where the positions are (§24).
+because that is where the positions are (§25).
 
 What did **not** need to change: `apply_write`. A ragged read gathers flat,
 `(total, width)`; featurizers are pointwise; a mean over it is one vector
@@ -1171,7 +1171,7 @@ A *position's* ineligibility reaches a metric the same way, and the two
 meet in the run: `MetricOp.rows` is the column half, the run reports which
 rows it could place, and `results["eligible"]` is the intersection. A
 metric over a text-anchored unit window — `{"index": -1, "scope":
-{"variable": "entity"}}` — is what made that authorable. §24.
+{"variable": "entity"}}` — is what made that authorable. §25.
 
 
 ## 16. Where the activation is inside the boundary's value
@@ -1592,7 +1592,99 @@ tensor's; BLOOM's boundaries are right and only its interiors refuse. Mini's
 own suite: 435 (the `select` tests went with the mechanism, to nnterp).
 
 
-## 24. A position is a spec, and the tokenizer that answers it is the model's
+## 24. By reference: what registration was actually buying, and what it cost
+
+Measured on bippu against a self-hosted NDIF built from `~/wd/ndif` with
+`nnsight` (524c33fc), `nnterp` and `causalab_mini` installed into the image, so
+client and server ran the same three checkouts. The question was whether
+`nnsight.register("causalab_mini")` could go. It can, and two of the things it
+was believed to be doing turn out not to be true.
+
+**nnterp's own registration never fired under mini.** `StandardizedTransformer`
+calls `nnsight.ndif.register("nnterp")` in the `remote=True` branch of its
+constructor. `--engine ndif` never takes that branch: it builds the shell with
+`dispatch=False` and passes `remote=True` to `model.session(...)` instead, which
+is a different argument in a different place. Read straight out of cloudpickle's
+registry:
+
+```
+before:                                                []
+after StandardizedTransformer(dispatch=False):         []          <- what --engine ndif does
+after StandardizedTransformer(remote=True):            ['nnterp']
+```
+
+So every remote run mini has ever done already resolved nnterp by import on the
+server. Only `causalab_mini` was ever shipped.
+
+**Shipping nnterp by value does not work anyway.** Register it and let a traced
+block name the module, and the payload cannot be built at all:
+
+```
+TypeError: cannot pickle '_thread.RLock' object
+```
+
+— nnterp's module-level `logger`. A by-value module is rebuilt from its
+contents, and a logger's lock is in them. This is not reachable from mini (the
+block names no nnterp module), but it means the registration nnterp performs on
+its own `remote=True` path is one referenced global away from failing, and that
+"ship it by value" was never a usable fallback for a server without nnterp.
+
+**What deletion is worth, measured on `weekdays_layer_sweep`.** The serialized
+request payload, before compression:
+
+| | bytes |
+|---|---|
+| by reference | **12 392** |
+| `register("causalab_mini")` | 59 993 |
+
+4.8x, on a document whose block calls into `steps`, `intervene` and `ops`. Both
+paths returned the same numbers, so this was pure weight.
+
+**The server is now provably the source of the code.** A block that reads its
+own globals' `__file__` reports, from inside the model actor (pid matching the
+actor that ran the document):
+
+```
+causalab_mini.__file__  /usr/local/lib/python3.12/site-packages/causalab_mini/__init__.py
+nnterp.__file__         /usr/local/lib/python3.12/site-packages/nnterp/__init__.py
+```
+
+against the client's `/home/.../causalab-mini/causalab_mini/__init__.py`. With
+registration on, the server reports the *client's* path — the module was rebuilt
+from the shipped source. That is the discriminator, and it is the only one: a
+by-value run and a by-reference run are otherwise indistinguishable from the
+client.
+
+**Two entries of §19 are consequences of shipping, not of remote execution.**
+§19.5 (client and server Python minors must match, because a 3.13 dataclass
+carries a `__replace__` 3.12 does not have) is a property of pickling *our*
+classes by value; by reference the classes are the server's and the minors need
+not match — 3.12.13 client against a 3.12.14 server ran clean, and the traced
+block itself has always shipped as source rather than bytecode
+(`nnsight.schema.request.RequestModel.serialize`). §19.6 (a filled-in plan
+cannot come home, because the server cannot pickle back a class it only has by
+value) also stops being true: the server has the classes. `execute` still brings
+home `{step path: {name: tensor}}` and should keep doing so — the client already
+holds the plan and nothing of ours needs the return trip — but the reason is now
+design, not a limit.
+
+**The price.** A stock ndif.us can no longer run a mini document at all. That
+was the one thing registration bought, and it is the trade the owner took: one
+codebase across both sides, loudly, instead of two that look alike.
+
+**Verified end to end.** `documents/real/weekdays_layer_sweep.json` — 32
+experiments, 42 rows, a read, a swap write and two metrics — run against a
+self-hosted NDIF by reference and against the same checkpoint locally on one
+A6000. At the deployment's default dtype the server serves bf16 and the numbers
+differ as §19 already recorded (mean 0.051 on `logit_diff`, three of 1344 `iia`
+rows flipping at the layer-12/13 crossover). Deploy it `--dtype float32` — dtype
+is not part of the model key, so the deployment decides and the client changes
+nothing — and all **2688 values are bit-identical** to the local run. Remote
+execution, the serialization round-trip and the by-reference switch perturb the
+arithmetic not at all; the whole of the difference §19 saw was served dtype.
+
+
+## 25. A position is a spec, and the tokenizer that answers it is the model's
 
 Resolving a position on the client means resolving it against a tokenizer
 the client happens to have, and carrying the answer as integers. Moving the
@@ -1602,7 +1694,7 @@ inside the session — is what makes `{"index": -1, "scope": {"variable":
 document run on a model whose tokenizer the client never loads. Six things
 came out of doing it.
 
-### 24.1 The block gets the served checkpoint's own tokenizer, for free
+### 25.1 The block gets the served checkpoint's own tokenizer, for free
 
 Traced through nnsight at `524c33fc` and then measured. `TransformersModel`
 lists `tokenizer` in `_PERSISTENT`; `__getstate__` tags it with an id;
@@ -1620,7 +1712,7 @@ closed over by a block would be pickled by value, a few megabytes and a
 different object. `tests/test_structure.py` already banned the name; only
 its reason changed.
 
-### 24.2 A character map from prefix lengths needs the prefixes to be prefixes
+### 25.2 A character map from prefix lengths needs the prefixes to be prefixes
 
 `offsets[k] = len(decode(ids[:k]))` is a character offset only while the
 decode of a prefix really is a prefix of the decode of the whole. For a
@@ -1648,7 +1740,7 @@ What both sides *can* do is read the same ids: the client puts row 0's
 decoded content in the plan and the run decodes the same row with its own
 tokenizer and compares the strings. Same cost, and it is true.
 
-### 24.3 Left padding makes "the index differs per row" quietly false
+### 25.3 Left padding makes "the index differs per row" quietly false
 
 The obvious demonstration of a dynamic position — patch each row's entity,
 watch the index differ — does not work on prompts that differ only in the
@@ -1662,7 +1754,7 @@ tokens and ` Monday` one and the `number` anchor lands at 8 on some rows and
 shows an entity patch is doing something per row, and an assertion that the
 integers differ needs a corpus where they do.
 
-### 24.4 The continuation frame cost the engines nothing, by fanning out
+### 25.4 The continuation frame cost the engines nothing, by fanning out
 
 A read that cannot say which decode step it wants until the decode has
 finished — `{"index": -1}`, `{"scope": {"segment": "eos"}}` — needs every
@@ -1673,7 +1765,7 @@ against the continuation afterwards. The eight-member engine contract is
 untouched and `test_engine.py`'s assertion did not move. The cost is stated
 where it is paid: `rows x decode x width` numbers, refused above a limit.
 
-### 24.5 EOS held off means no row ever stops, and that is a result
+### 25.5 EOS held off means no row ever stops, and that is a result
 
 Mini decodes with `min_new_tokens == max_new_tokens` so the loop is a bound
 and the batch stays rectangular. EOS is therefore never generated, so
@@ -1683,7 +1775,7 @@ model stop?" is a reported reason and not an exception — but it means the
 positive case is only reachable in a unit test over `locate.continuation`
 with hand-made ids, which is where it is tested.
 
-### 24.6 An empty gather is a float tensor, at both of the two sites
+### 25.6 An empty gather is a float tensor, at both of the two sites
 
 `ops.intervene` builds its index tensors from Python lists, in `_flat` for
 a ragged window and in `_window` for a rectangular one. When *every* row's
@@ -1704,7 +1796,7 @@ compile time, against the client's tokenization; moving the resolver moved
 the refusal, and for a while it moved it into a float tensor instead.
 
 
-### 24.7 Report in the frame you resolved in
+### 25.7 Report in the frame you resolved in
 
 A tap in the continuation frame is handed a dummy window: whatever the
 spec names, a decode step processes one position, and `intervene.at_step`
@@ -1721,14 +1813,14 @@ the ids the decode produced — reports every tap in it, stacked or not: the
 decode step, and the token the model produced there.
 
 
-## 25. Three facts a whole-system audit found, and where each of them lives
+## 26. Three facts a whole-system audit found, and where each of them lives
 
 An audit of the package against nnterp `internals-accessors` and against base
 causalab's surface found three things mini was answering for itself that it
 had no business answering, or was answering wrongly. Each is here because the
 measurement cost something to make.
 
-### 25.1 Forward order is the family's, and mini had a second copy of it
+### 26.1 Forward order is the family's, and mini had a second copy of it
 
 `_Component.stage` and `_Component.band` — two columns over twenty rows —
 were mini's own numbering of where each place sits in a block, beside
@@ -1747,7 +1839,7 @@ nnterp does not address, interleaved into nnterp's own numbering — 11, 12,
 dependency's facts is a table that will disagree with it, and the only
 question is when.**
 
-### 25.2 `lm_head_output` is not `logits`, and on Gemma-2 the difference is the answer
+### 26.2 `lm_head_output` is not `logits`, and on Gemma-2 the difference is the answer
 
 nnterp carries them as two rows because Gemma-2's `final_logit_softcapping`
 bounds what the model predicts from and leaves the head's own output alone.
@@ -1778,7 +1870,7 @@ check on a tuple, which is one `Selection` out of the set; asking the row
 for its own is both smaller and general, and `logits` fell out with no case
 of its own.
 
-### 25.3 `pos: 0` meant two different tokens on two families
+### 26.3 `pos: 0` meant two different tokens on two families
 
 Llama's sentencepiece prepends a BOS to every prompt and GPT-2's BPE
 prepends nothing, and mini's content run started at the first unmasked
