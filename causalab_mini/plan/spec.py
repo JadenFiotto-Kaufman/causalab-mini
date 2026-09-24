@@ -549,26 +549,12 @@ class Fit(Node):
 Step = Annotated[Union[Forward, Generate, Metric, Reduce, Fit], Field(discriminator="kind")]
 
 
-def _saved_as(steps: dict[str, Any], ref: str) -> str:
-    """The file a save with no path is written to: the reference itself, with
-    the extension its kind implies — a metric's table `.json`, a tensor
-    `.safetensors`. A metric is a metric step, here or in a fit's body
-    (`<fit>.<metric>`, its held-out score); a reference to nothing is left to
-    the document's check to refuse by name."""
-    head, _, tail = ref.partition(".")
-    step = steps.get(head)
-    if tail:
-        # into a fit, its held-out step of that name; into anything else, a
-        # read of a forward, which is a tensor
-        body = _field(step, "steps") if _field(step, "kind") == "fit" else None
-        step = None if body is None or tail not in body else body[tail]
-    return ref + (".json" if _field(step, "kind") == "metric" else ".safetensors")
-
-
-def _field(step: Any, name: str) -> Any:
-    """A field of a step, as JSON or as a model — the steps are either,
-    depending on who built the document."""
-    return step.get(name) if isinstance(step, dict) else getattr(step, name, None)
+def _unnamed(saves: Any) -> Any:
+    """A listed reference, or one mapped to null, as one whose file is still
+    to be named — `Spec` names it once it knows what the reference is."""
+    if isinstance(saves, list):
+        return dict.fromkeys(saves, "")
+    return {ref: "" if file is None else file for ref, file in saves.items()} if isinstance(saves, dict) else saves
 
 
 class Steps(Node):
@@ -581,10 +567,8 @@ class Steps(Node):
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
-    #: The derivation is `_default_files`, which needs the steps; what the
-    #: annotation adds is what a document may write, for the schema.
     saves: Annotated[
-        dict[str, str], BeforeValidator(lambda v: v, json_schema_input_type=dict[str, str | None] | list[str])
+        dict[str, str], BeforeValidator(_unnamed, json_schema_input_type=dict[str, str | None] | list[str])
     ] = Field(default_factory=dict)
     __pydantic_extra__: dict[str, Step]  # pyright: ignore[reportIncompatibleVariableOverride]
 
@@ -596,20 +580,6 @@ class Steps(Node):
 
     def __contains__(self, name: object) -> bool:
         return name in (self.model_extra or {})
-
-    @model_validator(mode="before")
-    @classmethod
-    def _default_files(cls, raw: Any) -> Any:
-        """A listed reference, or one mapped to null, as the file it is
-        written to — once, here, so everything after sees the map."""
-        if not isinstance(raw, dict) or raw.get("saves") is None:
-            return raw
-        saves = raw["saves"]
-        if isinstance(saves, list):
-            saves = dict.fromkeys(saves)
-        if not isinstance(saves, dict):
-            return raw
-        return {**raw, "saves": {ref: _saved_as(raw, ref) if file is None else file for ref, file in saves.items()}}
 
     @model_validator(mode="after")
     def _names(self) -> "Steps":
@@ -812,13 +782,15 @@ class Spec(Node):
                 f"saves: {ref!r} is nothing this document produces; it produces {sorted(produced)}",
             )
             assert found is not None
+            table = found.kind == "metric"
+            # an unnamed one is written as itself, with the extension its kind implies
+            file = file or ref + (".json" if table else ".safetensors")
             _refuse(
                 not file.startswith("/") and ".." not in file.split("/"),
                 f"saves: {ref!r} -> {file!r}: a file is a path inside the output directory",
             )
             _refuse(file not in files, f"saves: {files.get(file)!r} and {ref!r} are both saved to {file!r}")
             files[file] = ref
-            table = found.kind == "metric"
             _refuse(
                 file.endswith(".json" if table else ".safetensors"),
                 f"saves: {ref!r} is " + (
@@ -826,6 +798,8 @@ class Spec(Node):
                     if table else f"{SAID[found.kind]}, a tensor: saved to a .safetensors file"
                 ) + f", not {file!r}",
             )
+        # frozen, but still being built: every save now has its file
+        object.__setattr__(self.steps, "saves", {ref: file for file, ref in files.items()})
         return self
 
 
