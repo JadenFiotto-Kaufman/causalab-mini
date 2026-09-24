@@ -16,11 +16,14 @@ import pathlib
 import re
 
 import pytest
+import safetensors.torch
 import torch
 from conftest import same_numbers
 from pydantic import ValidationError
 
 from causalab_mini import plan
+from causalab_mini.engine import steps
+from causalab_mini.plan.plan import results_of
 from causalab_mini.plan.spec import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
@@ -188,23 +191,36 @@ def test_a_site_declared_or_written_in_place_is_the_same_place(patching, data_ro
 
 def test_a_forwards_own_value_is_its_logits_and_comes_home_when_saved(patching, data_root, model_engine, tmp_path):
     """`patched` — the step itself — is the logits the model produced over
-    every position, and nothing keeps them unless something names them: a
-    save is what does. The head read at the last position is the last
-    column of them."""
-    assert not _compile(patching, data_root, model_engine).step("patched", plan.Forward).logits
+    every position, and a save of it writes them as they are. The head read
+    at the last position is the last column of them."""
     patching["steps"]["saves"].update({"patched": "logits.safetensors", "patched.logits": "last.safetensors"})
     built = _compile(patching, data_root, model_engine)
-    assert built.step("patched", plan.Forward).logits
+    assert built.step("patched", plan.Forward).keep == ("patched", "patched.logits")
     executed = model_engine.execute(built)
     logits = executed.result("patched")
     assert logits.shape == (4, 11, 32000)
     assert torch.equal(logits[:, -1:], executed.result("patched.logits"))
-    assert "logits.safetensors" in {path.name for path in executed.write(tmp_path)}
+    written = {path.name: path for path in executed.write(tmp_path)}
+    assert torch.equal(safetensors.torch.load_file(written["logits.safetensors"])["weight"], logits)
 
     from causalab_mini.engine.engines.hooks import HooksEngine
 
     hooks = HooksEngine.load(Spec.model_validate(patching).model, device_map="cpu")
     assert same_numbers(logits, hooks.execute(_compile(patching, data_root, hooks)).result("patched"))
+
+
+def test_a_forwards_own_value_nothing_names_is_neither_held_nor_shipped(patching, data_root, model_engine):
+    """The engine returns the logits every time; the walk keeps them only
+    for a step that takes them or a save that keeps them, and neither names
+    `patched` here — nor `counterfactual`, whose read is the operand."""
+    built = _compile(patching, data_root, model_engine)
+    assert built.step("patched", plan.Forward).keep == ()
+    state = steps.start(built)
+    steps.run(model_engine, built, state)
+    assert "patched" not in state.values and "counterfactual" not in state.values
+    assert "counterfactual.v_cf" in state.values  # the operand is named, so it is held
+    shipped = results_of(built)
+    assert "patched" not in shipped.get("patched", {}) and "patched" not in shipped
 
 
 def test_a_forwards_logits_are_saved_and_not_taken(patching):

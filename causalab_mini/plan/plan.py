@@ -237,7 +237,7 @@ class Featurizers(Step):
 class Forward(Step):
     """One model call over one set of rows, with its taps applied. What it
     reads is published under each read's name; what the call itself returns
-    — its logits, when kept — is the step's own."""
+    — its logits — under the step's own."""
 
     #: Which rows these are: the dataset they came from, or a protocol role.
     input: str
@@ -255,14 +255,9 @@ class Forward(Step):
     #: are in the frame's own coordinates, so the run attaches them and
     #: `locate` reads them exactly as it reads `eos` in the continuation.
     segments: tuple[dict[str, tuple[int, int]], ...] = ()
-    #: The reads a save names: they come home in `results`. Every read is
-    #: there for the steps after it either way.
+    #: What of this call a save names — a read, or the step's own result by
+    #: the step's name: that, and only that, comes home in `results`.
     keep: tuple[str, ...] = ()
-    #: Whether the call's own result — its logits, `(rows, positions,
-    #: vocab)` — is kept, as the step's value. Only when a save names it: on
-    #: a real vocabulary one forward's logits over a thousand rows are
-    #: gigabytes.
-    logits: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)

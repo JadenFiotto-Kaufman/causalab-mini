@@ -63,8 +63,9 @@ def test_a_decoding_forward_yields_ids_and_a_per_step_read(probe_raw, data_root,
     assert "max_new_tokens=3" in explain(built) and "@step 2" in explain(built)
 
     executed = model_engine.execute(built)
+    # the ids come home only where a save keeps them, as a forward's logits do
     assert tuple(executed.result("patched").shape) == (4, 3)
-    assert tuple(executed.result("counterfactual").shape) == (4, 3)
+    assert "counterfactual" not in executed.step("counterfactual", plan.Generate).results
     assert executed.result("p_answer").shape == (4,)
 
 

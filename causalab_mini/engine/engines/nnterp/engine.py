@@ -94,7 +94,7 @@ class NNterpEngine(Engine):
             # and nothing of ours has to survive the way back. (`remote="local"`
             # never noticed: it does not serialize the way back. FINDINGS §19.)
             home = nnsight.save({})
-            steps.run(engine, plan, steps.State(batch_size=batch_size))
+            steps.run(engine, plan, steps.start(plan, batch_size))
             home.update(plan_module.results_of(plan))
             # A server serves the dtype *it* chose; the document's is only a
             # request. Say what ran, where the run record is.
@@ -105,11 +105,10 @@ class NNterpEngine(Engine):
 
     def forward(self, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
         model, made = self.model, {}
-        with model.trace(batch(forward)):
+        with model.trace(batch(forward)) as tracer:
             apply_interventions(model, forward, values, featurizers)
-            if forward.logits:
-                made["logits"] = model.logits.clone()
-        return made.get("logits")
+            made["logits"] = tracer.result.logits
+        return made["logits"]
 
     def generate(self, step: Generate, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
         # The continuation frame: one generate trace, `tracer.iter` walking

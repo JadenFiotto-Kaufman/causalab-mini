@@ -21,12 +21,13 @@ compiled against a particular model and none of it may be decided later:
 and what the **run** asks:
 
     execute(plan, remote) -> Plan            the whole request
-    forward(step, values, featurizers) -> logits | None    one model call, tapped
-    generate(step, values, featurizers) -> ids    one decode, tapped at its steps
+    forward(step, values, featurizers) -> logits    one model call, tapped
+    generate(step, values, featurizers) -> ids      one decode, tapped at its steps
 
 Two ways to call a model, because they are two calls with two results: a
-forward leaves its reads and returns its logits when the step keeps them, a
-generate leaves its reads and returns the ids it said. That is all. The walk over steps, the fit loop, the metrics and the
+forward leaves its reads and returns its logits, a generate leaves its reads
+and returns the ids it said — each the call's own result, which the walk
+keeps only when something names it. That is all. The walk over steps, the fit loop, the metrics and the
 write algebra are shared, so a second engine is these nine members and no
 more.
 
@@ -123,9 +124,8 @@ class Engine:
 
     def forward(self, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
         """Run one forward with its taps applied, leaving what it read in
-        `values`, and return the model's logits when `forward.logits` keeps
-        them — else None. With `generate`, the only place an engine touches a
-        model's insides."""
+        `values`, and return the model's logits. With `generate`, the only
+        place an engine touches a model's insides."""
         raise NotImplementedError
 
     def generate(self, step: Generate, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:

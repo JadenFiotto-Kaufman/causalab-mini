@@ -195,10 +195,9 @@ def _spec_save(
 ) -> None:
     """Put one save on the step that produces its value: a metric's table on
     the metric, carrying its rows' labels; a reduction's tensor on the
-    reduction; a decode's ids on the decode; a read on the forward that reads
-    it, and a forward's logits on the forward — which then brings them home,
-    and only then."""
-    head, _, read = ref.partition(".")
+    reduction; a read, or a model call's own result, on the call that makes
+    it — which then brings it home, and only then."""
+    head = ref.partition(".")[0]
     step, target = steps[head], scope[head]
     save = SaveFile(file_path=file, value=ref)
     if step.kind == "metric":
@@ -214,11 +213,8 @@ def _spec_save(
             estimand_version=metrics_module.UNITS[step.metric][1],
             produced_by=spec.digest,
         )
-    elif read:
-        assert isinstance(target, Forward)
+    elif isinstance(target, Forward):
         target = replace(target, keep=(*target.keep, ref))
-    elif step.kind == "forward":
-        target = replace(target, logits=True)
     scope[head] = replace(target, saves=(*target.saves, save))
 
 

@@ -16,12 +16,19 @@ The walk is: for each step, run it. Three rules hold throughout:
   and would be worth a `record` flag there.
 * **what crosses steps is one `State`, scoped to a `steps` list.** Its
   `featurizers` are the live parameter sets, shared so a fit trains the
-  rotation a later step scores with; its `values` are everything the steps
-  before produced — every read, a generate's ids, a metric, a reduction — by
+  rotation a later step scores with; its `values` are what the steps before
+  produced — reads, a model call's own result, metrics, reductions — by
   name, so a write's operand is simply the name of an earlier value. A nested
   plan (a sweep point) gets a copy, so points cannot see each other's. The
   state is a local of the walk: never saved, never shipped, gone with the
   plan.
+* **what a model call makes is held and shipped only when it is named.** A
+  call makes its reads and its own result — a forward's logits, a generate's
+  ids — and each is held in the state only when a step of the plan takes it
+  (an operand, a metric's or a reduction's `of`) or a save keeps it, and
+  comes home in `results` only when a save keeps it. A forward's logits over
+  a real vocabulary and a thousand rows are gigabytes, and nothing asked for
+  them.
 * **a value keeps its graph only inside a fit's update.** There the metrics
   are differentiated, so everything an update's steps publish stays attached
   until its optimizer step; everywhere else a value is published detached,
@@ -73,6 +80,9 @@ class State:
     batch_size: int | None = None
     #: Inside a fit's update: values keep their graph, for the backward.
     attached: bool = False
+    #: Every value some step of the plan takes or some save keeps
+    #: (`named`): what a model call makes is held only if it is here.
+    named: frozenset[str] = frozenset()
 
     def child(self, attached: bool = False) -> "State":
         """A nested scope: the same live featurizers, and what was produced
@@ -86,6 +96,7 @@ class State:
             reported=set(self.reported),
             batch_size=self.batch_size,
             attached=attached,
+            named=self.named,
         )
 
     def publish(self, name: str, value: Any, flat: bool | None = None) -> None:
@@ -104,10 +115,34 @@ class State:
         return intervene.rows(value, self.records[name]["rows"] if self.flat[name] else None, start, stop)
 
 
+def start(plan: Plan, batch_size: int | None = None) -> State:
+    """The state a run of `plan` starts from: nothing produced yet, and
+    what the plan names."""
+    return State(batch_size=batch_size, named=frozenset(named(plan)))
+
+
+def named(step: Step) -> set[str]:
+    """Every value a step of this tree takes — a write's operand, a metric's
+    or a reduction's `of` — or a save of it keeps, a fit's updates and
+    held-out run included."""
+    found: set[str] = set()
+    if isinstance(step, Forward):
+        found |= set(step.keep)
+        found |= {op.operand for tap in step.taps for op in tap.writes if isinstance(op.operand, str)}
+    elif isinstance(step, (Metric, Reduce)):
+        found.add(step.of)
+    inner = [*step.steps.values()] if isinstance(step, Plan) else []
+    if isinstance(step, Fit):
+        inner = [*(update for epoch in step.epochs for update in epoch), step.evaluation]
+    for one in inner:
+        found |= named(one)
+    return found
+
+
 def run(engine: Any, step: Step, state: State, name: str = "") -> None:
     """Execute one step. A `Plan` is a step, so this is the whole walk; `name`
     is the key a step has in its plan, which is what it publishes under. An
-    engine starts it with a fresh `State` of its run's `batch_size`."""
+    engine starts it with `start(plan, batch_size)`."""
     if isinstance(step, Plan):
         for key, child in step.steps.items():
             run(engine, child, state.child() if isinstance(child, Plan) else state, name=key)
@@ -177,8 +212,8 @@ def call(engine: Any, name: str, step: Forward, state: State) -> None:
         if isinstance(step, Generate):
             values[name] = engine.generate(ready, values, state.featurizers)
             found.update(_continuation(engine, ready, values, values[name]))
-        elif (logits := engine.forward(ready, values, state.featurizers)) is not None:
-            values[name] = logits
+        else:
+            values[name] = engine.forward(ready, values, state.featurizers)
         produced.append({one: value for one, value in values.items() if one not in operands})
         windows.append(found)
     record: Record = {
@@ -195,10 +230,9 @@ def call(engine: Any, name: str, step: Forward, state: State) -> None:
     # every layer has the layers first, and no rows a later window could take
     forms = {op.stack or op.name: op.flat for tap in step.taps for op in tap.reads if not op.layered}
     for one, whole in made.items():
-        state.publish(one, whole, forms.get(one, False if one == name else None))
-    if isinstance(step, Generate) or step.logits:
-        step.results[name] = state.values[name].detach().cpu()
-    step.results.update({one: state.values[one].detach().cpu() for one in step.keep})
+        if one in state.named:
+            state.publish(one, whole, forms.get(one, False if one == name else None))
+    step.results.update({one: made[one].detach().cpu() for one in step.keep})
     if dynamic:
         # Where this step read and wrote, and what it decoded to. Plain
         # tuples of integers and strings, so they come home in the plan like
