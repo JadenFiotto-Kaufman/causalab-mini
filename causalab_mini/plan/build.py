@@ -139,10 +139,12 @@ def _spec_step(
                     "run over the same rows"
                 )
         return _forward(
-            spec.dataset(step.data),
+            spec,
+            name,
             step.field,
-            writes=[(f"{name}.{one}", _lowered(spec, op), op.operand) for one, op in writes.items()],
-            reads=[(f"{name}.{one}", _lowered(spec, op)) for one, op in reads.items()],
+            reads,
+            writes,
+            dataset=spec.dataset(step.data),
             batch=_batch(tokenizer, f"step {name!r}", step.field, rows),
             rows=rows,
             sites=sites,
@@ -173,15 +175,7 @@ def _spec_step(
             f"step {name!r}: its columns are {len(rows)} rows of {step.dataset!r}, and "
             f"{step.of!r} was read over {count}; a metric scores row i against row i"
         )
-    return _metric(name, step.metric, step, rows, tokenizer, step.of, (source,))
-
-
-def _lowered(spec: Spec, op: Any) -> Any:
-    """A read or a write as `_forward` takes it: its site by the label its
-    address is held under, and its featurizer by the parameter set's own
-    name — `fit.rot` is `rot`."""
-    featurizer = None if op.featurizer is None else op.featurizer.rpartition(".")[2]
-    return op.model_copy(update={"site": spec.site(op.site)[0], "featurizer": featurizer})
+    return _metric(name, step.metric, step, rows, tokenizer, step.of, source)
 
 
 def _spec_save(
@@ -260,7 +254,6 @@ def _spec_fit(spec: Spec, name: str, fit: Any, table: Any, sites: _Sites, tokeni
         head, _, inner = ref.partition(".")
         if head == name and inner and inner not in fit.train:
             _spec_save(spec, fit.steps, evaluation, inner, file, held)
-    gates = [one for one in fit.train if spec.featurizers[one].kind == "gate"]
     return Fit(
         epochs=epochs,
         evaluation=Plan(steps=evaluation),
@@ -268,8 +261,6 @@ def _spec_fit(spec: Spec, name: str, fit: Any, table: Any, sites: _Sites, tokeni
         params=tuple(fit.train),
         lr=fit.optimizer.lr,
         weight_decay=fit.optimizer.weight_decay,
-        # the watched metric, then the fraction each trained gate keeps
-        eval_metrics=(fit.early_stop.metric, *(f"{one}.mask" for one in gates)),
         early_stop=fit.early_stop.metric,
         patience=fit.early_stop.patience,
         mode=fit.early_stop.mode,
@@ -303,10 +294,10 @@ def _spec_featurizers(spec: Spec, at: dict[str, tuple[str, Any]], sites: _Sites,
                 continue
             base = None if write.featurizer is None else write.featurizer.rpartition(".")[2]
             k = spaces[base] if base in spaces else engine.width(sites[0][spec.site(write.site)[0]])
-            if len(set(write.features)) != len(write.features) or not 0 <= min(write.features) <= max(write.features) < k:
+            if max(write.features) >= k:
                 raise PlanError(
                     f"step {path!r}: write {name!r}: features {write.features} of a {k}-dimensional "
-                    f"feature space; they are distinct indices below {k}"
+                    f"feature space; they are indices below {k}"
                 )
     return featurizers
 
@@ -520,11 +511,11 @@ def _batch(tokenizer: Any, what: str, field: str, table: list[rows_module.Row]) 
 
 
 def _metric(
-    name: str, kind: str, spec: Any, rows: list[rows_module.Row], tokenizer: Any, of: str, forwards: tuple[Forward, ...]
+    name: str, kind: str, spec: Any, rows: list[rows_module.Row], tokenizer: Any, of: str, source: Forward
 ) -> Metric:
     """One metric over one batch of rows, with the rows it cannot be computed
     for taken out here, where the data is. `of` is its read, as the plan
-    names it, and one of `forwards` reads it."""
+    names it, and `source` reads it."""
     try:
         keep = rows_module.eligible(rows, tuple(spec.columns))
     except rows_module.DataError as refusal:
@@ -534,7 +525,7 @@ def _metric(
             f"metric {name!r}: none of these {len(rows)} row(s) has a value in "
             f"{list(spec.columns)}; a metric of nothing has no mean"
         )
-    ops = [(tap.address, op) for one in forwards for tap in one.taps for op in tap.reads if of in (op.name, op.stack, op.layered)]
+    ops = [(tap.address, op) for tap in source.taps for op in tap.reads if of in (op.name, op.stack, op.layered)]
     op = ops[0][1]
     return Metric(
         kind=kind,
@@ -702,10 +693,12 @@ def _fits(name: str, site: str, sites: _Sites, decode: int, rows: int) -> None:
 
 
 def _forward(
-    dataset: str,
+    spec: Spec,
+    name: str,
     field: str,
-    writes: list[tuple[str, Any, Any]],
-    reads: list[tuple[str, Any]],
+    reads: dict[str, Any],
+    writes: dict[str, Any],
+    dataset: str,
     batch: _Batch,
     rows: list[rows_module.Row],
     sites: _Sites,
@@ -713,11 +706,12 @@ def _forward(
     max_new_tokens: int = 0,
     generation: dict[str, Any] | None = None,
 ) -> Forward:
-    """One model call over the rows of `dataset`: the writes in force, in the
-    order they apply, as `(op name, spec, operand)` with the operand as the
-    plan names its value, and the reads taken, as `(op name, spec)` —
-    grouped into taps by address and put in forward order. With
-    `max_new_tokens`, a `Generate`.
+    """Step `name`, one model call over the rows of `dataset`: the writes in
+    force, in the order they apply, and the reads it takes, each by its name
+    in the step — grouped into taps by address and put in forward order.
+    With `max_new_tokens`, a `Generate`. An op is named `<step>.<op>` in the
+    plan, its site by the label its address is held under, and its
+    featurizer by the parameter set's own name — `fit.rot` is `rot`.
 
     Nothing here resolves a position. What it does compile is the *anchor*: a
     text-anchored spec names a variable, and which text that is on this row
@@ -730,56 +724,56 @@ def _forward(
             return ()
         return tuple(rows_module.variable_text(row, field, pos.scope.variable) for row in rows)
 
+    def featurizer(op: Any) -> str | None:
+        return None if op.featurizer is None else op.featurizer.rpartition(".")[2]
+
     # a tap is one place: an address, and — when the call decodes — a step
     written: dict[tuple[Address, Any], list[WriteOp]] = {}
-    for write_name, spec, operand in writes:
-        written.setdefault((addresses[spec.site], _decode_step(spec.pos)), []).append(
+    for one, op in writes.items():
+        label = spec.site(op.site)[0]
+        written.setdefault((addresses[label], _decode_step(op.pos)), []).append(
             WriteOp(
-                name=write_name,
-                at=_selection(spec.pos, anchors(spec.pos), features.get(spec.site)),
-                operand=operand,
-                mechanism=spec.mechanism,
-                featurizer=spec.featurizer,
-                params=dict(getattr(spec, "params", {})),
-                features=None if getattr(spec, "features", None) is None else tuple(spec.features),
+                name=f"{name}.{one}",
+                at=_selection(op.pos, anchors(op.pos), features.get(label)),
+                operand=op.operand,
+                mechanism=op.mechanism,
+                featurizer=featurizer(op),
+                params=dict(op.params),
+                features=None if op.features is None else tuple(op.features),
             )
         )
     read: dict[tuple[Address, Any], list[ReadOp]] = {}
-    for read_name, spec in reads:
-        at = _selection(spec.pos, anchors(spec.pos), features.get(spec.site))
-        step = _decode_step(spec.pos)
-        if isinstance(addresses[spec.site], tuple):
+    for one, op in reads.items():
+        label, read_name = spec.site(op.site)[0], f"{name}.{one}"
+        at = _selection(op.pos, anchors(op.pos), features.get(label))
+        step = _decode_step(op.pos)
+        if isinstance(addresses[label], tuple):
             # a read at every layer: one per layer, which the run stacks
-            for address in addresses[spec.site]:
+            for address in addresses[label]:
                 read.setdefault((address, step), []).append(
                     ReadOp(
                         name=f"{read_name}@{address.layer}",
                         at=at,
-                        featurizer=spec.featurizer,
-                        view=getattr(spec, "view", "raw"),
+                        featurizer=featurizer(op),
+                        view=op.view,
                         layered=read_name,
                     )
                 )
             continue
-        if not _stacks(spec.pos):
-            read.setdefault((addresses[spec.site], step), []).append(
-                ReadOp(
-                    name=read_name,
-                    at=at,
-                    featurizer=spec.featurizer,
-                    view=getattr(spec, "view", "raw"),
-                )
+        if not _stacks(op.pos):
+            read.setdefault((addresses[label], step), []).append(
+                ReadOp(name=read_name, at=at, featurizer=featurizer(op), view=op.view)
             )
             continue
         # one ordinary read per decode step, which the run stacks and cuts
-        _fits(read_name, spec.site, sites, max_new_tokens, len(batch[0]))
+        _fits(read_name, label, sites, max_new_tokens, len(batch[0]))
         for step in range(max_new_tokens):
-            read.setdefault((addresses[spec.site], step), []).append(
+            read.setdefault((addresses[label], step), []).append(
                 ReadOp(
                     name=f"{read_name}@{step}",
                     at=at,
-                    featurizer=spec.featurizer,
-                    view=getattr(spec, "view", "raw"),
+                    featurizer=featurizer(op),
+                    view=op.view,
                     stack=read_name,
                 )
             )

@@ -732,3 +732,13 @@ def test_the_list_form_writes_the_same_files(patching, data_root, model_engine, 
 def test_a_derived_name_colliding_with_a_named_one_is_refused_naming_both(patching):
     patching["steps"]["saves"] = {"iia": None, "logit_diff": "iia.json"}
     _refused(patching, re.escape("saves: 'iia' and 'logit_diff' are both saved to 'iia.json'"))
+
+
+def test_a_writes_features_are_distinct_before_any_model_loads():
+    """Distinctness is the document's own fact, so the document refuses it;
+    whether each index is inside the featurizer's space needs its width,
+    which the compiler has."""
+    raw = _load("sae_feature_ablation.json")
+    zeroed = next(step for step in raw["steps"].values() if isinstance(step, dict) and "interventions" in step)
+    zeroed["interventions"]["writes"]["ablate"]["features"] = [1, 1]
+    _refused(raw, re.escape("features [1, 1] are distinct indices"))

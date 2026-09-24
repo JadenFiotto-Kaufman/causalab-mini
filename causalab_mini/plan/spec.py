@@ -217,10 +217,9 @@ class Read(Node):
 
 
 class Write(Node):
-    """`mechanism` and `operand` are two fields, not the protocol's
-    `{"swap": "v_cf"}`, because a key that is itself the mechanism's name
-    cannot be enumerated by a schema — and the schema is what an agent
-    reads."""
+    """`mechanism` and `operand` are two fields, not one `{"swap": "v_cf"}`,
+    because a key that is itself the mechanism's name cannot be enumerated
+    by a schema — and the schema is what an agent reads."""
 
     site: Name | Site
     pos: Position
@@ -233,13 +232,17 @@ class Write(Node):
     #: Which coordinates of the featurizer's space the mechanism acts on —
     #: SAE latents, directions of a rotation. The others pass through, and
     #: so does whatever the featurizer does not explain (its error term).
-    features: list[int] | None = None
+    features: Annotated[list[NonNegativeInt], Field(min_length=1)] | None = None
     #: The mechanism's numbers: `scale` for add_scaled and gaussian, `t` for
     #: lerp, `seed` for gaussian.
     params: dict[str, float] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _mechanism_and_its_numbers(self) -> "Write":
+        _refuse(
+            self.features is None or len(set(self.features)) == len(self.features),
+            f"features {self.features} are distinct indices of the featurizer's space",
+        )
         needs, takes = MECHANISM_PARAMS[self.mechanism]
         missing = needs - set(self.params)
         extra = set(self.params) - needs - takes

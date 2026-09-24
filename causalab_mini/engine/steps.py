@@ -542,7 +542,9 @@ def fit(engine: Any, step: Fit, state: State) -> None:
             evaluated = _scored(engine, step.evaluation, state, gates)
         # each on the CPU first: a metric is wherever the model is, a gate's mask
         # wherever its parameter is, and a record is neither's
-        scores.append(torch.stack([evaluated[name].mean().cpu() for name in step.eval_metrics]))
+        # the watched metric, then the fraction each trained gate keeps
+        watched_and_kept = (step.early_stop, *(f"{name}.mask" for name in gates))
+        scores.append(torch.stack([evaluated[name].mean().cpu() for name in watched_and_kept]))
         watched = float(evaluated[step.early_stop].mean())
         improved = best is None or (watched > best if step.mode == "max" else watched < best)
         if improved:

@@ -336,7 +336,6 @@ class Fit(Step):
     params: tuple[str, ...]
     lr: float
     weight_decay: float
-    eval_metrics: tuple[str, ...]
     early_stop: str
     patience: int
     mode: str
