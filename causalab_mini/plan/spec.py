@@ -49,7 +49,7 @@ from typing import Annotated, Any, Iterator, Literal, NamedTuple, Union
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Discriminator, Field, NonNegativeInt, StringConstraints, Tag, model_validator
 
 from .. import address
-from ..ops.metrics import COLUMNS as METRIC_COLUMNS
+from ..ops.metrics import SIGNATURES as METRIC_SIGNATURES
 from ..shapes import Where
 from . import sweep as sweep_module
 
@@ -408,9 +408,10 @@ def _generation_arguments() -> frozenset[str]:
 
 
 class _Metric(Node):
-    """A score of one read, per row. Every other field names a column, as
-    `<dataset>.<column>`: the one dataset whose row i is scored against row
-    i of the read."""
+    """A score of one read, per row. What else a kind takes is its signature
+    (`ops.metrics.SIGNATURES`): further reads, `<step>.<read>` over the same
+    rows, and columns, `<dataset>.<column>` of the one dataset whose row i
+    is scored against row i of the read."""
 
     kind: Literal["metric"]
     #: The read it scores, `<step>.<read>`, at one position per row.
@@ -418,11 +419,16 @@ class _Metric(Node):
     token_form: Literal["space_prefixed"] = "space_prefixed"
 
     @property
-    def references(self) -> tuple[str, ...]:
-        """Its column fields, as written, in the order `ops.metrics.compute`
+    def inputs(self) -> tuple[str, ...]:
+        """Its further reads, as written, in the order `ops.metrics.compute`
         takes them — read off the one table, so a class and the function it
         feeds cannot disagree about which is which."""
-        return tuple(getattr(self, one) for one in METRIC_COLUMNS[getattr(self, "metric")])
+        return tuple(getattr(self, one) for one in METRIC_SIGNATURES[getattr(self, "metric")].reads)
+
+    @property
+    def references(self) -> tuple[str, ...]:
+        """Its column fields, as written, in the order `compute` takes them."""
+        return tuple(getattr(self, one) for one in METRIC_SIGNATURES[getattr(self, "metric")].columns)
 
     @property
     def columns(self) -> tuple[str, ...]:
@@ -430,9 +436,10 @@ class _Metric(Node):
         return tuple(one.partition(".")[2] for one in self.references)
 
     @property
-    def dataset(self) -> str:
-        """The one dataset the columns are of — `Spec` refuses two."""
-        return self.references[0].partition(".")[0]
+    def dataset(self) -> str | None:
+        """The one dataset the columns are of — `Spec` refuses two — or None
+        for a kind that takes no column."""
+        return self.references[0].partition(".")[0] if self.references else None
 
 
 class Match(_Metric):
@@ -461,8 +468,31 @@ class TokenProb(_Metric):
     token: str
 
 
+class SoftAccuracy(_Metric):
+    metric: Literal["soft_accuracy"]
+    expected: str
+
+
+class KL(_Metric):
+    """KL(of ‖ against), in nats: the divergence of the distribution `of`
+    predicts from the one `against` does, weighted by `of`'s."""
+
+    metric: Literal["kl"]
+    #: The second read, `<step>.<read>`: the reference distribution.
+    against: str
+
+
+class JS(_Metric):
+    """The Jensen–Shannon divergence of `of` and `against`, in nats —
+    symmetric, and at most log 2."""
+
+    metric: Literal["js"]
+    against: str
+
+
 Metric = Annotated[
-    Union[Match, LogitDiff, CrossEntropy, TokenLogit, TokenProb], Field(discriminator="metric")
+    Union[Match, LogitDiff, CrossEntropy, TokenLogit, TokenProb, SoftAccuracy, KL, JS],
+    Field(discriminator="metric"),
 ]
 
 
@@ -562,7 +592,7 @@ class Fit(Node):
         """Every declared dataset its body names: one draw indexes them all,
         and its held-out run replaces each."""
         calls = {one.data for _, one in self.steps.items() if isinstance(one, _Call) and isinstance(one.data, str)}
-        return calls | {one.dataset for _, one in self.steps.items() if isinstance(one, _Metric)}
+        return calls | {one.dataset for _, one in self.steps.items() if isinstance(one, _Metric) and one.dataset}
 
     @model_validator(mode="after")
     def _one_body(self) -> "Fit":
@@ -850,27 +880,34 @@ def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, 
                 publish(f"{name}.{read_name}", "layers" if stacked else "read", read)
             # the call's own result: a decode's ids, a forward's logits
             publish(name, "ids" if isinstance(step, Generate) else "logits", step)
-        elif isinstance(step, (_Metric, Reduce)):
-            found = visible.get(step.of)
+        elif isinstance(step, Reduce):
+            found = _of(where, "of", step.of, visible, fit)
             _refuse(
-                found is not None and found.kind in ("read", "layers") and found.scope == fit,
-                f"{where}: `of` is {step.of!r}, which is not a read of a step before it in this "
-                "`steps`; a metric or a reduce is of `<step>.<read>`",
+                found.kind == "read",
+                f"{where}: {step.of!r} is read at several layers; a reduction of it is not implemented",
             )
-            assert found is not None
-            _refuse(
-                isinstance(step, _Metric) or found.kind == "read",
-                f"{where}: {step.of!r} is read at several layers; a metric scores it layer by layer, "
-                "and a reduction of it is not implemented",
-            )
-            if isinstance(step, Reduce):
-                publish(name, step.reduce, found.node)
-                continue
-            _refuse(
-                found.node.pos.width == 1,
-                f"{where} scores {step.of!r}, a window of {found.node.pos.width or 'varying'} "
-                "positions; a metric scores one position per row",
-            )
+            publish(name, step.reduce, found.node)
+        elif isinstance(step, _Metric):
+            # every read the kind takes — `of`, and any its signature adds — is
+            # a read before it, of one position a row, and logits to score
+            fields = ("of", *METRIC_SIGNATURES[getattr(step, "metric")].reads)
+            for field, ref in zip(fields, (step.of, *step.inputs)):
+                found = _of(where, field, ref, visible, fit)
+                _refuse(
+                    found.kind == "read" or (field == "of" and not step.inputs),
+                    f"{where}: {ref!r} is read at several layers; a metric scores one such read "
+                    "layer by layer, and scores it against nothing",
+                )
+                _refuse(
+                    found.node.pos.width == 1,
+                    f"{where} scores {ref!r}, a window of {found.node.pos.width or 'varying'} "
+                    "positions; a metric scores one position per row",
+                )
+                _refuse(
+                    found.node.view == "logits" or spec.site(found.node.site)[1].component in ("lm_head", "logits"),
+                    f"{where}: `{field}` is {ref!r}, which is not logits — a read of `lm_head` or "
+                    "`logits`, or one viewed as logits; a metric scores a distribution over tokens",
+                )
             datasets = {one.partition(".")[0] for one in step.references}
             for one in step.references:
                 _refuse(
@@ -879,7 +916,7 @@ def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, 
                     f"({sorted(spec.data)}); a dataset written in place on a step has no name to name it by",
                 )
             _refuse(
-                len(datasets) == 1,
+                len(datasets) <= 1,
                 f"{where}: its columns come from {sorted(datasets)}; a metric's columns are one "
                 "dataset's, row i against row i of the read",
             )
@@ -896,6 +933,19 @@ def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, 
                 # the body's values, as its held-out run left them
                 publish(f"{name}.{ref}", kind, node, name)
     return produced
+
+
+def _of(where: str, field: str, ref: str, visible: dict[str, Ref], fit: str) -> Ref:
+    """What a metric's or a reduction's read resolves to: a read of a step
+    before it in this `steps`, or a refusal naming the field."""
+    found = visible.get(ref)
+    _refuse(
+        found is not None and found.kind in ("read", "layers") and found.scope == fit,
+        f"{where}: `{field}` is {ref!r}, which is not a read of a step before it in this "
+        "`steps`; a metric or a reduce is of `<step>.<read>`",
+    )
+    assert found is not None
+    return found
 
 
 def _call(

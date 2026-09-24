@@ -215,7 +215,16 @@ token is a token the model produced). A bare `-1` is sugar for
   reports `results["positions"]` — the window, the reason and the decoded
   tokens per op — and a metric of one of its reads carries its
   `results["eligible"]`, the intersection, and that record. A step with no
-  such position reports neither.
+  such position reports neither. A metric that takes two reads scores the
+  rows both could place.
+- **A metric kind is a row of `ops/metrics.SIGNATURES`.** Beside `of`, a kind
+  takes further reads (`kl` and `js` take `against`) and data columns
+  (`logit_diff` takes `a` and `b`), and its row says which fields are which.
+  The document's resolver checks every read the row names — before the
+  step, one position a row, logits — the compiler checks the reads are over
+  the same rows and compiles the columns to token ids, and the run hands the
+  function the reads and the ids in the row's order. A new kind is a
+  function and a row.
 - **The continuation frame is cut per row at its first stop token.** A read
   whose cut only the finished text can settle (`{"index": -1}`, a scope)
   compiles to one ordinary read per decode step carrying a `stack` name, and

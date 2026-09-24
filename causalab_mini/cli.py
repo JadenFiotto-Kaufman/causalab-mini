@@ -33,7 +33,7 @@ from .ops.locate import LocateError
 from .plan import sweep
 from .plan.explain import explain
 from .plan.plan import PlanError
-from .plan.spec import METRIC_COLUMNS, Model, Optimizer, Reduce, Spec
+from .plan.spec import METRIC_SIGNATURES, Model, Optimizer, Reduce, Spec
 from .shapes import Where
 
 #: What `--engine` means: the class, how it is loaded to *run*, and where it
@@ -146,7 +146,10 @@ def vocab(args: argparse.Namespace) -> dict[str, Any]:
         "mechanisms": sorted(intervene.MECHANISMS),
         "featurizer_kinds": sorted(featurizer.KINDS),
         "optimizers": list(get_args(Optimizer.model_fields["name"].annotation)),
-        "metric_kinds": {kind: list(columns) for kind, columns in METRIC_COLUMNS.items()},
+        # `of`, then the further reads, then the columns — the order they are scored in
+        "metric_kinds": {
+            kind: {"reads": ["of", *one.reads], "columns": list(one.columns)} for kind, one in METRIC_SIGNATURES.items()
+        },
         "position_forms": Where.forms(),
         "layers": "a site's `layers`: an int is one layer; a list is those layers — a read there is one "
         "value stacked in the listed order, layer axis first, and a write writes at each; \"all\" is every layer",
@@ -165,7 +168,8 @@ def vocab(args: argparse.Namespace) -> dict[str, Any]:
     lines.append(f"saves:            {payload['saves']}")
     lines.append(f"featurizer kinds: {', '.join(payload['featurizer_kinds'])}")
     lines.append(f"optimizers:       {', '.join(payload['optimizers'])} (betas for the Adams, momentum for sgd and rmsprop)")
-    lines.append("metric kinds:     " + ", ".join(f"{k}({', '.join(v)})" for k, v in payload["metric_kinds"].items()))
+    lines.append("metric kinds:     " + ", ".join(f"{k}({', '.join(v['reads'] + v['columns'])})" for k, v in payload["metric_kinds"].items()))
+    lines.append("                  kl is KL(of ‖ against) and js is symmetric, both in nats; a read is `<step>.<read>`, a column `<dataset>.<column>`")
     forms = payload["position_forms"]
     lines.append("position forms:   exactly one cut: "
                  + ", ".join(f"{k}={v}" for k, v in forms["cut"].items()))

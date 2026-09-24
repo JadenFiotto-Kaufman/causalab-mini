@@ -1,0 +1,39 @@
+{
+  "header": {
+    "description": "How much an interchange moves the whole prediction, not one logit: the patched run's next-token distribution scored against the clean run's on the same prompts. `kl` is KL(patched ‖ clean), in nats, weighted by where the patched model puts its mass; `js` is the symmetric Jensen–Shannon divergence, at most log 2. `soft_accuracy` is the probability the patched run puts on the counterfactual answer — `match` without the argmax."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "data": {"pairs": {"path": "weekdays/train"}},
+  "sites": {"target": {"component": "block_output", "layers": 0}, "head": {"component": "lm_head"}},
+  "steps": {
+    "clean": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "input",
+      "reads": {"logits": {"site": "head", "pos": -1}}
+    },
+    "counterfactual": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "counterfactual_inputs[0]",
+      "reads": {"v_cf": {"site": "target", "pos": -1}}
+    },
+    "patched": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "input",
+      "interventions": {
+        "writes": {"patch": {"site": "target", "pos": -1, "mechanism": "swap", "operand": "counterfactual.v_cf"}}
+      },
+      "reads": {"logits": {"site": "head", "pos": -1}}
+    },
+    "kl": {"kind": "metric", "metric": "kl", "of": "patched.logits", "against": "clean.logits"},
+    "js": {"kind": "metric", "metric": "js", "of": "patched.logits", "against": "clean.logits"},
+    "soft_accuracy": {"kind": "metric", "metric": "soft_accuracy", "of": "patched.logits", "expected": "pairs.cf_answer"},
+    "saves": ["kl", "js", "soft_accuracy"]
+  }
+}

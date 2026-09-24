@@ -44,7 +44,8 @@ def test_vocab_is_the_tables_not_a_description_of_them(capsys):
     assert out["reductions"] == ["mean", "pca"]
     assert set(out["components"]) == set(address.describe())
     assert out["mechanisms"] == sorted(intervene.MECHANISMS)
-    assert out["metric_kinds"]["logit_diff"] == ["a", "b"]
+    assert out["metric_kinds"]["logit_diff"] == {"reads": ["of"], "columns": ["a", "b"]}
+    assert out["metric_kinds"]["kl"] == {"reads": ["of", "against"], "columns": []}
     assert out["components"]["attention_query"]["accessor"] == "attention_queries"
     assert out["components"]["block_output"]["width"] == "hidden_size"
 

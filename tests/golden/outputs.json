@@ -66,6 +66,11 @@
   "iia.json": "be5680f5f30242594d68466c36b1d44bdece4e8dfeac5cfd5760b23b8765acc9",
   "logit_diff.json": "8b0d2873d3bcfeb84f6e6e4ffb8d2f1c42bd48b772d1012c33dd666ab37a8b4b"
  },
+ "documents/v2/faithfulness.json": {
+  "js.json": "89cdc6dcba7fd1ec3bdd00378f72f57d0f68e976b33eaac6312db26fd0be18b2",
+  "kl.json": "3c36c28bda3b4eecb9a47ca73c677d292d0433c11af7a4e200ea4b8097080562",
+  "soft_accuracy.json": "94277a1b14c95ed10e07b2272bec0fa4e9bb943c46b04b89e1d69c293ad4c44a"
+ },
  "documents/v2/generate_probe.json": {
   "index=0/generated.safetensors": "15f3712cfd2e7a1c3ae7da36d0607eb106168f3c281293aa582abda9e7af3f33",
   "index=0/p_answer.json": "c0e565003cd2ec30a49b2e35713b512babdb7c9420c79d4b0cfe828c8dbbe570",

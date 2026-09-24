@@ -169,7 +169,16 @@ def _spec_step(
                 "more rows, or more positions per row"
             )
         return Reduce(of=step.of, reduce=step.reduce, k=step.k)
-    rows = table(step.dataset)
+    for other in step.inputs:
+        # a read taken as it is meets row i with row i: as many rows
+        against = scope[other.partition(".")[0]]
+        assert isinstance(against, Forward)
+        if len(against.input_ids) != count:
+            raise PlanError(
+                f"step {name!r}: {step.of!r} was read over {count} rows and {other!r} over "
+                f"{len(against.input_ids)}; a metric scores row i of one against row i of the other"
+            )
+    rows = table(step.dataset or source.input)
     if len(rows) != count:
         raise PlanError(
             f"step {name!r}: its columns are {len(rows)} rows of {step.dataset!r}, and "
@@ -194,7 +203,10 @@ def _spec_save(
     step, target = steps[head], scope[head]
     save = SaveFile(file_path=file, value=ref)
     if step.kind == "metric":
-        save = replace(save, example_ids=rows_module.example_ids(table(step.dataset)), produced_by=spec.digest)
+        source = scope[step.of.partition(".")[0]]
+        assert isinstance(source, Forward)
+        rows = table(step.dataset or source.input)
+        save = replace(save, example_ids=rows_module.example_ids(rows), produced_by=spec.digest)
     scope[head] = replace(target, saves=(*target.saves, save))
 
 
@@ -541,6 +553,7 @@ def _metric(
     return Metric(
         kind=kind,
         of=of,
+        reads=tuple(spec.inputs),
         ids=_ids(spec, rows, keep, tokenizer),
         rows=None if all(keep) else tuple(index for index, one in enumerate(keep) if one),
         flat=op.flat,
