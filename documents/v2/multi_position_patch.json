@@ -1,0 +1,96 @@
+{
+  "header": {
+    "description": "Three swaps on ONE site at disjoint positions, in one forward: the counterfactual's -4, -3 and -2 at layer 0, each read and each written on its own. window_patch.json is the same experiment as one write of the window {'span': [-4, -1]}, and the two produce the same logits to the bit \u2014 which is the test of what a window is. An effect carried jointly by several positions can read nothing at every layer when each position is patched alone."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "data": {
+    "pairs": {
+      "path": "weekdays/train"
+    }
+  },
+  "sites": {
+    "target": {
+      "component": "block_output",
+      "layers": [
+        0
+      ]
+    }
+  },
+  "steps": {
+    "counterfactual": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "counterfactual_inputs[0]",
+      "reads": {
+        "v_m4": {
+          "site": "target",
+          "pos": -4
+        },
+        "v_m3": {
+          "site": "target",
+          "pos": -3
+        },
+        "v_m2": {
+          "site": "target",
+          "pos": -2
+        }
+      }
+    },
+    "patched": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "input",
+      "interventions": {
+        "writes": {
+          "at_m4": {
+            "site": "target",
+            "pos": -4,
+            "mechanism": "swap",
+            "operand": "counterfactual.v_m4"
+          },
+          "at_m3": {
+            "site": "target",
+            "pos": -3,
+            "mechanism": "swap",
+            "operand": "counterfactual.v_m3"
+          },
+          "at_m2": {
+            "site": "target",
+            "pos": -2,
+            "mechanism": "swap",
+            "operand": "counterfactual.v_m2"
+          }
+        }
+      },
+      "reads": {
+        "logits": {
+          "site": {
+            "component": "lm_head"
+          },
+          "pos": -1
+        }
+      }
+    },
+    "iia": {
+      "kind": "metric",
+      "metric": "match",
+      "of": "patched.logits",
+      "expected": "pairs.cf_answer"
+    },
+    "logit_diff": {
+      "kind": "metric",
+      "metric": "logit_diff",
+      "of": "patched.logits",
+      "a": "pairs.cf_answer",
+      "b": "pairs.base_answer"
+    },
+    "saves": {
+      "iia": "iia.json",
+      "logit_diff": "logit_diff.json"
+    }
+  }
+}

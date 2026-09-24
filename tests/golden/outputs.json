@@ -65,6 +65,9 @@
   "heads=3/iia.json": "c00f106ca8a804080226e1ab8bdf30ef07c101ac2f47d30e2d5a2417ed4c60e4",
   "heads=3/logit_diff.json": "7ed8e06abf5f17536e1c6053a48f8f072eeec5985cffa7283286f5db36c31b06"
  },
+ "documents/v2/attention_query.json": {
+  "logit_diff.json": "5f4123feabc6c22ab0ec1911512b08f94333b88275afd60211099f981d1da7f8"
+ },
  "documents/v2/chat_turn.json": {
   "p_answer.json": "c25ec9499ee3eb7380d9cd215b2d89efef01cf3b1fd7a577dfeb3c1e19ef5d8f"
  },
@@ -116,6 +119,9 @@
  "documents/v2/generated_answer.json": {
   "p_answer.json": "90dcbeae368389b0d5927b239c09fbf7eca39acbaa59ea4b95f0468db017e7ec"
  },
+ "documents/v2/gpt2_reach.json": {
+  "logit_diff.json": "164ec209c8647c318ae32ea12519dca9d10637cd09de2883aa8e2ec69cc8b796"
+ },
  "documents/v2/head_patching.json": {
   "heads=0/iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
   "heads=0/logit_diff.json": "b066c9ea304914ea554085d459a590b23b8cdbbfc9a4abc5a128ecac92507c4f",
@@ -125,6 +131,13 @@
   "heads=2/logit_diff.json": "51400efffa65c96b4a80b506e595091e47b1c915434122701375e6188e5aa676",
   "heads=3/iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
   "heads=3/logit_diff.json": "064235e6eb6e44d6789d828aeb728b9dd1ab396aea7b82b2ea4aa47be534b615"
+ },
+ "documents/v2/hydra_effect.json": {
+  "de0_clean.json": "b4f4f9eaba0ef8d224b5629eb789d5f373409f83848ea01580da77a7220368d8",
+  "de1_abl.json": "0958c66e0aa9bc932b294eb3ceb1eac2c4b1c6aae16b1f9c3999c249b1793ebc",
+  "de1_clean.json": "ac7b9c037fbddbb447975e96aa8c1f601485081e0a2c1c8209b011e4b879f2ab",
+  "te_abl.json": "e72171052b3595debdd9fcc0b22b04a5b95da0e4eb6bcb500bbad1bfbe946852",
+  "te_clean.json": "c8ece7905d7f9dc2712d2424c649f2aaec629f03218808047a42205096c31a53"
  },
  "documents/v2/logit_lens.json": {
   "layers=0/p_answer.json": "6bd25047e273d4e25596fd02357fc1dc5740fcd6b7b9c19ef9a28e038158e1c2",
@@ -140,6 +153,10 @@
   "ablated.json": "c274594b35e7c66e20acf6326572a1054b7b4bd6bdd089c3ae8c67c29e1ba50c",
   "clean.json": "307f2eb57f9dd7cea5fef7311625ab433a50edf649c32ec3e260c8b06d8c8cd6",
   "mean.safetensors": "ba28cbdff3fc2d35b967b5dab91235f674a2cca5fa5de0d512be8c3f0ec35206"
+ },
+ "documents/v2/multi_position_patch.json": {
+  "iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
+  "logit_diff.json": "4d6a866ab08fac7e0c3610d99b688f81d1cd7646fbfc288947e1ff896a0d9053"
  },
  "documents/v2/neuron_patching.json": {
   "units=[0,1,2,3]/iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
@@ -159,6 +176,22 @@
  },
  "documents/v2/pca_harvest.json": {
   "pca.safetensors": "77408a7461f84330f9896c64e7f1bb0c2272d2dc9492d8b456efde165c9b5f0b"
+ },
+ "documents/v2/pos_sweep.json": {
+  "pos=-1/iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
+  "pos=-1/logit_diff.json": "776ed6df273b1684bbc711e3b584b6b57f4676c2730ecc5679395205f20d8abb",
+  "pos=-2/iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
+  "pos=-2/logit_diff.json": "7d7c899f92f0d79003112b851abe281603d3456ec8401e1cac8fe5d99202cbf1",
+  "pos=-3/iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
+  "pos=-3/logit_diff.json": "5bd013135f095a1e73a18393bf4fb6908d362ae7f78050e9fa4c74bebd2dc413"
+ },
+ "documents/v2/random_subspace.json": {
+  "seed=0/iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
+  "seed=0/logit_diff.json": "a0d06bfb48567761550078b633448f1f10e135444f71713bb38e4eb73db2af61",
+  "seed=1/iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
+  "seed=1/logit_diff.json": "82fd12f0d2c2154e7b1e5f682e614e8c9add289c555a8668d861224ad1269cac",
+  "seed=2/iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
+  "seed=2/logit_diff.json": "785fddf4dfd6d55f844cd32f1258d569e312964becf72808c685fbefb619d3ec"
  },
  "documents/v2/sae_feature_ablation.json": {
   "features=0/latents.safetensors": "27ccb02bde933b332463787b91bfaf89dbb5edcbd9d9e54287b5b40d30f61c8a",

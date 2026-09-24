@@ -1,0 +1,69 @@
+{
+  "header": {
+    "description": "The interchange on a second model family: tiny GPT-2, whose module tree shares no path with Llama's, at layer 2's residual stream. It asks whether the engine generalizes, not whether the result means anything \u2014 the weights are random. The counting dataset, because tiny GPT-2's vocabulary cannot spell the weekdays as one token each. Only the logit difference is saved."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-gpt2",
+    "revision": "71034c5d8bde858ff824298bdedc65515b97d2b9",
+    "dtype": "fp32"
+  },
+  "data": {
+    "pairs": {
+      "path": "counting/train"
+    }
+  },
+  "sites": {
+    "target": {
+      "component": "block_output",
+      "layers": [
+        2
+      ]
+    }
+  },
+  "steps": {
+    "counterfactual": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "counterfactual_inputs[0]",
+      "reads": {
+        "v_cf": {
+          "site": "target",
+          "pos": -1
+        }
+      }
+    },
+    "patched": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "input",
+      "interventions": {
+        "writes": {
+          "patch": {
+            "site": "target",
+            "pos": -1,
+            "mechanism": "swap",
+            "operand": "counterfactual.v_cf"
+          }
+        }
+      },
+      "reads": {
+        "logits": {
+          "site": {
+            "component": "lm_head"
+          },
+          "pos": -1
+        }
+      }
+    },
+    "logit_diff": {
+      "kind": "metric",
+      "metric": "logit_diff",
+      "of": "patched.logits",
+      "a": "pairs.cf_answer",
+      "b": "pairs.base_answer"
+    },
+    "saves": {
+      "logit_diff": "logit_diff.json"
+    }
+  }
+}

@@ -1,0 +1,201 @@
+{
+  "header": {
+    "description": "The hydra effect (McGrath et al. 2023, arXiv:2307.15771) on the tiny Llama: resample-ablate layer 0's attention at the final token, then measure each downstream layer's direct effect by injecting that layer's attention output as the final residual and reading the head. Reads taken inside one intervened forward are the operands of writes in another \u2014 `ablated.a1` is layer 1's attention *under the ablation* \u2014 which is a chain of calls, each step naming the one before."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "data": {
+    "sample": {
+      "path": "pile/data/sample"
+    }
+  },
+  "sites": {
+    "abl": {
+      "component": "attention_output",
+      "layers": [
+        0
+      ]
+    },
+    "probe0": {
+      "component": "attention_output",
+      "layers": [
+        0
+      ]
+    },
+    "probe1": {
+      "component": "attention_output",
+      "layers": [
+        1
+      ]
+    },
+    "resid_final": {
+      "component": "block_output",
+      "layers": [
+        1
+      ]
+    },
+    "head": {
+      "component": "lm_head"
+    }
+  },
+  "steps": {
+    "noise": {
+      "kind": "forward",
+      "data": "sample",
+      "field": "resample_input",
+      "reads": {
+        "v_noise": {
+          "site": "abl",
+          "pos": -1
+        }
+      }
+    },
+    "clean": {
+      "kind": "forward",
+      "data": "sample",
+      "field": "input",
+      "reads": {
+        "logits": {
+          "site": "head",
+          "pos": -1
+        },
+        "a0": {
+          "site": "probe0",
+          "pos": -1
+        },
+        "a1": {
+          "site": "probe1",
+          "pos": -1
+        }
+      }
+    },
+    "ablated": {
+      "kind": "forward",
+      "data": "sample",
+      "field": "input",
+      "interventions": {
+        "writes": {
+          "resample": {
+            "site": "abl",
+            "pos": -1,
+            "mechanism": "swap",
+            "operand": "noise.v_noise"
+          }
+        }
+      },
+      "reads": {
+        "logits": {
+          "site": "head",
+          "pos": -1
+        },
+        "a1": {
+          "site": "probe1",
+          "pos": -1
+        }
+      }
+    },
+    "inj0_clean": {
+      "kind": "forward",
+      "data": "sample",
+      "field": "input",
+      "interventions": {
+        "writes": {
+          "inject": {
+            "site": "resid_final",
+            "pos": -1,
+            "mechanism": "swap",
+            "operand": "clean.a0"
+          }
+        }
+      },
+      "reads": {
+        "logits": {
+          "site": "head",
+          "pos": -1
+        }
+      }
+    },
+    "inj1_clean": {
+      "kind": "forward",
+      "data": "sample",
+      "field": "input",
+      "interventions": {
+        "writes": {
+          "inject": {
+            "site": "resid_final",
+            "pos": -1,
+            "mechanism": "swap",
+            "operand": "clean.a1"
+          }
+        }
+      },
+      "reads": {
+        "logits": {
+          "site": "head",
+          "pos": -1
+        }
+      }
+    },
+    "inj1_abl": {
+      "kind": "forward",
+      "data": "sample",
+      "field": "input",
+      "interventions": {
+        "writes": {
+          "inject": {
+            "site": "resid_final",
+            "pos": -1,
+            "mechanism": "swap",
+            "operand": "ablated.a1"
+          }
+        }
+      },
+      "reads": {
+        "logits": {
+          "site": "head",
+          "pos": -1
+        }
+      }
+    },
+    "te_clean": {
+      "kind": "metric",
+      "metric": "token_logit",
+      "of": "clean.logits",
+      "token": "sample.ml_token"
+    },
+    "te_abl": {
+      "kind": "metric",
+      "metric": "token_logit",
+      "of": "ablated.logits",
+      "token": "sample.ml_token"
+    },
+    "de0_c": {
+      "kind": "metric",
+      "metric": "token_logit",
+      "of": "inj0_clean.logits",
+      "token": "sample.ml_token"
+    },
+    "de1_c": {
+      "kind": "metric",
+      "metric": "token_logit",
+      "of": "inj1_clean.logits",
+      "token": "sample.ml_token"
+    },
+    "de1_a": {
+      "kind": "metric",
+      "metric": "token_logit",
+      "of": "inj1_abl.logits",
+      "token": "sample.ml_token"
+    },
+    "saves": {
+      "te_clean": "te_clean.json",
+      "te_abl": "te_abl.json",
+      "de0_c": "de0_clean.json",
+      "de1_c": "de1_clean.json",
+      "de1_a": "de1_abl.json"
+    }
+  }
+}
