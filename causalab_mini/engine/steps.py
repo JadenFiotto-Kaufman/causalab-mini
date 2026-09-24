@@ -195,38 +195,31 @@ def call(engine: Any, name: str, step: Forward, state: State) -> None:
     after this one sees one call. With no `batch_size` there is one window,
     which is the step exactly as compiled.
 
-    Rows were padded to one width on the client, so a window's positions are
-    already right. What a smaller batch does change is the last bit: a GEMM
-    over fewer rows rounds differently (FINDINGS §8).
+    Positions are resolved once, over every row, before any window runs:
+    they are absolute indices into the padded width the client fixed, so a
+    window of them is a slice (`plan.window`), and a write that cannot land
+    is refused before the first model call. What a smaller batch does change
+    is the last bit: a GEMM over fewer rows rounds differently (FINDINGS §8).
     """
-    rows = len(step.input_ids)
-    size = state.batch_size or rows or 1
-    operands = {op.operand for tap in step.taps for op in tap.writes if isinstance(op.operand, str)}
     dynamic = _dynamic(step)
+    ready, record = located(engine, step, dynamic)
+    _writes_land(ready, {**state.records, **record})
+    operands = {op.operand for tap in step.taps for op in tap.writes if isinstance(op.operand, str)}
+    model_call = engine.generate if isinstance(step, Generate) else engine.forward
+    rows = len(step.input_ids)
+    size = state.batch_size or rows
     produced: list[dict[str, Any]] = []
-    windows: list[Record] = []
     for start in range(0, rows, size):
         stop = min(start + size, rows)
         values = {one: state.window(one, start, stop) for one in operands}
-        ready, found = located(engine, plan_module.window(step, start, stop), start, dynamic)
-        # the operands' own windows over these rows, for the checks at the write
-        taken = {one: {key: part[start:stop] for key, part in state.records[one].items()} for one in operands if one in state.records}
-        _writes_land(ready, {**taken, **found}, start)
-        if isinstance(step, Generate):
-            values[name] = engine.generate(ready, values, state.featurizers)
-            found.update(_continuation(engine, ready, values, values[name]))
-        else:
-            values[name] = engine.forward(ready, values, state.featurizers)
+        values[name] = model_call(plan_module.window(ready, start, stop), values, state.featurizers)
         produced.append({one: value for one, value in values.items() if one not in operands})
-        windows.append(found)
-    record: Record = {
-        op: {key: tuple(one for part in windows for one in part[op][key]) for key in ("rows", "reason", "tokens")}
-        for op in (windows[0] if windows else {})
-    }
     made = {
         one: produced[0][one] if len(produced) == 1 else torch.cat([part[one] for part in produced])
-        for one in (produced[0] if produced else ())
+        for one in produced[0]
     }
+    if isinstance(step, Generate):
+        record.update(_continuation(engine, ready, made, made[name]))
     _stack_layers(step, made, record)
     state.records.update(record)
     # a read has its own form; a call's own result is a rectangle; a read at
@@ -353,7 +346,7 @@ def reduce(name: str, step: Reduce, state: State) -> None:
     step.results[name] = state.values[name].detach().cpu()
 
 
-def located(engine: Any, forward: Forward, start: int = 0, text: bool = True) -> tuple[Forward, Record]:
+def located(engine: Any, forward: Forward, text: bool = True) -> tuple[Forward, Record]:
     """`forward` with every op's positions resolved, and what each one got.
 
     This is where a spec becomes integers, and it happens here — in the
@@ -391,7 +384,7 @@ def located(engine: Any, forward: Forward, start: int = 0, text: bool = True) ->
             return replace(op, at=replace(op.at, positions=((0,),) * rows))
         windows, reasons = locate.locate(frame, where, op.at.anchors)
         if not where.ragged:
-            _fits_every_row(kind, op, windows, reasons, start)
+            _fits_every_row(kind, op, windows, reasons)
         found[op.name] = _record(frame, windows, reasons)
         return replace(op, at=replace(op.at, positions=windows))
 
@@ -468,7 +461,7 @@ def _by_step(one: tuple[Any, Any]) -> int:
     return one[0] if isinstance(one[0], int) else -1
 
 
-def _fits_every_row(kind: str, op: Any, windows: Positions, reasons: tuple[str, ...], start: int) -> None:
+def _fits_every_row(kind: str, op: Any, windows: Positions, reasons: tuple[str, ...]) -> None:
     """A fixed-width cut that does not fit a row is an authoring error.
 
     `{"last": 12}` on a nine-token row, `{"index": 40}` on any of these —
@@ -477,7 +470,7 @@ def _fits_every_row(kind: str, op: Any, windows: Positions, reasons: tuple[str, 
     with nothing to say. An anchored cut is the other case and is reported
     per row instead: which rows carry a word is data.
     """
-    missed = {start + row: reasons[row] for row, window in enumerate(windows) if not window}
+    missed = {row: reasons[row] for row, window in enumerate(windows) if not window}
     if missed:
         raise PlanError(
             f"{kind} {op.name!r} at {op.at.where.spelling()} has no position on row(s) "
@@ -512,7 +505,7 @@ def _same_text(forward: Forward, frame: Frame) -> None:
         )
 
 
-def _writes_land(forward: Forward, record: Record, start: int) -> None:
+def _writes_land(forward: Forward, record: Record) -> None:
     """The ragged write policy, and it is `refuse`.
 
     A read may have an empty window on a row — the anchor's text was not in
@@ -523,14 +516,13 @@ def _writes_land(forward: Forward, record: Record, start: int) -> None:
     landing policies are not implemented.
 
     Both are checked here, at the write, because here is where the positions
-    are. `start` puts the row numbers back in the step's own terms, so a
-    batched run names the row an author would count to.
+    are — once per step, over every row, before any window runs.
     """
     for tap in forward.taps:
         for write in tap.writes:
             reasons = record.get(write.name, {}).get("reason", ())
             missed = {
-                start + row: (reasons[row] if row < len(reasons) else "") or "out_of_range"
+                row: (reasons[row] if row < len(reasons) else "") or "out_of_range"
                 for row, window in enumerate(write.at.positions)
                 if not window
             }
@@ -545,7 +537,7 @@ def _writes_land(forward: Forward, record: Record, start: int) -> None:
             if isinstance(write.operand, str) and write.operand in record:
                 have = [len(window) for window in record[write.operand]["rows"]]
                 want = [len(window) for window in write.at.positions]
-                mismatched = [start + row for row, (a, b) in enumerate(zip(have, want)) if a != b]
+                mismatched = [row for row, (a, b) in enumerate(zip(have, want)) if a != b]
                 if mismatched:
                     raise PlanError(
                         f"write {write.name!r} covers {want} positions per row but its "

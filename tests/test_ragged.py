@@ -280,6 +280,30 @@ def test_a_row_whose_entity_is_not_in_its_prompt_refuses_the_write_by_name(
     assert torch.equal(without.result("logit_diff"), whole.result("logit_diff")[[0, 2, 3]])
 
 
+def test_a_write_that_cannot_land_is_refused_before_any_model_call_naming_every_row(
+    patch_raw, data_root, tmp_path, model_engine, monkeypatch
+):
+    """Positions are resolved once per step, over every row, so a run one
+    row at a time refuses the whole step before its first window — and names
+    both rows, not the first window's one."""
+    root = _holed(data_root, tmp_path)
+    path = root / "weekdays" / "train.json"
+    table = json.loads(path.read_text())
+    table[3]["entity"] = "Neptune"
+    path.write_text(json.dumps(table))
+    built = plan.build_request(patch_raw, root, model_engine)
+
+    writing = []
+    forward = type(model_engine).forward
+    monkeypatch.setattr(  # on the class: the engine is shared by the session
+        type(model_engine), "forward",
+        lambda self, step, *rest: writing.append(any(tap.writes for tap in step.taps)) or forward(self, step, *rest),
+    )
+    with pytest.raises(plan.PlanError, match=r"row\(s\) \{1: 'alignment_missing', 3: 'alignment_missing'\}"):
+        model_engine.execute(built, batch_size=1)
+    assert writing == [False] * 4  # the counterfactual's four windows ran; the patched step's none
+
+
 def test_a_text_anchor_resolves_the_same_way_through_the_serialized_path(
     patch_raw, data_root, model_engine
 ):
