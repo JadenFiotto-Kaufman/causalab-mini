@@ -28,6 +28,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 V2_DAS = REPO / "documents" / "v2" / "das.json"
 V2_PATCHING = REPO / "documents" / "v2" / "patching.json"
 V2_MEAN = REPO / "documents" / "v2" / "mean_ablation.json"
+V2_TWO = REPO / "documents" / "v2" / "two_observes.json"
 
 
 @pytest.fixture
@@ -287,6 +288,30 @@ def test_an_inline_intervention_may_not_take_a_declared_name(patching_spec_raw):
     with pytest.raises(ValidationError, match="step 'patching' writes its intervention in place, and one is already declared"):
         Spec.model_validate(clash)
 
+
+
+def test_a_baseline_is_an_intervention_with_no_writes(data_root, model_engine):
+    """No intervention is not a null: it is reads and metrics and nothing
+    written, reading `original`. One forward, and it scores."""
+    raw = json.loads(V2_TWO.read_text())
+    built = plan.build_request(raw, data_root, model_engine)
+    assert [f.name for f in built.step("clean", plan.Observe).forwards] == ["original"]
+    assert all(not tap.writes for tap in built.step("clean", plan.Observe).forwards[0].taps)
+    executed = model_engine.execute(built)
+    assert executed.step("clean", plan.Observe).results["logit_diff"].shape == (4,)
+
+
+def test_two_observes_run_two_named_interventions_in_one_document(data_root, model_engine):
+    """Each step names its own experiment. `patched` runs a source pass and
+    the patched one; `ablated` swaps in the mean the baseline published, so it
+    runs one forward. The three scores are three different numbers."""
+    raw = json.loads(V2_TWO.read_text())
+    built = plan.build_request(raw, data_root, model_engine)
+    assert [f.name for f in built.step("patched", plan.Observe).forwards] == ["original", "patched"]
+    assert [f.name for f in built.step("ablated", plan.Observe).forwards] == ["ablated"]
+    executed = model_engine.execute(built)
+    clean, patched, ablated = (executed.step(n, plan.Observe).results["logit_diff"] for n in ("clean", "patched", "ablated"))
+    assert not torch.equal(clean, patched) and not torch.equal(clean, ablated) and not torch.equal(patched, ablated)
 
 
 def test_mean_ablation_is_three_steps_and_the_mean_never_needs_a_file(
