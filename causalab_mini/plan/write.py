@@ -66,15 +66,23 @@ def _json(path: Path, payload: object) -> Path:
 
 
 def _file(step: Step, save: SaveFile, out: Path) -> Path:
+    """Write one save of `step`. A tensor save is a `.safetensors` file in
+    one of three forms: a tensor is one slot, `weight`; a dict of tensors a
+    slot each, by its own keys; a list of tensors a slot each, by its index
+    (`"0"`, `"1"`, …), whatever their shapes. A metric's is a `.json` table."""
     path = out / save.file_path
     path.parent.mkdir(parents=True, exist_ok=True)
     # A save names a result of the step it sits on. No search, so no
     # ambiguity: two steps may both produce `iia` and each saves its own.
     value = step.results[save.value]
     if save.file_path.endswith(".safetensors"):
-        # A tensor is one slot, `weight` — the key a featurizer's bundle is
-        # loaded by; a record of several is a slot each, by its own names.
-        tensors = value if isinstance(value, dict) else {"weight": value}
+        # `weight` is the key a featurizer's bundle is loaded by
+        if isinstance(value, dict):
+            tensors = value
+        elif isinstance(value, list):
+            tensors = {str(index): one for index, one in enumerate(value)}
+        else:
+            tensors = {"weight": value}
         save_file({key: one.contiguous() for key, one in tensors.items()}, str(path), metadata=save.identity)
         return path
     # The result holds one value per eligible row; an excluded measurement

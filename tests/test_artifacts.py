@@ -177,3 +177,23 @@ def test_a_pca_of_too_few_vectors_is_refused_before_any_forward(data_root, model
     raw["steps"]["harvest"]["reads"]["acts"]["pos"] = -1
     with pytest.raises(plan.PlanError, match="4 principal directions of 4 vector"):
         plan.build_request(raw, data_root, model_engine)
+
+
+def test_a_tensor_save_takes_three_forms(tmp_path):
+    """A tensor is one slot, `weight`; a dict a slot per key; a list a slot
+    per element, by index, whatever the shapes. No step makes a list today,
+    so the step is built by hand."""
+    from safetensors.torch import load_file
+
+    from causalab_mini.plan import write
+    from causalab_mini.plan.plan import SaveFile
+
+    ragged = [torch.ones(2, 3), torch.zeros(5)]
+    step = plan.Reduce(of="x", reduce="mean", results={"t": torch.ones(4), "d": {"a": torch.ones(1)}, "l": ragged})
+    slots = {
+        name: load_file(write._file(step, SaveFile(file_path=f"{name}.safetensors", value=name), tmp_path))
+        for name in ("t", "d", "l")
+    }
+    assert set(slots["t"]) == {"weight"} and set(slots["d"]) == {"a"}
+    assert set(slots["l"]) == {"0", "1"}
+    assert torch.equal(slots["l"]["0"], ragged[0]) and torch.equal(slots["l"]["1"], ragged[1])
