@@ -56,10 +56,11 @@ if TYPE_CHECKING:
 #: tokenizer decodes it, and per row the runs the frame located in it.
 _Batch = tuple[TokenRows, TokenRows, str, tuple[dict[str, tuple[int, int]], ...]]
 
-#: Every site's three compiled facts, by site: its address, which part of
-#: the feature axis it is (`(groups, take)`, where it names heads or units),
-#: and how wide the tensor is where a continuation read buffers.
-_Sites = tuple[dict[str, Address], dict[str, Any], dict[str, int]]
+#: Every site's three compiled facts, by site: its address — one per layer,
+#: for a site at every layer — which part of the feature axis it is
+#: (`(groups, take)`, where it names heads or units), and how wide the tensor
+#: is where a continuation read buffers.
+_Sites = tuple[dict[str, Any], dict[str, Any], dict[str, int]]
 
 
 def build_spec(spec: Spec, data_root: str | Path, engine: Any) -> Plan:
@@ -201,9 +202,11 @@ def _spec_save(
     step, target = steps[head], scope[head]
     save = SaveFile(file_path=file, value=ref)
     if step.kind == "metric":
+        assert isinstance(target, Metric)
         rows = table(step.dataset)
         save = replace(
             save,
+            layers=target.layers,
             example_ids=rows_module.example_ids(rows),
             eligible=_eligible(rows, step),
             of=step.of,
@@ -360,22 +363,25 @@ def _resolve_sites(places: dict[str, Any], stacking: set[str], engine: Any) -> _
     units, and — for the sites a continuation read buffers at, and only
     those — how wide it is."""
     for name, site in places.items():
-        if site.layers is not None and not 0 <= site.layers[0] < engine.num_layers:
+        if isinstance(site.layers, list) and not 0 <= site.layers[0] < engine.num_layers:
             raise PlanError(
                 f"site {name!r}: layer {site.layers[0]} is outside the model's "
                 f"{engine.num_layers} layers"
             )
-    addresses = {
-        name: engine.locate(site.component, site.layers[0] if site.layers else None)
+    addresses: dict[str, Any] = {
+        name: tuple(engine.locate(site.component, layer) for layer in range(engine.num_layers))
+        if site.layers == "all"
+        else engine.locate(site.component, site.layers[0] if site.layers else None)
         for name, site in places.items()
     }
     # site -> (groups, take): the feature half of every selection made there
     features: dict[str, tuple[int, tuple[int, ...] | None]] = {}
     for name, site in places.items():
+        address = addresses[name][0] if site.layers == "all" else addresses[name]
         if site.units is not None:
-            count, take, what = engine.width(addresses[name]), site.units, "unit"
-        elif addresses[name].heads_kind is not None:
-            count, take, what = engine.heads(addresses[name]), site.heads, "head"
+            count, take, what = engine.width(address), site.units, "unit"
+        elif address.heads_kind is not None:
+            count, take, what = engine.heads(address), site.heads, "head"
         else:
             continue
         if take is not None and max(take) >= count:
@@ -673,13 +679,15 @@ def _metric(
     # A read comes back flat — one entry per row it found — when its form
     # is ragged. For a read cut out of the continuation the spec says, since
     # the cut happened over the decode steps and not at the tap.
-    op = next(op for one in forwards for tap in one.taps for op in tap.reads if of in (op.name, op.stack))
+    ops = [(tap.address, op) for one in forwards for tap in one.taps for op in tap.reads if of in (op.name, op.stack, op.layered)]
+    op = ops[0][1]
     return Metric(
         kind=kind,
         of=of,
         ids=_ids(spec, rows, keep, tokenizer),
         rows=None if all(keep) else tuple(index for index, one in enumerate(keep) if one),
         flat=op.at.flat if not op.stack else op.at.where is not None and op.at.where.ragged,
+        layers=tuple(address.layer for address, one in ops if one.layered and address.layer is not None),
     )
 
 
@@ -1033,6 +1041,20 @@ def _forward(
     read: dict[tuple[Address, Any], list[ReadOp]] = {}
     for read_name, spec in reads:
         at = _selection(spec.pos, anchors(spec.pos), features.get(spec.site))
+        step = None if spec.pos.frame == "prompt" else ("all" if spec.pos.all else spec.pos.index)
+        if isinstance(addresses[spec.site], tuple):
+            # a read at every layer: one per layer, which the run stacks
+            for address in addresses[spec.site]:
+                read.setdefault((address, step), []).append(
+                    ReadOp(
+                        name=f"{read_name}@{address.layer}",
+                        at=at,
+                        featurizer=spec.featurizer,
+                        view=getattr(spec, "view", "raw"),
+                        layered=read_name,
+                    )
+                )
+            continue
         if not _stacks(spec.pos):
             step = None if spec.pos.frame == "prompt" else ("all" if spec.pos.all else spec.pos.index)
             read.setdefault((addresses[spec.site], step), []).append(

@@ -421,7 +421,7 @@ def test_an_operand_covers_the_window_the_write_does(patching):
         (lambda steps: steps["mean"].update(of="harvest.nope"),
          "`of` is 'harvest.nope', which is not a read of a step before it"),
         (lambda steps: steps["saves"].update(mean="mean.json"),
-         re.escape("'mean' is a tensor (mean): saved to a .safetensors file")),
+         re.escape("'mean' is a mean, a tensor: saved to a .safetensors file")),
     ],
     ids=["a mean taken after it is used", "an operand of nothing", "a mean of a read that is not there",
          "a tensor saved as a table"],
@@ -479,7 +479,7 @@ def test_a_metric_is_a_table_and_everything_else_a_tensor(patching):
     one["steps"]["saves"]["iia"] = "iia.safetensors"
     _refused(one, "a metric, one row per example")
     patching["steps"]["saves"]["patched.logits"] = "logits.json"
-    _refused(patching, re.escape("a tensor (read)"))
+    _refused(patching, re.escape("is a read, a tensor"))
 
 
 def test_two_saves_are_two_files_inside_the_output(patching):

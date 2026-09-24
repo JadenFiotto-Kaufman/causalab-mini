@@ -132,6 +132,10 @@
   "layers=1/p_answer.json": "6630d49c9a2f15b76e55fa7f097253d11b9288a417f6379fc480b383e92b1d20",
   "layers=1/top1.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c"
  },
+ "documents/v2/logit_lens_all.json": {
+  "p_answer.json": "bbbe3d63f20eee5d9b74aa55235b0430a7c80c6846f7ec4dab0a0ef6989d38d7",
+  "top1.json": "2e28bf98953584af726adaf079ebb160072df0cadbd59db156372c08c6a91398"
+ },
  "documents/v2/mean_ablation.json": {
   "ablated.json": "c274594b35e7c66e20acf6326572a1054b7b4bd6bdd089c3ae8c67c29e1ba50c",
   "clean.json": "307f2eb57f9dd7cea5fef7311625ab433a50edf649c32ec3e260c8b06d8c8cd6",

@@ -102,7 +102,10 @@ class Dataset(Node):
 
 class Site(Node):
     component: str
-    layers: list[int] | None = None
+    #: The one layer this site is at, as a one-element band — or `"all"`: a
+    #: read here is taken at every layer of the model, in one call, and is
+    #: one value with the layer axis first.
+    layers: list[int] | Literal["all"] | None = None
     #: At a per-head tensor, the heads this site is. The site's width is then
     #: theirs — `len(heads) · head_dim` — so a featurizer, a swap or a harvest
     #: here is of those heads and leaves the others alone.
@@ -128,13 +131,13 @@ class Site(Node):
                 )
             if not self.heads or len(set(self.heads)) != len(self.heads) or min(self.heads) < 0:
                 raise ValueError("heads is a non-empty list of distinct head indices")
-        if self.layers is not None and len(self.layers) != 1:
+        if isinstance(self.layers, list) and len(self.layers) != 1:
             raise ValueError(
-                "layers must be a one-element band; a band spanning several "
+                "layers must be a one-element band, or \"all\"; a band spanning several "
                 "layers is one address and is not implemented"
             )
         # the same question the protocol format asks, of the same table
-        wrong = address.layered(self.component, self.layers[0] if self.layers else None)
+        wrong = address.layered(self.component, 0 if self.layers == "all" else self.layers[0] if self.layers else None)
         if wrong is not None:
             raise ValueError(wrong)
         return self
@@ -566,11 +569,24 @@ Fit.model_rebuild()
 # --------------------------------------------------------------------- #
 
 
-#: What a reference resolves to: its kind (`read`, `ids`, `logits`,
-#: `metric`, `mean`, `pca`, `fit`, `trained`), the node that says what it is (for a read, the
+#: What a reference resolves to: its kind (`read`, `layers` — a read at
+#: every layer — `ids`, `logits`, `metric`, `mean`, `pca`, `fit`, `trained`), the node that says what it is (for a read, the
 #: `Read`; for a mean or a basis, the `Read` it reduced), and the scope it
 #: belongs to — `""` for the root, a fit's name for its body.
 Ref = tuple[str, Any, str]
+
+#: A reference's kind, as a refusal says it.
+SAID = {
+    "read": "a read",
+    "layers": "a read at every layer",
+    "ids": "a decode's ids",
+    "logits": "a forward's logits",
+    "metric": "a metric",
+    "mean": "a mean",
+    "pca": "a pca basis",
+    "fit": "a fit's training record",
+    "trained": "a trained parameter set",
+}
 
 
 class Spec(Node):
@@ -724,7 +740,7 @@ class Spec(Node):
                 file.endswith(".json" if table else ".safetensors"),
                 f"saves: {ref!r} is " + (
                     "a metric, one row per example: a table, saved to a .json file"
-                    if table else f"a tensor ({found[0]}): saved to a .safetensors file"
+                    if table else f"{SAID[found[0]]}, a tensor: saved to a .safetensors file"
                 ) + f", not {file!r}",
             )
         return self
@@ -757,17 +773,23 @@ def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, 
         if isinstance(step, _Call):
             reads, _ = _call(spec, where, name, step, visible, fit, trainers, fits)
             for read_name, read in reads.items():
-                publish(f"{name}.{read_name}", "read", read)
+                every = spec.site(read.site)[1].layers == "all"
+                publish(f"{name}.{read_name}", "layers" if every else "read", read)
             # the call's own result: a decode's ids, a forward's logits
             publish(name, "ids" if isinstance(step, Generate) else "logits", step)
         elif isinstance(step, (_Metric, Reduce)):
             found = visible.get(step.of)
             _refuse(
-                found is not None and found[0] == "read" and found[2] == fit,
+                found is not None and found[0] in ("read", "layers") and found[2] == fit,
                 f"{where}: `of` is {step.of!r}, which is not a read of a step before it in this "
                 "`steps`; a metric or a reduce is of `<step>.<read>`",
             )
             assert found is not None
+            _refuse(
+                isinstance(step, _Metric) or found[0] == "read",
+                f"{where}: {step.of!r} is read at every layer; a metric scores it layer by layer, "
+                "and a reduction of it is not implemented",
+            )
             if isinstance(step, Reduce):
                 publish(name, step.reduce, found[1])
                 continue
@@ -846,6 +868,20 @@ def _call(
         what = f"read {read_name!r}"
         component = site(what, read.site).component
         _featurizer(spec, f"{where}: {what}", read.featurizer, trainers, fits)
+        if site(what, read.site).layers == "all":
+            # one value with the layer axis first; what would make it more
+            # than a read — a parameter set, a cut over the decode — is one
+            # site, or one step, and every layer is many
+            _refuse(
+                read.featurizer == "identity",
+                f"{where}: {what}: a read at every layer takes no featurizer; one featurizer "
+                "is one parameter set at one site, and every layer is many sites",
+            )
+            _refuse(
+                read.pos.frame == "prompt" or (read.pos.index is not None and read.pos.index >= 0),
+                f"{where}: {what}: a read at every layer is at one decode step or in the prompt; "
+                f"{read.pos.spelling()} is cut from every step of the decode",
+            )
         if read.view == "logits":
             _refuse(
                 component in RESIDUAL_STREAM,
@@ -861,6 +897,11 @@ def _call(
     for write_name, write in writes.items():
         what = f"write {write_name!r}"
         component = site(what, write.site).component
+        _refuse(
+            site(what, write.site).layers != "all",
+            f"{where}: {what}: a write is at one layer — a write at every layer is as many "
+            "experiments; sweep `layers` for them",
+        )
         _refuse(
             not address.describe().get(component, {}).get("read_only", False),
             f"{where}: {what}: {component!r} is read-only — the model's input, not an activation",
@@ -933,7 +974,7 @@ def _operand(where: str, what: str, name: str, write: Write, visible: dict[str, 
     kind, source, scope = found
     _refuse(
         kind in ("read", "mean"),
-        f"{where}: {what}: operand {ref!r} is a {kind}; an operand is a read of an earlier step "
+        f"{where}: {what}: operand {ref!r} is {SAID[kind]}; an operand is a read of an earlier step "
         "or a mean" + ("; a pca basis is loaded as a featurizer, not written at a site" if kind == "pca" else ""),
     )
     _refuse(

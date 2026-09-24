@@ -178,11 +178,25 @@ def call(engine: Any, name: str, step: Forward, state: State) -> None:
         op: {key: tuple(one for part in windows for one in part[op][key]) for key in ("rows", "reason", "tokens")}
         for op in (windows[0] if windows else {})
     }
+    made = {
+        one: produced[0][one] if len(produced) == 1 else torch.cat([part[one] for part in produced])
+        for one in (produced[0] if produced else ())
+    }
+    # a read at every layer is its layers stacked, in layer order, the layer
+    # axis first; every layer read the same positions, so one record says so
+    layered = _layers(step)
+    for stacked, parts in layered.items():
+        made[stacked] = torch.stack([made.pop(part) for part in parts])
+        record[stacked] = record[parts[0]]
+        for part in parts:
+            del record[part]
     state.records.update(record)
-    for one in produced[0] if produced else ():
-        whole = produced[0][one] if len(produced) == 1 else torch.cat([part[one] for part in produced])
-        # a read has its rows where its record says; a call's own result is a rectangle
-        state.publish(one, whole, record[one]["rows"] if one in record else ((0,),) * rows)
+    for one, whole in made.items():
+        # a read has its rows where its record says; a call's own result is a
+        # rectangle; a read at every layer has the layers first, and no rows
+        # a later step's windows could take
+        layout = None if one in layered else record[one]["rows"] if one in record else ((0,),) * rows
+        state.publish(one, whole, layout)
     if isinstance(step, Generate) or step.logits:
         step.results[name] = state.values[name].detach().cpu()
     step.results.update({one: state.values[one].detach().cpu() for one in step.keep})
@@ -192,6 +206,17 @@ def call(engine: Any, name: str, step: Forward, state: State) -> None:
         # a metric does and a table can print them beside a number.
         step.results["positions"] = record
         state.reported |= set(record)
+
+
+def _layers(step: Forward) -> dict[str, list[str]]:
+    """This step's reads at every layer: each stacked name, and its per-layer
+    reads in layer order."""
+    found: dict[str, list[tuple[int, str]]] = {}
+    for tap in step.taps:
+        for op in tap.reads:
+            if op.layered:
+                found.setdefault(op.layered, []).append((tap.address.layer or 0, op.name))
+    return {name: [one for _, one in sorted(parts)] for name, parts in found.items()}
 
 
 def _dynamic(step: Forward) -> bool:
@@ -226,7 +251,13 @@ def metric(name: str, step: Metric, state: State) -> None:
     eligible = tuple(
         (step.rows is None or row in step.rows) and bool(one) for row, one in enumerate(located_rows)
     )
-    state.publish(name, metrics.compute(step.kind, *_measured(name, step, state.values[step.of], eligible, located_rows)))
+    value = state.values[step.of]
+    # a read at every layer is scored layer by layer, a row of scores each
+    scores = [
+        metrics.compute(step.kind, *_measured(name, step, one, eligible, located_rows))
+        for one in (value if step.layers else [value])
+    ]
+    state.publish(name, torch.stack(scores) if step.layers else scores[0])
     step.results[name] = state.values[name].detach().cpu()
     if step.of in state.reported:
         step.results["eligible"] = {name: eligible}

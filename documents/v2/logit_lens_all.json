@@ -1,0 +1,33 @@
+{
+  "header": {
+    "description": "The logit lens at every layer, in one forward: `layers: \"all\"` reads the residual stream at the answer position at each layer of the model and projects each through the final norm and head, so `lens.logits` is one value with the layer axis first — (layers, rows, 1, vocab). A metric of it scores each layer, and its table has a row per layer and example, each saying its layer. logit_lens.json is the same lens as one point per layer; the numbers are the same."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "data": {"prompts": {"path": "weekdays/train"}},
+  "sites": {"resid": {"component": "block_output", "layers": "all"}},
+  "steps": {
+    "lens": {
+      "kind": "forward",
+      "data": "prompts",
+      "field": "input",
+      "reads": {"logits": {"site": "resid", "pos": -1, "view": "logits"}}
+    },
+    "p_answer": {
+      "kind": "metric",
+      "metric": "token_prob",
+      "of": "lens.logits",
+      "token": "prompts.base_answer"
+    },
+    "top1": {
+      "kind": "metric",
+      "metric": "match",
+      "of": "lens.logits",
+      "expected": "prompts.base_answer"
+    },
+    "saves": {"p_answer": "p_answer.json", "top1": "top1.json"}
+  }
+}

@@ -88,10 +88,12 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
                 # a read the run cuts out of the continuation is one op per
                 # decode step in the plan and one read in the document;
                 # print the document's
-                if read.stack and tap.step != 0:
+                if (read.stack and tap.step != 0) or (read.layered and read.name != f"{read.layered}@0"):
                     continue
-                label = read.stack or read.name
+                label = read.stack or read.layered or read.name
                 at = where.split(" @step")[0] if read.stack else where
+                if read.layered:
+                    at = f"{address.component}[every layer]" + where.partition("]")[2]
                 steps = f" over {step.max_new_tokens} steps" if read.stack and isinstance(step, Generate) else ""
                 view = "" if read.view == "raw" else f" as {read.view}"
                 out.append(

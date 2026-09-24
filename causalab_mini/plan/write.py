@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+from typing import Any
 
 from safetensors.torch import save_file
 
@@ -95,7 +96,18 @@ def _file(step: Step, save: SaveFile, out: Path) -> Path:
     run = step.results.get("eligible", {}).get(save.value)
     eligible = run or save.eligible or (True,) * len(save.example_ids)
     where = step.results.get("positions", {}).get(save.of, {})
-    numbers = iter(value.tolist())
+    rows = []
+    # a metric of a read at every layer is a row of scores per layer, and a
+    # table row per layer and example, which says its layer
+    for layer, scores in zip(save.layers or (None,), value if save.layers else [value]):
+        rows += _rows(save, scores, eligible, where, {} if layer is None else {"layer": layer})
+    path.write_text(json.dumps(rows, indent=1) + "\n")
+    return path
+
+
+def _rows(save: SaveFile, scores: Any, eligible: tuple[bool, ...], where: dict[str, Any], layer: dict[str, int]) -> list[dict[str, Any]]:
+    """One table row per example: its number when it was scored, and where."""
+    numbers = iter(scores.tolist())
     rows = []
     for index, (example_id, included) in enumerate(zip(save.example_ids, eligible)):
         number = next(numbers) if included else None
@@ -103,6 +115,7 @@ def _file(step: Step, save: SaveFile, out: Path) -> Path:
             {
                 "example_id": example_id,
                 "metric": save.value,
+                **layer,
                 # JSON has no NaN or Infinity: `json.dumps` would emit a bare
                 # `NaN`, which Python reads back and a strict parser refuses.
                 "value": float(number) if number is not None and math.isfinite(number) else None,
@@ -118,5 +131,4 @@ def _file(step: Step, save: SaveFile, out: Path) -> Path:
                 "produced_by": save.produced_by,
             }
         )
-    path.write_text(json.dumps(rows, indent=1) + "\n")
-    return path
+    return rows

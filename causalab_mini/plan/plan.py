@@ -73,6 +73,9 @@ class ReadOp:
     #: the steps back together and cuts them against the continuation,
     #: which does not exist until the decode has run.
     stack: str = ""
+    #: When this read is one layer of a read taken at every layer, the name
+    #: the layers are stacked under — in layer order, the layer axis first.
+    layered: str = ""
 
 
 @dataclass(frozen=True)
@@ -185,6 +188,9 @@ class SaveFile:
     #: For a `.safetensors` bundle: the ArtifactIdentity stamped into its
     #: header. Empty for a metric table.
     identity: dict[str, str] = field(default_factory=dict)
+    #: For a metric of a read at every layer: the layers, so the table has a
+    #: row per layer and example, and says which layer each is.
+    layers: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -273,6 +279,9 @@ class Metric(Step):
     #: Whether the read came back flat — one entry per row it *found* —
     #: rather than as a rectangle. Known from the read's form, here.
     flat: bool = False
+    #: For a read at every layer, the layers its first axis holds: the
+    #: metric scores each, and is one row of scores per layer.
+    layers: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)
