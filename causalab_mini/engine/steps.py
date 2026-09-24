@@ -29,10 +29,10 @@ The walk is: for each step, run it. Three rules hold throughout:
   comes home in `results` only when a save keeps it. A forward's logits over
   a real vocabulary and a thousand rows are gigabytes, and nothing asked for
   them.
-* **a value keeps its graph only inside a fit's update.** There the metrics
-  are differentiated, so everything an update's steps publish stays attached
-  until its optimizer step; everywhere else a value is published detached,
-  and a value leaving a fit is always a result, which is detached too.
+* **a value keeps its graph until it leaves the run.** What a step
+  publishes is kept as it is, so a fit's objective can be differentiated
+  through its update's steps with nothing special about a fit; what comes
+  home in `results` is detached, which is the one place a value leaves.
 """
 
 from __future__ import annotations
@@ -78,13 +78,11 @@ class State:
     #: of the run and not of the experiment — it bounds memory and moves the
     #: last bit, nothing else — so it arrives with `execute`, not the plan.
     batch_size: int | None = None
-    #: Inside a fit's update: values keep their graph, for the backward.
-    attached: bool = False
     #: Every value some step of the plan takes or some save keeps
     #: (`named`): what a model call makes is held only if it is here.
     named: frozenset[str] = frozenset()
 
-    def child(self, attached: bool = False) -> "State":
+    def child(self) -> "State":
         """A nested scope: the same live featurizers, and what was produced
         before it as a copy — it reads what came earlier, and what it
         produces stays its own."""
@@ -95,14 +93,19 @@ class State:
             records=dict(self.records),
             reported=set(self.reported),
             batch_size=self.batch_size,
-            attached=attached,
             named=self.named,
         )
 
     def publish(self, name: str, value: Any, flat: bool | None = None) -> None:
         """Keep a value for the steps after this one; `flat` as the field
         says, None for a value with no rows."""
-        self.values[name] = value if self.attached else value.detach()
+        # TODO: the compiler should decide which values keep their graph —
+        # only those a later step asks a gradient of (a fit's objective, a
+        # future attribution or grad step) — by the same named-consumer rule
+        # that decides what is held at all. Until then every published value
+        # keeps its graph, which costs memory across a long run but blocks
+        # nothing.
+        self.values[name] = value
         if flat is not None:
             self.flat[name] = flat
 
@@ -614,7 +617,7 @@ def fit(engine: Any, step: Fit, state: State) -> None:
 def _scored(engine: Any, steps: Plan, state: State) -> dict[str, Any]:
     """Every value a fit's subtree produced, live: the metrics its objective
     and its early stop name are among them, still attached to their graph."""
-    inner = state.child(attached=True)
+    inner = state.child()
     run(engine, steps, inner)
     return inner.values
 
