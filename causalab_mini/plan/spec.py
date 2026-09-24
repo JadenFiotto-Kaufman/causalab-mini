@@ -818,9 +818,6 @@ def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, 
     """
     visible = dict(outer)
     produced: dict[str, Ref] = {}
-    #: the fits a `<fit>.<name>` may name here: those already run, and the
-    #: one whose body this is — inside it, the parameter it is training
-    fits = {ref for ref, (kind, _, _) in outer.items() if kind == "fit"} | ({fit} if fit else set())
 
     def publish(ref: str, kind: str, node: Any, scope: str = fit) -> None:
         visible[ref] = produced[ref] = Ref(kind, node, scope)
@@ -828,7 +825,7 @@ def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, 
     for name, step in steps.items():
         where = f"step {(f'{fit}.' if fit else '') + name!r}"
         if isinstance(step, _Call):
-            reads, _ = _call(spec, where, name, step, visible, fit, trainers, fits)
+            reads, _ = _call(spec, where, name, step, visible, fit, trainers)
             for read_name, read in reads.items():
                 every = spec.site(read.site)[1].layers == "all"
                 publish(f"{name}.{read_name}", "layers" if every else "read", read)
@@ -869,7 +866,9 @@ def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, 
             )
             publish(name, "metric", step)
         elif isinstance(step, Fit):
-            body = _scope(spec, step.steps, visible, trainers, name)
+            # inside its body, what it trains is already `<fit>.<name>`
+            trained = {f"{name}.{one}": Ref("trained", one, "") for one in step.train}
+            body = _scope(spec, step.steps, visible | trained, trainers, name)
             _fit(spec, where, name, step, body)
             publish(name, "fit", step, "")
             for one in step.train:
@@ -877,7 +876,6 @@ def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, 
             for ref, (kind, node, _) in body.items():
                 # the body's values, as its held-out run left them
                 publish(f"{name}.{ref}", kind, node, name)
-            fits.add(name)
     return produced
 
 
@@ -889,7 +887,6 @@ def _call(
     visible: dict[str, Ref],
     fit: str,
     trainers: dict[str, str],
-    fits: set[str],
 ) -> tuple[dict[str, Read], dict[str, Write]]:
     """One forward or generate: its data, and every read and write in force,
     each resolved where this step is."""
@@ -925,7 +922,7 @@ def _call(
     for read_name, read in reads.items():
         what = f"read {read_name!r}"
         component = site(what, read.site).component
-        _featurizer(spec, f"{where}: {what}", read.featurizer, trainers, fits)
+        _featurizer(spec, f"{where}: {what}", read.featurizer, trainers, visible)
         if site(what, read.site).layers == "all":
             # one value with the layer axis first; what would make it more
             # than a read — a parameter set, a cut over the decode — is one
@@ -964,7 +961,7 @@ def _call(
             not address.describe().get(component, {}).get("read_only", False),
             f"{where}: {what}: {component!r} is read-only — the model's input, not an activation",
         )
-        _featurizer(spec, f"{where}: {what}", write.featurizer, trainers, fits)
+        _featurizer(spec, f"{where}: {what}", write.featurizer, trainers, visible)
         if isinstance(write.operand, str):
             _operand(where, what, name, write, visible, fit)
         frame(what, write.pos)
@@ -1069,7 +1066,7 @@ def _operand(where: str, what: str, name: str, write: Write, visible: dict[str, 
     )
 
 
-def _featurizer(spec: Spec, where: str, ref: str | None, trainers: dict[str, str], fits: set[str]) -> None:
+def _featurizer(spec: Spec, where: str, ref: str | None, trainers: dict[str, str], visible: dict[str, Ref]) -> None:
     """A featurizer, as a read or a write names it: none, a declared one no
     fit trains, or `<fit>.<name>` of a fit that has run — or of the
     fit whose body this is, where it is the parameter being trained.
@@ -1100,7 +1097,7 @@ def _featurizer(spec: Spec, where: str, ref: str | None, trainers: dict[str, str
         f"(trained: {sorted(f'{fit}.{one}' for one, fit in trainers.items())})",
     )
     _refuse(
-        head in fits,
+        ref in visible,
         f"{where}: featurizer {ref!r} is used before step {head!r} trains it, so it would run "
         "on the untrained parameter. Move it after the fit — or, for a deliberate untrained "
         "baseline, declare a second featurizer that no fit names",
