@@ -86,14 +86,8 @@ class State:
         """A nested scope: the same live featurizers, and what was produced
         before it as a copy — it reads what came earlier, and what it
         produces stays its own."""
-        return State(
-            featurizers=self.featurizers,
-            values=dict(self.values),
-            flat=dict(self.flat),
-            records=dict(self.records),
-            reported=set(self.reported),
-            batch_size=self.batch_size,
-            named=self.named,
+        return replace(
+            self, values=dict(self.values), flat=dict(self.flat), records=dict(self.records), reported=set(self.reported)
         )
 
     def publish(self, name: str, value: Any, flat: bool | None = None) -> None:
