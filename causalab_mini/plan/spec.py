@@ -381,9 +381,11 @@ class Evaluation(Node):
 class Observe(Node):
     kind: Literal["observe"]
     rows: dict[str, str]
-    #: Which experiment this pass runs. Optional when the document declares
-    #: exactly one.
-    intervention: str | None = None
+    #: Which experiment this pass runs: the name of one declared under
+    #: `interventions`, or one written here in place. Every step that runs a
+    #: forward says which — a step is rows bound to one experiment, and
+    #: reading which one should not need counting the declarations.
+    intervention: "str | Intervention"
     #: name -> what to publish. A bare read name is shorthand for keeping it
     #: unreduced.
     outputs: dict[str, Output] = Field(default_factory=dict)
@@ -409,7 +411,10 @@ class Anneal(Node):
 class Fit(Node):
     kind: Literal["fit"]
     rows: dict[str, str]
-    intervention: str | None = None
+    #: The experiment the fit trains through, by name or in place — the
+    #: same one the score after it names, which is what makes the score
+    #: measure what was trained.
+    intervention: "str | Intervention"
     params: list[str]
     #: Σ wᵢ·termᵢ, minimized. A term is a metric, or `<gate>.mask` for a gate
     #: this fit trains — the mean of its soft mask, which is its L1 penalty.
@@ -466,15 +471,10 @@ class Spec(Node):
         ).hexdigest()
 
     def intervention_of(self, step: Any) -> Intervention:
-        """The experiment a step runs, resolved."""
-        name = getattr(step, "intervention", None)
-        if name is None:
-            if len(self.interventions) != 1:
-                raise ValueError(
-                    f"a step must name its intervention when the document declares "
-                    f"{len(self.interventions)}: {sorted(self.interventions)}"
-                )
-            (name,) = self.interventions
+        """The experiment a step runs, resolved. An inline one was hoisted
+        under the step's own name before anything else looked (`_inline`),
+        so this is always a lookup."""
+        name = step.intervention
         if name not in self.interventions:
             raise ValueError(f"undeclared intervention {name!r}; declared: {sorted(self.interventions)}")
         return self.interventions[name]
@@ -489,6 +489,43 @@ class Spec(Node):
                 "compiles one plan per point"
             )
         return raw
+
+    @model_validator(mode="before")
+    @classmethod
+    def _inline(cls, raw: Any) -> Any:
+        """Every step names its experiment, and one written in place is
+        declared under the step's own name.
+
+        That is the whole of what inline costs: after this, a step's
+        `intervention` is a name and the experiment is under `interventions`,
+        so every check, the compiler, a sweep and a fit's eval see one path
+        and cannot tell the two spellings apart. The step's name is the
+        derived name because it is already unique in the document and it is
+        what the author will read in an error.
+        """
+        if not isinstance(raw, dict) or not isinstance(raw.get("steps"), dict):
+            return raw
+        declared = dict(raw.get("interventions") or {})
+        steps = {}
+        for name, step in raw["steps"].items():
+            if isinstance(step, dict) and step.get("kind") in ("observe", "fit"):
+                if "intervention" not in step:
+                    raise ValueError(
+                        f"step {name!r} runs a forward and names no intervention; say which "
+                        f"with `intervention` — declared: {sorted(declared)} — or write one "
+                        "there in place"
+                    )
+                if isinstance(step["intervention"], dict):
+                    if name in declared:
+                        raise ValueError(
+                            f"step {name!r} writes its intervention in place, and one is already "
+                            f"declared under that name; an inline intervention is named after "
+                            "its step, so rename one of them"
+                        )
+                    declared[name] = step["intervention"]
+                    step = {**step, "intervention": name}
+            steps[name] = step
+        return {**raw, "interventions": declared, "steps": steps}
 
     @model_validator(mode="after")
     def _cross_check(self) -> "Spec":

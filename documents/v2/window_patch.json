@@ -82,6 +82,7 @@
   "steps": {
     "score": {
       "kind": "observe",
+      "intervention": "window",
       "rows": {
         "base": "weekdays/train",
         "counterfactual": "weekdays/train"
