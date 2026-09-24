@@ -26,6 +26,7 @@ from ..address import Address
 from ..data import rows as rows_module, tokens
 from ..ops import featurizer as featurizer_module
 from ..ops import intervene as intervene_module
+from ..ops import locate as locate_module
 from ..ops import metrics as metrics_module
 from . import sweep
 from ..shapes import Selection, TokenRows, Where
@@ -148,6 +149,7 @@ def _spec_step(
             batch=_batch(tokenizer, f"step {name!r}", step.field, rows),
             rows=rows,
             sites=sites,
+            tokenizer=tokenizer,
             max_new_tokens=step.max_new_tokens if step.kind == "generate" else 0,
             generation=step.generation if step.kind == "generate" else None,
         )
@@ -617,6 +619,7 @@ def _steps_over(
             rows=rows[role],
             # the protocol's sites name no heads or units, and it does not decode
             sites=(addresses, {}, {}),
+            tokenizer=tokenizer,
         )
 
     order = _schedule(document)
@@ -1021,6 +1024,7 @@ def _forward(
     batch: _Batch,
     rows: list[rows_module.Row],
     sites: _Sites,
+    tokenizer: Any,
     max_new_tokens: int = 0,
     generation: dict[str, Any] | None = None,
 ) -> Forward:
@@ -1120,6 +1124,7 @@ def _forward(
                 step=place[1],
             )
         )
+    _fits_every_row(taps, batch, tokenizer)
     decodes: dict[str, Any] = {"max_new_tokens": max_new_tokens, "generation": dict(generation or {})} if max_new_tokens else {}
     return (Generate if max_new_tokens else Forward)(
         input=role,
@@ -1131,3 +1136,34 @@ def _forward(
         **decodes,
     )
 
+
+def _fits_every_row(taps: list[Tap], batch: _Batch, tokenizer: Any) -> None:
+    """A fixed-width cut that does not fit a row is an authoring error.
+
+    `{"last": 12}` on a nine-token row, `{"index": 40}` on any of these —
+    the form names the same number of tokens on every row, so a row it does
+    not fit is a document that is wrong about its own prompts, not a row
+    with nothing to say. The client tokenized the rows, so it is decided
+    here, before any model runs. An anchored cut is the other case and is
+    reported per row by the run instead: which rows carry a word is data.
+    """
+    fixed = [
+        (kind, op.name, op.at.where)
+        for tap in taps
+        for kind, ops in (("write", tap.writes), ("read", tap.reads))
+        for op in ops
+        if op.at.where is not None and op.at.where.frame == "prompt" and not op.at.where.ragged
+    ]
+    if not fixed:
+        return
+    frame = locate_module.frame_of(tokenizer, batch[0], batch[1], text=False)
+    for kind, name, where in fixed:
+        windows, reasons = locate_module.locate(frame, where)
+        missed = {row: reasons[row] for row, window in enumerate(windows) if not window}
+        if missed:
+            raise PlanError(
+                f"{kind} {name!r} at {where.spelling()} has no position on row(s) "
+                f"{missed}. A position of a fixed width names the same number of tokens on "
+                "every row, so a row it does not fit is refused rather than skipped; a "
+                "position anchored to the row's own text may skip a row, and says why"
+            )

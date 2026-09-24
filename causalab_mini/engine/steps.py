@@ -72,7 +72,7 @@ class State:
     #: Where each op acted, per row — the whole of a run's `Record`.
     records: Record = field(default_factory=dict)
     #: The ops whose record comes home: those of a step with a position the
-    #: document does not already fix (`_dynamic`).
+    #: document does not already fix (`Forward.dynamic`).
     reported: set[str] = field(default_factory=set)
     #: How many rows one model call may hold. None: all of them. A property
     #: of the run and not of the experiment — it bounds memory and moves the
@@ -196,8 +196,7 @@ def call(engine: Any, name: str, step: Forward, state: State) -> None:
     is refused before the first model call. What a smaller batch does change
     is the last bit: a GEMM over fewer rows rounds differently (FINDINGS §8).
     """
-    dynamic = _dynamic(step)
-    ready, record = located(engine, step, dynamic)
+    ready, record = located(engine, step, step.dynamic)
     _writes_land(ready, {**state.records, **record})
     operands = _operands(step)
     model_call = engine.generate if isinstance(step, Generate) else engine.forward
@@ -231,7 +230,7 @@ def call(engine: Any, name: str, step: Forward, state: State) -> None:
         if one in state.named:
             state.publish(one, whole, forms.get(one, False if one == name else None))
     step.results.update({one: made[one].detach().cpu() for one in step.keep})
-    if dynamic:
+    if step.dynamic:
         # Where this step read and wrote, and what it decoded to. Plain
         # tuples of integers and strings, so they come home in the plan like
         # a metric does and a table can print them beside a number.
@@ -252,23 +251,6 @@ def _stack_layers(step: Forward, made: dict[str, Any], record: Record) -> None:
         record[stacked] = record[names[0]]
         for one in names:
             del record[one]
-
-
-def _dynamic(step: Forward) -> bool:
-    """Whether this step has a position the document does not already fix.
-
-    A text anchor is one — which rows carry a word is data — and so is any
-    cut of the continuation, because the continuation is what the decode
-    turned out to produce. A step with neither resolves the same integers on
-    every row and every run, and the document already says so: it needs no
-    character map and reports nothing, and its tables say nothing of where.
-    """
-    return any(
-        op.at.where is not None
-        and (op.at.where.scope is not None or op.at.where.frame == "generated")
-        for tap in step.taps
-        for op in (*tap.reads, *tap.writes)
-    )
 
 
 def metric(name: str, step: Metric, state: State) -> None:
@@ -355,7 +337,7 @@ def located(engine: Any, forward: Forward, text: bool = True) -> tuple[Forward, 
     will actually see. One `Frame` is built per forward and every tap shares
     it; building one per tap is the one place this could be slow. `text` is
     the character map, which is the expensive half and which only a step
-    that reports where it acted has any use for — see `_dynamic`.
+    that reports where it acted has any use for — see `Forward.dynamic`.
 
     What comes back beside the forward is what the run reports: per op, each
     row's `rows` window, the `reason` it is empty when it is, and the
@@ -378,13 +360,11 @@ def located(engine: Any, forward: Forward, text: bool = True) -> tuple[Forward, 
     rows = len(forward.input_ids)
     found: Record = {}
 
-    def resolve(kind: str, op: Any) -> Any:
+    def resolve(op: Any) -> Any:
         where = op.at.where
         if where is None or where.frame == "generated":
             return replace(op, at=replace(op.at, positions=((0,),) * rows))
         windows, reasons = locate.locate(frame, where, op.at.anchors)
-        if not where.ragged:
-            _fits_every_row(kind, op, windows, reasons)
         found[op.name] = _record(frame, windows, reasons)
         return replace(op, at=replace(op.at, positions=windows))
 
@@ -394,8 +374,8 @@ def located(engine: Any, forward: Forward, text: bool = True) -> tuple[Forward, 
             taps=tuple(
                 replace(
                     tap,
-                    writes=tuple(resolve("write", op) for op in tap.writes),
-                    reads=tuple(resolve("read", op) for op in tap.reads),
+                    writes=tuple(resolve(op) for op in tap.writes),
+                    reads=tuple(resolve(op) for op in tap.reads),
                 )
                 for tap in forward.taps
             ),
@@ -452,25 +432,6 @@ def _record(frame: Frame, windows: Positions, reasons: tuple[str, ...]) -> dict[
     it is, and what it decoded to in `frame`."""
     tokens = tuple(locate.tokens_of(frame, one, row) for row, one in enumerate(windows))
     return {"rows": windows, "reason": reasons, "tokens": tokens}
-
-
-def _fits_every_row(kind: str, op: Any, windows: Positions, reasons: tuple[str, ...]) -> None:
-    """A fixed-width cut that does not fit a row is an authoring error.
-
-    `{"last": 12}` on a nine-token row, `{"index": 40}` on any of these —
-    the form names the same number of tokens on every row, so a row it does
-    not fit is a document that is wrong about its own prompts, not a row
-    with nothing to say. An anchored cut is the other case and is reported
-    per row instead: which rows carry a word is data.
-    """
-    missed = {row: reasons[row] for row, window in enumerate(windows) if not window}
-    if missed:
-        raise PlanError(
-            f"{kind} {op.name!r} at {op.at.where.spelling()} has no position on row(s) "
-            f"{missed}. A position of a fixed width names the same number of tokens on "
-            "every row, so a row it does not fit is refused rather than skipped; a "
-            "position anchored to the row's own text may skip a row, and says why"
-        )
 
 
 def _same_text(forward: Forward, frame: Frame) -> None:

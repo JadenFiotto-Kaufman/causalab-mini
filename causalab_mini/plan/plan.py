@@ -259,6 +259,24 @@ class Forward(Step):
     #: the step's name: that, and only that, comes home in `results`.
     keep: tuple[str, ...] = ()
 
+    @property
+    def dynamic(self) -> bool:
+        """Whether this call has a position the document does not already fix.
+
+        A text anchor is one — which rows carry a word is data — and so is any
+        cut of the continuation, because the continuation is what the decode
+        turned out to produce. A call with neither resolves the same integers
+        on every row and every run, and the document already says so: it
+        needs no character map and reports nothing, and its tables say
+        nothing of where.
+        """
+        return any(
+            op.at.where is not None
+            and (op.at.where.scope is not None or op.at.where.frame == "generated")
+            for tap in self.taps
+            for op in (*tap.reads, *tap.writes)
+        )
+
 
 @dataclass(frozen=True, kw_only=True)
 class Generate(Forward):

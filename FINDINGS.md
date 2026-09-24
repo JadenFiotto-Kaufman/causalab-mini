@@ -1790,10 +1790,17 @@ different things, and they want opposite answers. An **anchored** cut that
 found nothing is data — that row is an excluded measurement, and the run
 reports `alignment_missing` and scores the others. A cut of a **fixed
 width** that fits no row is a document that is wrong about its own prompts:
-it names the same number of tokens on every row, so it is refused where it
-is resolved, naming the op, the rows and the reason. Master refused it at
-compile time, against the client's tokenization; moving the resolver moved
-the refusal, and for a while it moved it into a float tensor instead.
+it names the same number of tokens on every row, so it is refused, naming
+the op, the rows and the reason. Master refused it at compile time, against
+the client's tokenization; moving the resolver moved the refusal, and for a
+while it moved it into a float tensor instead.
+
+It has moved back to the compiler (`build._fits_every_row`). The client
+tokenizes every row, and a cut with no anchor depends only on each row's
+content span, which the mask and the tokenizer's prefix give — so whether a
+fixed-width cut fits is decidable before any model loads. Only an anchored
+cut needs the run: which rows carry a word is data, and the run is where it
+is looked for in the text the model sees.
 
 
 ### 25.7 Report in the frame you resolved in
