@@ -670,7 +670,10 @@ def _metric(
     """One metric over one batch of rows, with the rows it cannot be computed
     for taken out here, where the data is. `of` is its read, as the plan
     names it, and one of `forwards` reads it."""
-    keep = rows_module.eligible(rows, tuple(spec.columns))
+    try:
+        keep = rows_module.eligible(rows, tuple(spec.columns))
+    except rows_module.DataError as refusal:
+        raise PlanError(f"metric {name!r}: {refusal}") from None
     if not any(keep):
         raise PlanError(
             f"metric {name!r}: none of these {len(rows)} row(s) has a value in "
@@ -980,9 +983,9 @@ def _fits(name: str, site: str, sites: _Sites, decode: int, rows: int) -> None:
         raise PlanError(
             f"read {name!r} keeps every decode step to cut against the continuation: "
             f"{decode} steps x {rows} rows x {wide} wide is {held / 2**20:.0f} MiB, "
-            f"over the {STACK_LIMIT / 2**20:.0f} MiB a read may hold. The count is this pass's "
-            "rows, whatever --batch-size the run uses: name the step ({'frame': 'generated', "
-            "'index': k}), decode fewer tokens, or score fewer rows in one pass"
+            f"over the {STACK_LIMIT / 2**20:.0f} MiB a read may hold. The count is the step's "
+            "rows, whatever --batch-size the run uses: name the decode step ({'frame': "
+            "'generated', 'index': k}), decode fewer tokens, or run over fewer rows"
         )
 
 

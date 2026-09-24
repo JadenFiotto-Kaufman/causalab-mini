@@ -103,7 +103,7 @@ def test_a_metric_of_nothing_is_refused(raw, holed_root, model_engine):
 
 def test_a_column_no_row_has_is_a_misspelling_not_an_exclusion(raw, data_root, model_engine):
     raw["steps"]["logit_diff"]["a"] = "pairs.cf_anwser"
-    with pytest.raises(rows_module.DataError, match="no row has a column 'cf_anwser'"):
+    with pytest.raises(plan.PlanError, match="metric 'logit_diff': no row has a column 'cf_anwser'"):
         plan.build_request(raw, data_root, model_engine)
 
 

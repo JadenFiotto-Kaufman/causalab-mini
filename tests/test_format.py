@@ -323,6 +323,28 @@ def test_a_write_at_a_read_only_place_is_refused(patching):
     _refused(patching, "is read-only")
 
 
+def test_a_step_and_a_dataset_do_not_share_a_name(patching):
+    patching["data"]["patched"] = patching["data"]["pairs"]
+    _refused(patching, re.escape("['patched'] is the name of a step and of a dataset"))
+
+
+def test_a_mistake_inside_an_intervention_is_one_refusal(patching):
+    """An intervention is a name, one written in place, or a list, and which
+    is plain from its JSON type — so a mistake inside one is reported
+    against that spelling, once."""
+    patching["steps"]["patched"]["interventions"]["writes"]["patch"]["mechanisn"] = "swap"
+    with pytest.raises(ValidationError) as refusal:
+        Spec.model_validate(patching)
+    assert refusal.value.error_count() == 1
+    assert "interventions.written.writes.patch.mechanisn" in str(refusal.value)
+
+
+def test_a_metric_column_that_is_not_there_names_the_metric(patching, data_root, model_engine):
+    patching["steps"]["iia"]["expected"] = "pairs.nope"
+    with pytest.raises(plan.PlanError, match="metric 'iia': .*'nope'"):
+        _compile(patching, data_root, model_engine)
+
+
 # --------------------------------------------------------------------- #
 # interventions: a list is composition
 # --------------------------------------------------------------------- #
@@ -646,6 +668,14 @@ def test_generate_arguments_are_transformers_own(patching):
     _refused(_generating(copy.deepcopy(patching), min_new_tokens=3, tempreature=0.5), "`tempreature` is neither")
     _refused(_generating(copy.deepcopy(patching), min_new_tokens=3, max_length=9), "the bound is `max_new_tokens`")
     _refused(_generating(copy.deepcopy(patching), min_new_tokens=3, num_beams=2), "several rows of one")
+
+
+def test_a_decode_is_not_stopped_early_by_a_clock_or_a_string(patching):
+    """`min_new_tokens` holds EOS off, and nothing else: a stop by the clock
+    or by a string would end the decode before the taps at its later steps
+    had run. Refused by name, whatever the value."""
+    _refused(_generating(copy.deepcopy(patching), min_new_tokens=3, max_time=0.0), "`max_time` is not a generate step's")
+    _refused(_generating(copy.deepcopy(patching), min_new_tokens=3, stop_strings=["x"]), "`stop_strings` is not a generate step's")
 
 
 def test_a_tapped_decode_runs_to_its_bound(patching):

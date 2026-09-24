@@ -47,7 +47,7 @@ import json
 import re
 from typing import Annotated, Any, Iterator, Literal, Union
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Discriminator, Field, StringConstraints, Tag, model_validator
 
 from .. import address
 from ..ops.metrics import COLUMNS as METRIC_COLUMNS
@@ -279,6 +279,13 @@ MECHANISM_PARAMS: dict[str, tuple[set[str], set[str]]] = {
 NO_OPERAND = frozenset({"gaussian", "clamp", "renormalize"})
 
 
+def _spelled(value: Any) -> str:
+    """Which spelling of an intervention this is, by its JSON type — so a
+    mistake inside one is reported against that spelling alone, not against
+    each of the three it could have been."""
+    return "name" if isinstance(value, str) else "list" if isinstance(value, list) else "written"
+
+
 class Intervention(Node):
     """Reads and writes, and nothing else: an experiment is what the steps
     that list it do with it. A reference in here is resolved where it is
@@ -287,6 +294,18 @@ class Intervention(Node):
 
     reads: dict[Name, Read] = Field(default_factory=dict)
     writes: dict[Name, Write] = Field(default_factory=dict)
+
+
+#: One intervention a step lists: a declared name, or one written in place.
+Listed = Annotated[
+    Union[Annotated[Name, Tag("name")], Annotated[Intervention, Tag("written")]], Discriminator(_spelled)
+]
+
+#: What a step's `interventions` is: one, or a list of them, in order.
+Interventions = Annotated[
+    Union[Annotated[Name, Tag("name")], Annotated[Intervention, Tag("written")], Annotated[list[Listed], Tag("list")]],
+    Discriminator(_spelled),
+]
 
 
 # --------------------------------------------------------------------- #
@@ -308,7 +327,7 @@ class _Call(Node):
     #: The interventions whose writes are in force, in the order they apply,
     #: and whose reads are taken: a declared name, one written in place, or
     #: a list of either.
-    interventions: Name | Intervention | list[Name | Intervention] = Field(default_factory=list)
+    interventions: Interventions = Field(default_factory=list)
     #: Reads of this call that belong to no intervention.
     reads: dict[Name, Read] = Field(default_factory=dict)
 
@@ -332,6 +351,10 @@ REFUSED_GENERATION = {
     "output_hidden_states": "a read is how a generate step keeps a tensor",
     "output_scores": "a read of the head is how a generate step keeps the scores",
     "output_logits": "a read of the head is how a generate step keeps the logits",
+    "max_time": "a stop by the clock ends the decode wherever it has got to, before the taps "
+    "at the steps after it have run — and the bound is `max_new_tokens`",
+    "stop_strings": "a stop at a string ends the decode before its bound, and needs the "
+    "tokenizer handed to generate, which a step cannot pass",
     "_from_model_config": "it is the config's bookkeeping, not an argument",
     "transformers_version": "it is the config's bookkeeping, not an argument",
 }
@@ -364,9 +387,15 @@ class Generate(_Call):
         """The arguments beyond the bound, as written."""
         return dict(self.model_extra or {})
 
-    @model_validator(mode="after")
-    def _generate_arguments(self) -> "Generate":
-        for key, value in self.generation.items():
+    @model_validator(mode="before")
+    @classmethod
+    def _generate_arguments(cls, raw: Any) -> Any:
+        """Every key beyond the step's own, checked by name before its value
+        is: a refused argument is refused for what it does, whatever its
+        value would have been."""
+        for key, value in raw.items() if isinstance(raw, dict) else ():
+            if key in cls.model_fields:
+                continue
             if key in REFUSED_GENERATION:
                 raise ValueError(f"`{key}` is not a generate step's to set: {REFUSED_GENERATION[key]}")
             if key not in _generation_arguments():
@@ -376,7 +405,7 @@ class Generate(_Call):
                 )
             if key in ONE_ROW_EACH and value != 1:
                 raise ValueError(f"`{key}: {value}` makes several rows of one; a step keeps its rows")
-        return self
+        return raw
 
 
 @functools.cache
@@ -685,6 +714,16 @@ class Spec(Node):
         any of it, so none of it is a field validator."""
         # who trains what, before anything is resolved: a trained featurizer
         # is named `<fit>.<name>` everywhere, and the bare name nowhere
+        # `pairs.cf_answer` is a column and `patched.logits` a read, told apart
+        # by the field they sit in; one name that is both would read as either
+        steps = {name for name, _ in self.steps.items()}
+        steps |= {inner for _, step in self.steps.items() if isinstance(step, Fit) for inner, _ in step.steps.items()}
+        shared = sorted(steps & set(self.data))
+        _refuse(
+            not shared,
+            f"{shared} is the name of a step and of a dataset; a reference `<name>.<part>` could "
+            "mean either — rename one",
+        )
         trainers: dict[str, str] = {}
         for name, step in self.steps.items():
             if not isinstance(step, Fit):
