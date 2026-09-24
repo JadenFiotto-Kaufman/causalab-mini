@@ -18,6 +18,7 @@ import shutil
 
 import pytest
 import torch
+from conftest import of_kind, provenance
 
 from causalab_mini import ops, plan
 from causalab_mini.data import rows as rows_module
@@ -47,15 +48,15 @@ def test_a_column_is_a_text_anchor_and_lands_token_by_token(entity_raw, data_roo
     which is what ragged means. The plan carries the *text* per row, and the
     run turns each one into indices."""
     built = plan.build_request(entity_raw, data_root, model_engine)
-    forward = built.step("harvest", plan.Observe).forwards[0]
+    forward = of_kind(built, plan.Forward)[0]
     read = forward.taps[0].reads[0]
     assert read.at.anchors == ("Thursday", "Friday", "Saturday", "Sunday")
     assert read.at.where == Where(all=True, scope=Anchor(variable="entity"))
     assert read.at.flat
 
     _, positions = steps.located(model_engine, forward)
-    assert [len(one) for one in positions["acts"]["rows"]] == [3, 1, 1, 1]
-    assert ops.is_ragged(positions["acts"]["rows"])
+    assert [len(one) for one in positions["harvest.acts"]["rows"]] == [3, 1, 1, 1]
+    assert ops.is_ragged(positions["harvest.acts"]["rows"])
 
 
 def test_a_dotted_field_reaches_into_a_dict_inside_a_list():
@@ -98,14 +99,14 @@ def test_entity_mean_ablation_runs_and_both_engines_agree(entity_raw, data_root,
     """The mean over every entity token in the corpus — a ragged read — is
     one vector, swapped in at the answer position."""
     built = plan.build_request(entity_raw, data_root, model_engine)
-    read = built.step("harvest", plan.Observe).forwards[0].taps[0].reads[0]
+    read = of_kind(built, plan.Forward)[0].taps[0].reads[0]
     assert read.at.flat, "a text anchor gathers flat whatever the rows turn out to be"
     assert "pos={all scope:{variable:entity}}" in explain(built)
 
     traced = model_engine.execute(built)
     assert tuple(traced.result("mean").shape) == (16,)
-    clean = traced.step("clean", plan.Observe).results["logit_diff"]
-    ablated = traced.step("ablated", plan.Observe).results["logit_diff"]
+    clean = traced.result("clean.logit_diff")
+    ablated = traced.result("ablated.logit_diff")
     assert not torch.equal(clean, ablated)
 
     hooks = HooksEngine.load(Spec.model_validate(entity_raw).model, device_map="cpu")
@@ -116,7 +117,7 @@ def test_entity_mean_ablation_runs_and_both_engines_agree(entity_raw, data_root,
     # (FINDINGS §8) is not about how many positions are replaced, as that
     # section first inferred; it depends on the values written. Zero and the
     # unit-window mean were exact. The tolerance is the measurement.
-    other = hooked.step("ablated", plan.Observe).results["logit_diff"]
+    other = hooked.result("ablated.logit_diff")
     assert torch.allclose(ablated, other, rtol=0, atol=1e-7)
     assert (ablated - other).abs().max() < 2e-8
 
@@ -213,7 +214,10 @@ def test_an_entity_patch_at_the_last_token_of_the_entity_lands_on_every_row(
     whole.
     """
     executed = model_engine.execute(plan.build_request(patch_raw, data_root, model_engine))
-    where = executed.step("score", plan.Observe).results["positions"]
+    where = {
+        **executed.step("original", plan.Forward).results["positions"],
+        **executed.step("patched", plan.Forward).results["positions"],
+    }
 
     assert where["patch"]["tokens"] == ("'day'", "' Friday'", "' Saturday'", "' Sunday'")
     assert where["v_cf"]["tokens"] == ("' Saturday'", "' Sunday'", "'day'", "' Friday'")
@@ -233,11 +237,9 @@ def test_the_two_engines_patch_the_same_entity_to_the_bit(patch_raw, data_root, 
     traced = model_engine.execute(plan.build_request(patch_raw, data_root, model_engine))
     hooked = hooks.execute(plan.build_request(patch_raw, data_root, hooks))
 
-    score = (one.step("score", plan.Observe).results for one in (traced, hooked))
-    a, b = score
-    assert a["positions"] == b["positions"] and a["eligible"] == b["eligible"]
-    assert torch.equal(a["iia"], b["iia"])
-    assert torch.allclose(a["logit_diff"], b["logit_diff"], rtol=0, atol=1e-7)
+    assert provenance(traced) == provenance(hooked)
+    assert torch.equal(traced.result("iia"), hooked.result("iia"))
+    assert torch.allclose(traced.result("logit_diff"), hooked.result("logit_diff"), rtol=0, atol=1e-7)
 
 
 def test_a_row_whose_entity_is_not_in_its_prompt_refuses_the_write_by_name(
@@ -274,11 +276,11 @@ def test_a_text_anchor_resolves_the_same_way_through_the_serialized_path(
     shipped = model_engine.execute(
         plan.build_request(patch_raw, data_root, model_engine), remote="local"
     )
-    a, b = (one.step("score", plan.Observe).results for one in (here, shipped))
-
-    assert a["positions"] == b["positions"] and a["eligible"] == b["eligible"]
-    assert b["positions"]["patch"]["tokens"] == ("'day'", "' Friday'", "' Saturday'", "' Sunday'")
-    assert torch.equal(a["logit_diff"], b["logit_diff"])
+    assert provenance(here) == provenance(shipped)
+    assert shipped.step("patched", plan.Forward).results["positions"]["patch"]["tokens"] == (
+        "'day'", "' Friday'", "' Saturday'", "' Sunday'"
+    )
+    assert torch.equal(here.result("logit_diff"), shipped.result("logit_diff"))
 
 
 def test_a_write_refusal_says_which_reason_each_row_had(patch_raw, data_root, tmp_path, model_engine):

@@ -18,6 +18,7 @@ import pathlib
 import pytest
 import torch
 from pydantic import TypeAdapter, ValidationError
+from conftest import of_kind
 
 from causalab_mini import ops, plan
 from causalab_mini.engine import steps
@@ -177,7 +178,7 @@ def test_the_window_is_a_spec_in_the_plan_and_integers_in_the_run(data_root, mod
     from causalab_mini.plan.explain import explain
 
     built = plan.build_request(json.loads(WINDOW.read_text()), data_root, model_engine)
-    forward = built.step("score", plan.Observe).forwards[1]
+    forward = of_kind(built, plan.Forward)[1]
     write = forward.taps[0].writes[0]
     assert write.at.positions == () and write.at.where == Where(span=(-4, -1))
     assert "pos={span:[-4, -1]}" in explain(built)

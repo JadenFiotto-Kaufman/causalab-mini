@@ -37,7 +37,7 @@ import torch
 from .... import address as address_module
 from ....address import Address, AddressError
 from ....ops import intervene
-from ....plan import Forward, Plan
+from ....plan import Forward, Generate, Plan
 from ....plan import plan as plan_module
 from ... import provenance, steps
 from ...base import Engine
@@ -103,28 +103,24 @@ class NNterpEngine(Engine):
         plan_module.fill(plan, home)
         return plan
 
-    def forward(
-        self,
-        forward: Forward,
-        values: dict[str, Any],
-        featurizers: dict[str, Any],
-    ) -> None:
+    def forward(self, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any]) -> None:
         model = self.model
-        if not forward.decode:
-            with model.trace(batch(forward)):
-                apply_taps(model, forward, values, featurizers)
-            return
+        with model.trace(batch(forward)):
+            apply_taps(model, forward, values, featurizers)
+
+    def generate(self, step: Generate, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
         # The continuation frame: one generate trace, `tracer.iter` walking
-        # the steps. Prompt-frame taps apply at step 0, the prefill; a step's
-        # taps at that step; an `"all"` write at every step. Greedy, and EOS
-        # held off so the bound holds and the loop never outruns the run.
-        decode, prompt = forward.decode, len(forward.input_ids[0])
-        with model.generate(
-            batch(forward), max_new_tokens=decode, min_new_tokens=decode, do_sample=False
-        ) as tracer:
-            for step in tracer.iter[:decode]:
-                apply_taps(model, forward, values, featurizers, step)
-            values[f"{forward.name}.generated"] = tracer.result[:, prompt:].clone()
+        # the decode steps. Prompt-frame taps apply at step 0, the prefill; a
+        # step's taps at that step; an `"all"` write at every step. A decode
+        # with no taps has no loop: an early EOS makes a loop outrun the run
+        # and drop what follows it (FINDINGS §12.4), which would be the ids.
+        model, prompt, made = self.model, len(step.input_ids[0]), {}
+        with model.generate(batch(step), max_new_tokens=step.max_new_tokens, **step.generation) as tracer:
+            if step.taps:
+                for index in tracer.iter[: step.max_new_tokens]:
+                    apply_taps(model, step, values, featurizers, index)
+            made["ids"] = tracer.result[:, prompt:].clone()
+        return made["ids"]
 
 
 def batch(forward: Forward) -> dict[str, Any]:

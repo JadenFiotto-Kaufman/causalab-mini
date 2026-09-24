@@ -18,6 +18,8 @@ import pytest
 import torch
 from pydantic import ValidationError
 
+from conftest import provenance
+
 from causalab_mini import plan
 from causalab_mini.data import rows as rows_module, tokens
 from causalab_mini.engine.engines.hooks import HooksEngine
@@ -123,7 +125,7 @@ def test_the_document_reads_the_question_and_not_the_template(chat_raw, data_roo
     template's closing `[/INST]`, which is what a document without segments
     would have had to read."""
     executed = model_engine.execute(plan.build_request(chat_raw, data_root, model_engine))
-    where = executed.step("score", plan.Observe).results["positions"]
+    where = executed.step("zeroed", plan.Forward).results["positions"]
 
     assert where["asked"]["tokens"] == ("' is'",) * 4
     assert where["logits"]["tokens"] == ("']'",) * 4, "the template's own last token"
@@ -135,9 +137,8 @@ def test_the_two_engines_read_the_same_turn(chat_raw, data_root, model_engine):
     hooks = HooksEngine.load(Spec.model_validate(chat_raw).model, device_map="cpu")
     traced = model_engine.execute(plan.build_request(chat_raw, data_root, model_engine))
     hooked = hooks.execute(plan.build_request(chat_raw, data_root, hooks))
-    a, b = (one.step("score", plan.Observe).results for one in (traced, hooked))
-    assert a["positions"] == b["positions"]
-    assert torch.allclose(a["p_answer"], b["p_answer"], rtol=0, atol=1e-7)
+    assert provenance(traced) == provenance(hooked)
+    assert torch.allclose(traced.result("p_answer"), hooked.result("p_answer"), rtol=0, atol=1e-7)
 
 
 def test_the_spans_survive_the_serialized_path(chat_raw, data_root, model_engine):
@@ -147,9 +148,8 @@ def test_the_spans_survive_the_serialized_path(chat_raw, data_root, model_engine
     shipped = model_engine.execute(
         plan.build_request(chat_raw, data_root, model_engine), remote="local"
     )
-    a, b = (one.step("score", plan.Observe).results for one in (here, shipped))
-    assert a["positions"] == b["positions"]
-    assert torch.equal(a["p_answer"], b["p_answer"])
+    assert provenance(here) == provenance(shipped)
+    assert torch.equal(here.result("p_answer"), shipped.result("p_answer"))
 
 
 # --------------------------------------------------------------------- #

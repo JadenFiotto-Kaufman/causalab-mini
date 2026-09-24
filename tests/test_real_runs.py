@@ -83,7 +83,7 @@ def test_what_comes_home_from_a_run_is_plain(data_root, model_engine):
     executed = model_engine.execute(plan.build_request(raw, data_root, model_engine))
     home = plan_module.results_of(executed)
 
-    assert set(home) == {"fit", "fit/eval", "score", "weights"}
+    assert {path.split("/")[0] for path in home} == {"fit", "iia", "ce", "weights"}
     blob = pickle.dumps(home)
     assert b"causalab_mini" not in blob, "nothing of ours rides home"
 
@@ -91,8 +91,8 @@ def test_what_comes_home_from_a_run_is_plain(data_root, model_engine):
     plan_module.fill(fresh, pickle.loads(blob))
     assert torch.equal(fresh.result("rot"), executed.result("rot"))
     assert torch.equal(
-        fresh.step("fit", plan.Fit).evaluation.results["iia"],
-        executed.step("fit", plan.Fit).evaluation.results["iia"],
+        fresh.step("fit", plan.Fit).evaluation.result("iia"),
+        executed.step("fit", plan.Fit).evaluation.result("iia"),
     )
 
 

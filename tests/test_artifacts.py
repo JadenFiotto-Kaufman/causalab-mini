@@ -52,9 +52,9 @@ def test_a_loaded_rotation_scores_exactly_what_the_fit_scored_on_the_same_rows(
     fitted, bundle = _fit_into(tmp_path, data_root, model_engine)
     applied = model_engine.execute(plan.build_request(_apply_from(bundle), data_root, model_engine))
 
-    held_out = fitted.step("fit", plan.Fit).evaluation.results
-    scored = applied.step("apply", plan.Observe).results
-    assert torch.equal(held_out["iia"], scored["iia"]) and torch.equal(held_out["ce"], scored["ce"])
+    held_out = fitted.step("fit", plan.Fit).evaluation
+    assert torch.equal(held_out.result("iia"), applied.result("iia"))
+    assert torch.equal(held_out.result("ce"), applied.result("ce"))
     # and the plan carried the weights as the bundle's own bytes — still plain
     # data, at four bytes a number
     import safetensors.torch

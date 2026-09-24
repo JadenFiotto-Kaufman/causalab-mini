@@ -6,6 +6,7 @@ import json
 import nnsight
 import pytest
 import torch
+from conftest import of_kind
 
 from causalab_mini import cli, ops, plan
 from causalab_mini.plan import document
@@ -50,7 +51,7 @@ def test_a_swap_lands_the_source_read_bit_for_bit(model, model_engine, minimal_p
     the address *is* the tensor the other forward read, to the bit."""
     source_forward, patched_forward = (
         steps.located(model_engine, one)[0]
-        for one in minimal_plan.step("observe", plan.Observe).forwards
+        for one in of_kind(minimal_plan, plan.Forward)
     )
     read = source_forward.taps[0].reads[0]
     tap = patched_forward.taps[0]
@@ -86,7 +87,7 @@ def test_the_engines_metrics_equal_hand_computed_ones(model_engine, model, minim
     different way to reach every tensor — down to the last bit."""
     results = model_engine.execute(minimal_plan)
 
-    source, patched = minimal_plan.step("observe", plan.Observe).forwards
+    source, patched = of_kind(minimal_plan, plan.Forward)
     with model.trace(nnterp.batch(source)):
         v_cf = model.layers_output[0][:, -1, :].clone().save()
     with model.trace(nnterp.batch(patched)):
@@ -125,7 +126,7 @@ def test_a_write_touches_only_the_position_it_declares(model, model_engine, mini
     out of the patched forward exactly as it went in."""
     source, patched = (
         steps.located(model_engine, one)[0]
-        for one in minimal_plan.step("observe", plan.Observe).forwards
+        for one in of_kind(minimal_plan, plan.Forward)
     )
     tap = patched.taps[0]
     write = tap.writes[0]

@@ -21,10 +21,14 @@ compiled against a particular model and none of it may be decided later:
 and what the **run** asks:
 
     execute(plan, remote) -> Plan            the whole request
-    forward(forward, values, featurizers)    one forward, tapped
+    forward(step, values, featurizers)       one model call, tapped
+    generate(step, values, featurizers) -> ids    one decode, tapped at its steps
 
-That is all. The walk over steps, the fit loop, the metrics and the write
-algebra are shared, so a second engine is these eight members and no more.
+Two ways to call a model, because they are two calls with two results: a
+forward leaves its reads, a generate leaves its reads and returns the ids it
+said. That is all. The walk over steps, the fit loop, the metrics and the
+write algebra are shared, so a second engine is these nine members and no
+more.
 
 One rule for an engine that traces: a block may load the engine and the plan,
 never the document, the dataset or a bare tokenizer — nnsight ships every name
@@ -40,7 +44,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..address import Address
-from ..plan import Forward, Plan
+from ..plan import Forward, Generate, Plan
 
 
 class EngineError(ValueError):
@@ -117,12 +121,15 @@ class Engine:
         """
         raise NotImplementedError
 
-    def forward(
-        self,
-        forward: Forward,
-        values: dict[str, Any],
-        featurizers: dict[str, Any],
-    ) -> None:
+    def forward(self, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any]) -> None:
         """Run one forward with its taps applied, leaving what it read in
-        `values`. This is the only place an engine touches a model's insides."""
+        `values`. With `generate`, the only place an engine touches a model's
+        insides."""
+        raise NotImplementedError
+
+    def generate(self, step: Generate, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
+        """Run one decode — `step.max_new_tokens` at most, with `step.generation`
+        passed to the runtime's generate as written — applying each tap at
+        its step, leaving what it read in `values`, and return the ids it
+        generated, `(rows, new tokens)`, prompt stripped."""
         raise NotImplementedError

@@ -377,7 +377,7 @@ def test_the_token_ids_can_be_read_and_never_written(minimal_raw, data_root, mod
     raw["interventions"]["patching"]["reads"]["tokens"] = {"site": "ids", "pos": {"last": 2}, "input": "base"}
     raw["steps"]["score"]["outputs"] = {"last_two": "tokens"}
     executed = model_engine.execute(plan.build_request(raw, data_root, model_engine))
-    tokens = executed.step("score", plan.Observe).results["last_two"]
+    tokens = executed.result("tokens")
     assert tokens.shape == (4, 2) and not tokens.is_floating_point()
 
     raw["interventions"]["patching"]["writes"]["patch"]["site"] = "ids"

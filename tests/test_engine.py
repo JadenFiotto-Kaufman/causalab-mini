@@ -19,10 +19,10 @@ from causalab_mini.plan.document import ModelSpec
 
 class FakeEngine(Engine):
     """An engine for a runtime that does not exist: it opens nothing and its
-    forwards are made up. It implements the whole run half of the contract,
-    which is the point — two methods and a tokenizer, because resolving a
-    position against the text the model will see is something the *run*
-    does."""
+    forwards are made up. It implements what a plan that does not decode
+    asks of the run, which is the point — two methods and a tokenizer,
+    because resolving a position against the text the model will see is
+    something the *run* does."""
 
     VOCAB = 32000  # the metrics index by token id, so the width has to be real
 
@@ -45,7 +45,7 @@ class FakeEngine(Engine):
         values: dict[str, Any],
         featurizers: dict[str, Any],
     ) -> None:
-        self.calls.append(forward.name)
+        self.calls.append(forward.input)
         rows = len(forward.input_ids)
         for tap in forward.taps:
             for read in tap.reads:
@@ -69,6 +69,8 @@ def test_the_base_engine_has_no_implementation():
     with pytest.raises(NotImplementedError):
         bare.forward(None, {}, {})  # type: ignore[arg-type]
     with pytest.raises(NotImplementedError):
+        bare.generate(None, {}, {})  # type: ignore[arg-type]
+    with pytest.raises(NotImplementedError):
         bare.locate("block_output", 0)
     with pytest.raises(NotImplementedError):
         bare.width(Address("block_output", 0))
@@ -82,14 +84,15 @@ def test_the_base_engine_has_no_implementation():
 
 def test_the_engine_specific_surface_is_exactly_the_contract():
     """The finding this project exists to produce: an engine is how you load a
-    model, how you address it and how you run one forward — eight members
-    (`heads` joined when a site could name them: like `width`, it is a
-    question about the checkpoint that only its holder can answer). The
-    walk over steps, the fit loop, the metrics and the write algebra are
-    shared, and an engine adds nothing of its own to them."""
+    model, how you address it and how you call it — nine members (`heads`
+    joined when a site could name them: like `width`, it is a question about
+    the checkpoint that only its holder can answer; `generate` beside
+    `forward`, because a decode is a different call with a different
+    result). The walk over steps, the fit loop, the metrics and the write
+    algebra are shared, and an engine adds nothing of its own to them."""
     overridden = {name for name in vars(NNterpEngine) if not name.startswith("_")}
     assert overridden == {"load", "tokenizer", "num_layers", "locate", "width", "heads",
-                          "execute", "forward"}
+                          "execute", "forward", "generate"}
 
 
 @pytest.fixture
@@ -123,7 +126,7 @@ def test_an_engine_with_no_model_and_no_session_runs_the_same_plan(minimal_plan,
     engine = FakeEngine(model_engine.tokenizer)
     executed = engine.execute(minimal_plan)
 
-    assert engine.calls == ["original", "patched"]
+    assert engine.calls == ["counterfactual", "base"]
     assert sorted(executed.all_results()) == ["iia", "logit_diff"]
     assert executed.result("iia").shape == (4,)
 
@@ -168,14 +171,14 @@ def test_a_hooks_shell_refuses_to_run_because_it_has_nowhere_to(minimal_raw, dat
         shell.execute(build(document.Document.from_json(minimal_raw), data_root, shell))
 
 
-def test_a_nested_plan_gets_its_own_outputs_but_the_same_featurizers():
-    """The state is scoped to a `steps` list. A sweep point, or one entry of a
-    step's `interventions` list, is a nested plan: it shares the live
-    parameter sets, reads what was published before it, and what it
-    publishes stays its own — so no sibling sees another's outputs."""
-    parent = steps.State(featurizers={"rot": object()}, outputs={"mean": object()})
+def test_a_nested_plan_gets_its_own_values_but_the_same_featurizers():
+    """The state is scoped to a `steps` list. A sweep point, or a fit's
+    update, is a nested plan: it shares the live parameter sets, reads what
+    was produced before it, and what it produces stays its own — so no
+    sibling sees another's values."""
+    parent = steps.State(featurizers={"rot": object()}, values={"mean": object()})
     child = parent.child()
     assert child.featurizers is parent.featurizers
-    assert child.outputs == parent.outputs and child.outputs is not parent.outputs
-    child.outputs["delta"] = object()
-    assert "delta" not in parent.outputs and "delta" not in parent.child().outputs
+    assert child.values == parent.values and child.values is not parent.values
+    child.values["delta"] = object()
+    assert "delta" not in parent.values and "delta" not in parent.child().values

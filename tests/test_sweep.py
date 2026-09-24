@@ -11,6 +11,7 @@ import pathlib
 
 import pytest
 import torch
+from conftest import of_kind
 
 from causalab_mini import plan
 from causalab_mini.plan import document, sweep
@@ -101,7 +102,7 @@ def test_the_points_differ_in_the_swept_field_and_nothing_else(swept_plan, model
     from causalab_mini.engine import steps
 
     written = [
-        point.step("observe", plan.Observe).forwards[1].taps[0].writes[0].at.where
+        of_kind(point, plan.Forward)[1].taps[0].writes[0].at.where
         for point in swept_plan.steps.values()
     ]
     assert [one.index for one in written] == [-1, -2, -3]
@@ -110,12 +111,12 @@ def test_the_points_differ_in_the_swept_field_and_nothing_else(swept_plan, model
     # is what resolving a position against the padding the tokenizer
     # actually produced is for.
     positions = [
-        steps.located(model_engine, point.step("observe", plan.Observe).forwards[1])[1]["patch"]["rows"]
+        steps.located(model_engine, of_kind(point, plan.Forward)[1])[1]["patch"]["rows"]
         for point in swept_plan.steps.values()
     ]
     assert positions == [((10,),) * 4, ((9,),) * 4, ((8,),) * 4]
     reads = {
-        point.step("observe", plan.Observe).forwards[0].taps[0].reads[0].at.where
+        of_kind(point, plan.Forward)[0].taps[0].reads[0].at.where
         for point in swept_plan.steps.values()
     }
     assert len(reads) == 1

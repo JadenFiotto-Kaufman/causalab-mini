@@ -12,6 +12,7 @@ import pathlib
 import nnsight
 import pytest
 import torch
+from conftest import of_kind
 
 from causalab_mini import ops, plan
 from causalab_mini.address import Address, AddressError
@@ -102,7 +103,7 @@ def test_the_query_is_head_shaped_and_already_rotated(model_engine, model, data_
     """Two claims about the tensor: the sequence is axis 2 because the heads are
     axis 1, and it is past RoPE — so it is not the projection's output."""
     built = _build(interior_raw, data_root, model_engine)
-    source_forward, _ = steps.located(model_engine, built.step("observe", plan.Observe).forwards[0])
+    source_forward, _ = steps.located(model_engine, of_kind(built, plan.Forward)[0])
     tap = source_forward.taps[0]
 
     with model.trace(nnterp.batch(source_forward)):
@@ -142,7 +143,7 @@ def test_a_swap_at_the_interior_lands_bit_for_bit(model_engine, model, data_root
     built = _build(interior_raw, data_root, model_engine)
     source_forward, patched_forward = (
         steps.located(model_engine, one)[0]
-        for one in built.step("observe", plan.Observe).forwards
+        for one in of_kind(built, plan.Forward)
     )
     read = source_forward.taps[0].reads[0]
     tap = patched_forward.taps[0]
@@ -192,7 +193,7 @@ def test_only_the_declared_position_of_the_query_changes(model_engine, model, da
     built = _build(interior_raw, data_root, model_engine)
     source_forward, patched_forward = (
         steps.located(model_engine, one)[0]
-        for one in built.step("observe", plan.Observe).forwards
+        for one in of_kind(built, plan.Forward)
     )
     tap = patched_forward.taps[0]
     write = tap.writes[0]
@@ -248,7 +249,7 @@ def test_the_interior_is_ordered_before_its_own_blocks_output(interior_raw, data
     }
     built = _build(raw, data_root, model_engine)
 
-    assert [tap.address.component for tap in built.step("observe", plan.Observe).forwards[1].taps] == [
+    assert [tap.address.component for tap in of_kind(built, plan.Forward)[1].taps] == [
         "attention_query",
         "block_output",
         "lm_head",

@@ -16,6 +16,7 @@ import pathlib
 
 import pytest
 import torch
+from conftest import of_kind
 
 from causalab_mini import plan
 from causalab_mini.engine import NNterpEngine, steps
@@ -55,7 +56,7 @@ def test_three_writes_share_one_address_and_one_tap(multi_raw, data_root, model_
     built = plan.build_request(multi_raw, data_root, model_engine)
     source, patched = (
         steps.located(model_engine, one)[0]
-        for one in built.step("observe", plan.Observe).forwards
+        for one in of_kind(built, plan.Forward)
     )
 
     (tap,) = [one for one in patched.taps if one.writes]
@@ -130,7 +131,7 @@ def test_a_read_inside_one_intervened_model_is_another_models_operand(
     what has to notice — `ablated` must run before `with_inj1_abl`, and
     nothing but the read graph says so."""
     built = plan.build_request(hydra_raw, data_root, model_engine)
-    order = [forward.name for forward in built.step("observe", plan.Observe).forwards]
+    order = [name.split(".")[0] for name, one in built.steps.items() if isinstance(one, plan.Forward)]
 
     # Six, not five: `original` runs twice, once per input role, because the
     # resample operand is read off the counterfactual and everything else off

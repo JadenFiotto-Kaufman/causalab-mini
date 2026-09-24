@@ -38,10 +38,11 @@ from .plan import Plan, SaveFile, Step, children
 def write(step: Step, out_dir: str | Path) -> list[Path]:
     """Every save in this subtree, written.
 
-    A **plan** gets a directory of its own, so a swept point's files land
-    under `pos=-1/`. Any other step writes into its enclosing plan's
-    directory: a fit's eval pass is a place, not a place*s*, and giving it a
-    folder would say otherwise.
+    A **plan** in a plan gets a directory of its own, so a swept point's
+    files land under `pos=-1/`. Any other step writes into its enclosing
+    plan's directory — a fit's evaluation too, though it is a plan of steps:
+    it is where the fit's held-out numbers are, and giving it a folder would
+    say they were somewhere else.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -54,7 +55,7 @@ def write(step: Step, out_dir: str | Path) -> list[Path]:
         if step.provenance:
             written.append(_json(out / "run.json", step.provenance))
     for name, child in children(step):
-        written.extend(write(child, out / name if isinstance(child, Plan) else out))
+        written.extend(write(child, out / name if isinstance(child, Plan) and isinstance(step, Plan) else out))
     return written
 
 

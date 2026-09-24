@@ -16,9 +16,9 @@ import pathlib
 
 import pytest
 import torch
-from conftest import same_numbers
 from pydantic import ValidationError
 from safetensors.torch import load_file, save_file
+from conftest import same_numbers
 
 from causalab_mini import ops, plan
 from causalab_mini.engine.engines.hooks import HooksEngine
@@ -117,7 +117,7 @@ def test_ablating_a_latent_on_the_model(remote, raw, data_root, model_engine):
     (to rounding: decode(f) + (x − decode(f)) is x only to the last bit)."""
     write = raw["interventions"]["ablate"]["writes"]["ablate"]
     first = model_engine.execute(plan.build_request(raw, data_root, model_engine), remote=remote)
-    active = first.step("ablate", plan.Observe).results["active"][:, 0, :] > 0
+    active = first.result("latents")[:, 0, :] > 0
     assert active.shape == (4, 32)
     counts = active.sum(dim=0)
     mixed = ((counts > 0) & (counts < 4)).nonzero().flatten()

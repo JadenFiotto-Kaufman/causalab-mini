@@ -5,25 +5,31 @@ tokenizer, no document, and (until it has been run) no tensors. It does not
 know how to execute itself: an `Engine` walks it. That separation is the whole
 reason there can be more than one engine.
 
-The tree, top down:
+Its steps are the kinds of thing a document runs — a model call, a metric
+or a reduction of what one read, a fit — each on its own:
 
     Plan                        a list of steps, and the files they produce
       steps: {name: Step}       executed in order; a step may be a Plan
-      saves: (SaveFile, …)      what leaves the run, written by `Plan.write`
       results: {name: tensor}   filled in as it runs
 
     Featurizers(specs)          construct the parameter sets
-    Observe(forwards, metrics)  one pass: forwards in order, then the metrics
-    Fit(epochs, evaluation, …)  that pass N times, with an optimizer between
+    Forward(input_ids, taps)    one model call, tapped
+    Generate(…, generation)     one model call that decodes
+    Metric(kind, of, ids)       a score of one read, per row
+    Reduce(of, reduce)          a read's mean, or its principal basis
+    Fit(epochs, evaluation, …)  a subtree per minibatch, an optimizer between
     Weights(names)              the fitted parameters, as results
 
-and, inside an `Observe`, the ops that make one pass:
+and, inside a forward, the ops of the one call:
 
-    Forward(name, input, input_ids, attention_mask, taps)
       taps: one per address, in forward order
         Tap(address, writes, reads)     writes run before reads at the same
-          WriteOp(name, positions, operand, mechanism, featurizer)   address
-          ReadOp(name, positions, featurizer)
+          WriteOp(name, at, operand, mechanism, featurizer)   address
+          ReadOp(name, at, featurizer)
+
+A step's name is the key it has in its plan. What it produces is named the
+same way everywhere: a read by its op's name, a model call's own result, a
+metric and a reduction by their step's.
 
 **`results` is the only mutable thing on a step, and `provenance` the only
 other one on a plan.** Every other field is frozen: a plan cannot be edited,
@@ -32,10 +38,10 @@ the engine saves the root plan at the top of its session, so what the run
 produced is navigable exactly where it happened,
 `root.steps["fit"].results["train/loss"]`.
 
-A fit is a request, so a fit is part of one plan: `Fit` holds the rows of every
-update it will make, already batched, already tokenized, already in the order
-the seed puts them in — as `Observe` steps, because a training update is this
-same pass over different rows.
+A fit is a request, so a fit is part of one plan: `Fit` holds the steps of
+every update it will make, already batched, already tokenized, already in the
+order the seed puts them in — as plans, because a training update is these
+same steps over different rows.
 """
 
 from __future__ import annotations
@@ -105,31 +111,6 @@ class Tap:
     step: int | str | None = None
 
 
-@dataclass(frozen=True)
-class Forward:
-    name: str  # "original" or an intervened model's name
-    input: str  # the data role its rows come from
-    input_ids: TokenRows
-    attention_mask: TokenRows
-    taps: tuple[Tap, ...]
-    #: How many tokens to generate after the prompt. 0 is one forward pass;
-    #: N is the prefill plus N decode steps, greedy, EOS held off so the
-    #: bound holds, and the generated ids come back as a value named
-    #: `<forward>.generated`.
-    decode: int = 0
-    #: What row 0's ids say, according to the tokenizer that encoded them.
-    #: The run decodes the same row with its own and compares before it
-    #: looks for any text in it. One row is a sample, not a proof.
-    sample: str = ""
-    #: Per row, the character span of each run the *frame* located in this
-    #: prompt — a chat turn, by its own role. Empty for a prompt that is a
-    #: plain string, which is most of them. They are the client's because
-    #: only the client knows the conversation the template rendered; they
-    #: are in the frame's own coordinates, so the run attaches them and
-    #: `locate` reads them exactly as it reads `eos` in the continuation.
-    segments: tuple[dict[str, tuple[int, int]], ...] = ()
-
-
 def window(forward: Forward, start: int, stop: int) -> Forward:
     """Rows `start:stop` of a forward: the same taps over fewer rows. Every
     per-row thing a forward holds is a tuple with one entry per row — its
@@ -158,32 +139,6 @@ def window(forward: Forward, start: int, stop: int) -> Forward:
 
 def _rows(at: Selection, start: int, stop: int) -> Selection:
     return replace(at, positions=at.positions[start:stop], anchors=at.anchors[start:stop])
-
-
-@dataclass(frozen=True)
-class OutputOp:
-    """One value a pass makes available to the steps after it: a read, kept
-    — optionally reduced over rows — under a name later steps reference."""
-
-    name: str
-    read: str
-    #: "none" keeps the read; "mean" averages the rows away; "pca" reduces
-    #: the rows to their top-k principal directions, a `(d, k)` basis.
-    reduce: str = "none"
-    k: int | None = None
-
-
-@dataclass(frozen=True)
-class MetricOp:
-    name: str
-    kind: str
-    of: str  # the read it binds to
-    ids: tuple[TokenIds, ...]  # one vocabulary id per scored row, per operand
-    #: The rows this metric is computed for, when that is not all of them: a
-    #: row whose answer column is null is an excluded measurement. Decided on
-    #: the client, so the run indexes and never masks — a mean is a mean, and
-    #: a NaN is still a bug rather than a convention.
-    rows: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -259,20 +214,76 @@ class Featurizers(Step):
 
 
 @dataclass(frozen=True, kw_only=True)
-class Observe(Step):
-    """One execution of the forwards, and the metrics over what they read."""
+class Forward(Step):
+    """One model call over one set of rows, with its taps applied. What it
+    reads is published under each read's name; what the call itself returns
+    is the step's own."""
 
-    forwards: tuple[Forward, ...]
-    metrics: tuple[MetricOp, ...]
-    #: What this pass publishes to its later siblings. Ephemeral: it lives in
-    #: the walk's state and dies with the plan, unless a save on this step
-    #: names it too.
-    outputs: tuple[OutputOp, ...] = ()
+    #: Which rows these are: the dataset they came from, or a protocol role.
+    input: str
+    input_ids: TokenRows
+    attention_mask: TokenRows
+    taps: tuple[Tap, ...]
+    #: What row 0's ids say, according to the tokenizer that encoded them.
+    #: The run decodes the same row with its own and compares before it
+    #: looks for any text in it. One row is a sample, not a proof.
+    sample: str = ""
+    #: Per row, the character span of each run the *frame* located in this
+    #: prompt — a chat turn, by its own role. Empty for a prompt that is a
+    #: plain string, which is most of them. They are the client's because
+    #: only the client knows the conversation the template rendered; they
+    #: are in the frame's own coordinates, so the run attaches them and
+    #: `locate` reads them exactly as it reads `eos` in the continuation.
+    segments: tuple[dict[str, tuple[int, int]], ...] = ()
+    #: The reads a later step or a save names: they come home in `results`.
+    #: Every read is published to the steps after it either way.
+    keep: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, kw_only=True)
+class Generate(Forward):
+    """A model call that decodes: the prefill, then up to `max_new_tokens`
+    steps, and a tap in the continuation frame names one of them. Its own
+    result is the ids it generated, prompt stripped."""
+
+    max_new_tokens: int
+    #: Everything else the generate call is given, verbatim — whether it
+    #: samples, whether EOS is held off. JSON scalars, so the plan stays data.
+    generation: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class Metric(Step):
+    """A score of one read, one number per row that is scored."""
+
+    kind: str
+    of: str  # the read it binds to
+    ids: tuple[TokenIds, ...]  # one vocabulary id per scored row, per operand
+    #: The rows this metric is computed for, when that is not all of them: a
+    #: row whose answer column is null is an excluded measurement. Decided on
+    #: the client, so the run indexes and never masks — a mean is a mean, and
+    #: a NaN is still a bug rather than a convention. The run intersects it
+    #: with the rows it could place the read at.
+    rows: tuple[int, ...] | None = None
+    #: Whether the read came back flat — one entry per row it *found* —
+    #: rather than as a rectangle. Known from the read's form, here.
+    flat: bool = False
+
+
+@dataclass(frozen=True, kw_only=True)
+class Reduce(Step):
+    """One read reduced over its rows: `"mean"` averages them away; `"pca"`
+    reduces them to their top-k principal directions, a `(d, k)` basis."""
+
+    of: str
+    reduce: str
+    k: int | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
 class Fit(Step):
-    """The same pass, N times, with an optimizer between.
+    """The same steps, once per minibatch, with an optimizer between, and
+    once more over the held-out rows each epoch.
 
     `epochs` is already shuffled: the seed covers data order, and data order
     decides which rows share a padded batch, which is a tokenizer question and
@@ -280,8 +291,8 @@ class Fit(Step):
     drawn where the parameter is built.
     """
 
-    epochs: tuple[tuple[Observe, ...], ...]
-    evaluation: Observe
+    epochs: tuple[tuple["Plan", ...], ...]
+    evaluation: "Plan"
     objective: tuple[tuple[float, str], ...]
     params: tuple[str, ...]
     lr: float
@@ -326,10 +337,10 @@ class Plan(Step):
     def step(self, name: str, kind: type[S] = Step) -> S:  # type: ignore[assignment]
         """The step called `name`, checked to be the kind you expected.
 
-        `plan.steps["observe"]` is a `Step` as far as a type checker knows, so
-        reading `.forwards` off it is unchecked. `plan.step("observe",
-        Observe)` is the same lookup with the kind stated, which a checker can
-        follow and a wrong document shape trips on immediately.
+        `plan.steps["patched"]` is a `Step` as far as a type checker knows, so
+        reading `.taps` off it is unchecked. `plan.step("patched", Forward)`
+        is the same lookup with the kind stated, which a checker can follow
+        and a wrong document shape trips on immediately.
         """
         found = self.steps[name]
         if not isinstance(found, kind):

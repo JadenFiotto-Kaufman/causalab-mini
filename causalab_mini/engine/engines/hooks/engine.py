@@ -15,14 +15,15 @@ metrics, the write algebra — is the shared code in `engine/steps.py` and
 
 from __future__ import annotations
 
-from typing import Any, Callable
+import contextlib
+from typing import Any, Callable, Iterator
 
 import torch
 
 from .... import address as address_module
 from ....address import Address, AddressError
 from ....ops import intervene
-from ....plan import Forward, Plan, Tap
+from ....plan import Forward, Generate, Plan, Tap
 from ... import provenance, steps
 from ...base import Engine, EngineError
 from .loading import HooksEngineError, load, standardized
@@ -114,12 +115,7 @@ class HooksEngine(Engine):
         steps.run(self, plan, batch_size=batch_size)
         return plan
 
-    def forward(
-        self,
-        forward: Forward,
-        values: dict[str, Any],
-        featurizers: dict[str, Any],
-    ) -> None:
+    def forward(self, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any]) -> None:
         """One forward with its taps applied.
 
         The taps arrive in forward order and nothing here depends on it: a
@@ -127,30 +123,26 @@ class HooksEngine(Engine):
         is removed — a leaked hook would intervene on the *next* forward,
         which is a silently wrong number rather than an error.
         """
-        # The decode step, shared by every hook of this forward: a hook on
-        # the root fires once per pass and counts. None for a plain forward.
-        clock = {"step": 0 if forward.decode else None}
-        handles = [
-            _install(self._names, tap, values, featurizers, clock) for tap in forward.taps
-        ]
-        if forward.decode:
-            handles.append(self.model.register_forward_hook(lambda *_: _tick(clock)))
-        try:
-            if not forward.decode:
-                self.model(**batch(forward, self.model.get_input_embeddings().weight.device))
-            else:
-                prompt = len(forward.input_ids[0])
+        with _hooked(self._names, forward, values, featurizers, {"step": None}):
+            self.model(**batch(forward, self.model.get_input_embeddings().weight.device))
+
+    def generate(self, step: Generate, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
+        """One decode with its taps applied at their steps. A hook on the root
+        fires once per model pass and counts the step every tap shares."""
+        clock = {"step": 0}
+        with _hooked(self._names, step, values, featurizers, clock):
+            ticking = self.model.register_forward_hook(lambda *_: _tick(clock))
+            try:
                 ids = self.model.generate(
-                    **batch(forward, self.model.get_input_embeddings().weight.device),
-                    max_new_tokens=forward.decode,
-                    min_new_tokens=forward.decode,
-                    do_sample=False,
-                    pad_token_id=self._tokenizer.pad_token_id,
+                    **batch(step, self.model.get_input_embeddings().weight.device),
+                    max_new_tokens=step.max_new_tokens,
+                    # nnsight passes the tokenizer's pad id for its engine;
+                    # here nothing does, unless the document said one
+                    **{"pad_token_id": self._tokenizer.pad_token_id, **step.generation},
                 )
-                values[f"{forward.name}.generated"] = ids[:, prompt:].clone()
-        finally:
-            for handle in handles:
-                handle.remove()
+            finally:
+                ticking.remove()
+        return ids[:, len(step.input_ids[0]) :].clone()
 
 
 def batch(forward: Forward, device: Any = None) -> dict[str, Any]:
@@ -161,6 +153,18 @@ def batch(forward: Forward, device: Any = None) -> dict[str, Any]:
         "input_ids": torch.tensor(forward.input_ids, device=device),
         "attention_mask": torch.tensor(forward.attention_mask, device=device),
     }
+
+
+@contextlib.contextmanager
+def _hooked(names: Any, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any], clock: dict[str, Any]) -> Iterator[None]:
+    """Every tap of `forward` hooked for as long as the block runs, and every
+    handle removed however it ends."""
+    handles = [_install(names, tap, values, featurizers, clock) for tap in forward.taps]
+    try:
+        yield
+    finally:
+        for handle in handles:
+            handle.remove()
 
 
 def _tick(clock: dict[str, Any]) -> None:

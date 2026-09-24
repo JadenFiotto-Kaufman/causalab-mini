@@ -10,6 +10,7 @@ import json
 import pytest
 import safetensors
 import torch
+from conftest import of_kind
 
 from causalab_mini import cli, ops, plan
 from causalab_mini.ops import featurizer
@@ -136,14 +137,14 @@ def test_the_fit_is_compiled_into_the_plan_rows_and_all(das_plan):
     # batch.pairs is 16 and the train split is 2 rows, so a batch is the whole
     # split and an epoch is one update.
     assert [len(epoch) for epoch in fit.epochs] == [1] * 10
-    assert [len(f.input_ids) for f in fit.epochs[0][0].forwards] == [2, 2]
-    assert [len(f.input_ids) for f in fit.evaluation.forwards] == [2, 2]
+    assert [len(f.input_ids) for f in of_kind(fit.epochs[0][0], plan.Forward)] == [2, 2]
+    assert [len(f.input_ids) for f in of_kind(fit.evaluation, plan.Forward)] == [2, 2]
     assert (fit.objective, fit.params) == (((1.0, "ce"),), ("rot",))
     assert (fit.early_stop, fit.patience, fit.mode) == ("iia", 3, "max")
 
 
 def test_the_rotation_reaches_the_read_and_the_write_and_not_the_head(das_plan):
-    source, patched = das_plan.step("observe", plan.Observe).forwards
+    source, patched = of_kind(das_plan, plan.Forward)
     assert [read.featurizer for read in source.taps[0].reads] == ["rot"]
     assert [write.featurizer for write in patched.taps[0].writes] == ["rot"]
     # the metric's read is a *plain* lm_head read; the document refuses any other.
@@ -165,8 +166,8 @@ def test_an_eval_split_sharing_rows_with_the_fit_is_a_load_error(das_raw, data_r
 def test_the_same_ref_for_both_is_the_visible_train_equals_test_ablation(das_raw, data_root, model_engine):
     das_raw["method"]["train"]["eval"]["split"] = "weekdays/data#train"
     fitted = plan.build_request(das_raw, data_root, model_engine)
-    assert fitted.step("fit", plan.Fit).evaluation.forwards[0].input_ids == (
-        fitted.step("observe", plan.Observe).forwards[0].input_ids
+    assert of_kind(fitted.step("fit", plan.Fit).evaluation, plan.Forward)[0].input_ids == (
+        of_kind(fitted, plan.Forward)[0].input_ids
     )
 
 
@@ -195,10 +196,10 @@ def test_the_fit_records_every_pass_where_it_happened(fitted):
     in one document would make every lookup ambiguous — so they are reached by
     saying where."""
     fit = fitted.step("fit", plan.Fit)
-    assert sorted(fit.epochs[0][0].results) == ["ce", "iia"]
-    assert sorted(fit.evaluation.results) == ["ce", "iia"]
+    assert sorted(fit.epochs[0][0].all_results()) == ["ce", "iia"]
+    assert sorted(fit.evaluation.all_results()) == ["ce", "iia"]
     assert torch.equal(
-        fitted.result("iia"), fitted.step("observe", plan.Observe).results["iia"]
+        fitted.result("iia"), fitted.step("iia", plan.Metric).results["iia"]
     )
 
 

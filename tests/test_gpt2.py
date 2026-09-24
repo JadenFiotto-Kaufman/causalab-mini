@@ -12,6 +12,7 @@ import pathlib
 
 import pytest
 import torch
+from conftest import of_kind
 
 from causalab_mini import ops, plan
 from causalab_mini.data import tokens
@@ -146,7 +147,7 @@ def test_the_engines_head_read_is_the_models_own_logits_here_too(gpt2, gpt2_raw,
     built = _build(gpt2_raw, data_root, gpt2_engine)
     results = gpt2_engine.execute(built)
 
-    source, patched = built.step("observe", plan.Observe).forwards
+    source, patched = of_kind(built, plan.Forward)
     with gpt2.trace(nnterp.batch(source)):
         v_cf = gpt2.layers_output[2][:, -1, :].clone().save()
     with gpt2.trace(nnterp.batch(patched)):
@@ -154,7 +155,7 @@ def test_the_engines_head_read_is_the_models_own_logits_here_too(gpt2, gpt2_raw,
         logits = gpt2.logits[:, -1, :].clone().save()
 
     rows = torch.arange(4)
-    a, b = built.step("observe", plan.Observe).metrics[0].ids
+    a, b = of_kind(built, plan.Metric)[0].ids
     assert torch.equal(
         results.result("logit_diff"), logits[rows, torch.tensor(a)] - logits[rows, torch.tensor(b)]
     )
@@ -207,7 +208,7 @@ def test_the_query_at_layer_0_carries_nothing_a_prompt_pair_differs_in(gpt2_engi
     assert torch.equal(swapped.result("logit_diff"), clean.result("logit_diff"))
 
     built = _build(raw, data_root, gpt2_engine)
-    source, _ = steps.located(gpt2_engine, built.step("observe", plan.Observe).forwards[0])
+    source, _ = steps.located(gpt2_engine, of_kind(built, plan.Forward)[0])
     tap = source.taps[0]
     with gpt2.trace(nnterp.batch(source)):
         query = ops.gather(

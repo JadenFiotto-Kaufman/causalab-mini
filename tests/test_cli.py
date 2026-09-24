@@ -136,7 +136,7 @@ def test_validate_compiles_so_a_misspelled_component_fails_there(tmp_path, capsy
 
 def test_explain_prints_the_compiled_plan_without_weights(capsys):
     out = _json(capsys, ["explain", DAS, "--data-root", DATA])
-    assert out["steps"] == ["featurizers", "fit", "score", "weights"]
+    assert out["steps"] == ["featurizers", "fit", "original", "patched", "iia", "ce", "weights"]
     text = out["text"]
     assert "rot: subspace k=8 d=16" in text  # d derived, never authored
     # the spec, not the rows: every pass of this document reads at the last

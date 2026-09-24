@@ -150,7 +150,7 @@ def test_the_bundle_round_trip_reproduces_the_fits_own_score(dbm_raw, data_root,
     applied = model_engine.execute(
         plan.build_request(_apply(dbm_raw, tmp_path / "mask.safetensors"), data_root, model_engine)
     )
-    assert torch.equal(applied.result("iia"), executed.step("score", plan.Observe).results["iia"])
+    assert torch.equal(applied.result("iia"), executed.result("iia"))
 
 
 def test_an_all_on_gate_is_plain_patching_and_an_all_off_gate_is_nothing(

@@ -4,6 +4,7 @@ import dataclasses
 import pickle
 
 import pytest
+from conftest import of_kind
 
 from causalab_mini import plan
 from causalab_mini.data import tokens
@@ -83,12 +84,12 @@ def test_a_plan_pickles_with_plain_pickle(any_plan):
 
 
 def test_the_schedule_is_two_forwards_counterfactual_then_base(minimal_plan):
-    assert [(f.name, f.input) for f in minimal_plan.step("observe", plan.Observe).forwards] == [
-        ("original", "counterfactual"),
-        ("patched", "base"),
-    ]
+    """Each forward is a step of the plan, under its model's name, and the
+    metrics after them under theirs."""
+    assert list(minimal_plan.steps) == ["original", "patched", "iia", "logit_diff"]
+    assert [f.input for f in of_kind(minimal_plan, plan.Forward)] == ["counterfactual", "base"]
 
-    original, patched = minimal_plan.step("observe", plan.Observe).forwards
+    original, patched = of_kind(minimal_plan, plan.Forward)
     assert [(tap.address.path, tap.address.side) for tap in original.taps] == [
         ("layers.0", "output")
     ]
@@ -134,8 +135,8 @@ def test_the_metric_columns_resolved_to_the_token_ids_notes_measured(minimal_pla
     # NOTES.md §9.1: on this sentencepiece tokenizer " Friday" and "Friday" are
     # the same id, so the space-prefixed form is the bare one.
     assert model.tokenizer.encode(" Friday", add_special_tokens=False) == [28728]
-    iia, logit_diff = minimal_plan.step("observe", plan.Observe).metrics
-    assert (iia.name, iia.kind, iia.of) == ("iia", "match", "logits")
+    iia, logit_diff = of_kind(minimal_plan, plan.Metric)
+    assert (iia.kind, iia.of) == ("match", "logits")
     # row 0's cf_answer is " Sunday", row 2's is " Friday" (documents/data/weekdays/train.json)
     assert iia.ids == ((16340, 27822, 28728, 24211),)
     assert logit_diff.ids[0] == iia.ids[0]  # `a` is cf_answer too

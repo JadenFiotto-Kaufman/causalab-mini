@@ -16,7 +16,7 @@ from dataclasses import replace
 
 import pytest
 import torch
-from conftest import same_numbers
+from conftest import of_kind, same_numbers
 
 from causalab_mini import plan
 from causalab_mini.address import AddressError
@@ -25,7 +25,7 @@ from causalab_mini.engine.engines.hooks import HooksEngineError
 from causalab_mini.engine.engines.hooks import engine as hooks
 from causalab_mini.engine.engines.hooks.loading import standardized
 from causalab_mini.ops import intervene
-from causalab_mini.plan import Observe, ReadOp, document
+from causalab_mini.plan import ReadOp, document
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 GPT2_DOCUMENT = REPO / "documents" / "gpt2_cpu.json"
@@ -111,7 +111,7 @@ def test_a_swap_lands_the_source_read_bit_for_bit(hooks_engine, minimal_raw, dat
     """
     compiled = _build(minimal_raw, data_root, hooks_engine)
     source, patched = (
-        steps.located(hooks_engine, one)[0] for one in compiled.step("observe", Observe).forwards
+        steps.located(hooks_engine, one)[0] for one in of_kind(compiled, plan.Forward)
     )
     tap = patched.taps[0]
     watched = replace(
@@ -135,7 +135,7 @@ def test_a_forward_leaves_no_hook_behind(hooks_engine, minimal_raw, data_root):
     """A leaked handle would intervene on the next forward — a wrong number,
     not an error — so the count is asserted rather than trusted."""
     compiled = _build(minimal_raw, data_root, hooks_engine)
-    source, _ = compiled.step("observe", Observe).forwards
+    source, _ = of_kind(compiled, plan.Forward)
     source, _ = steps.located(hooks_engine, source)
     layer = hooks.resolve(hooks_engine.locate("block_output", 0), standardized(hooks_engine.model))
 
@@ -185,7 +185,7 @@ def test_the_engine_specific_surface_is_exactly_the_contract():
     still added no member of its own to the contract."""
     overridden = {name for name in vars(HooksEngine) if not name.startswith("_")}
     assert overridden == {"load", "tokenizer", "num_layers", "locate", "width", "heads",
-                          "execute", "forward"}
+                          "execute", "forward", "generate"}
 
 
 def test_the_standardized_names_reach_a_second_family(data_root):

@@ -14,7 +14,7 @@ import shutil
 
 import pytest
 import torch
-from conftest import same_numbers
+from conftest import of_kind, same_numbers
 
 from causalab_mini import plan
 from causalab_mini.data import rows as rows_module
@@ -54,12 +54,12 @@ def holed_root(data_root, tmp_path):
 
 def test_a_null_column_takes_the_row_out_of_that_metric_only(raw, holed_root, model_engine):
     built = plan.build_request(raw, holed_root, model_engine)
-    by_name = {metric.name: metric for metric in built.step("score", plan.Observe).metrics}
+    by_name = {name: one for name, one in built.steps.items() if isinstance(one, plan.Metric)}
 
     assert by_name["logit_diff"].rows == (0, 2, 3)
     assert [len(ids) for ids in by_name["logit_diff"].ids] == [3, 3]
     assert by_name["base_logit"].rows is None, "it does not name the null column"
-    assert "logit_diff/logit_diff rows=[0, 2, 3]" in explain.explain(built)
+    assert "logit_diff: metric logit_diff(logits) rows=[0, 2, 3]" in explain.explain(built)
 
 
 def test_the_other_rows_score_exactly_what_they_did(raw, data_root, holed_root, model_engine):
@@ -174,14 +174,14 @@ def test_a_row_the_run_cannot_place_is_excluded_like_a_null_column_is(
     the metric is over the intersection. The row stays a row."""
     holed = _no_entity(data_root, tmp_path, [1])
     executed = model_engine.execute(plan.build_request(at_entity, holed, model_engine))
-    score = executed.step("score", plan.Observe)
+    scored = executed.step("logit_diff", plan.Metric).results
 
-    assert score.results["eligible"]["logit_diff"] == (True, False, True, True)
-    assert score.results["positions"]["logits"]["reason"] == ("", "alignment_missing", "", "")
-    assert score.results["logit_diff"].shape == (3,)
+    assert scored["eligible"]["logit_diff"] == (True, False, True, True)
+    assert executed.step("original", plan.Forward).results["positions"]["logits"]["reason"] == ("", "alignment_missing", "", "")
+    assert scored["logit_diff"].shape == (3,)
 
     whole = model_engine.execute(plan.build_request(at_entity, data_root, model_engine))
-    assert torch.equal(score.results["logit_diff"], whole.result("logit_diff")[[0, 2, 3]])
+    assert torch.equal(scored["logit_diff"], whole.result("logit_diff")[[0, 2, 3]])
 
 
 def test_the_table_keeps_that_row_too_and_says_which_token_it_missed(

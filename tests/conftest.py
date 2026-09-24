@@ -57,3 +57,16 @@ def same_numbers(a, b, atol: float = 1e-6) -> bool:
     import torch
 
     return a.shape == b.shape and torch.allclose(a.float(), b.float(), rtol=0, atol=atol)
+
+
+def of_kind(plan, kind) -> list:
+    """A plan's steps of one kind, in the order they run — its forwards, say.
+    A plan is keyed by step name, and a test that is about what the model
+    calls do has no need to spell each one's."""
+    return [step for step in plan.steps.values() if isinstance(step, kind)]
+
+
+def provenance(executed):
+    """Where each step of a run acted and which rows it scored, by step —
+    what two runs of one plan must agree on beside their numbers."""
+    return {name: (one.results.get("positions"), one.results.get("eligible")) for name, one in executed.steps.items()}

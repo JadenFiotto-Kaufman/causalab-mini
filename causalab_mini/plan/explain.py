@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .plan import Featurizers, Fit, Observe, Plan, Step, Weights
+from .plan import Featurizers, Fit, Forward, Generate, Metric, Plan, Reduce, Step, Weights
 
 
 def _features(at: Any) -> str:
@@ -63,42 +63,45 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
         )
         out += _lines(step.epochs[0][0], "epochs[0][0]", depth + 2)
         out += _lines(step.evaluation, "evaluation", depth + 2)
-    elif isinstance(step, Observe):
-        def _out(o):
-            if o.reduce == "none":
-                return f"{o.name}={o.read}"
-            return f"{o.name}={o.reduce}{'' if o.k is None else o.k}({o.read})"
-        outputs = f"  outputs={[_out(o) for o in step.outputs]}" if step.outputs else ""
-        out.append(f"{pad}{name}: Observe  metrics={[m.name + '/' + m.kind + ('' if m.rows is None else f' rows={list(m.rows)}') for m in step.metrics]}{outputs}{tail}")
-        for forward in step.forwards:
-            rows, width = len(forward.input_ids), len(forward.input_ids[0]) if forward.input_ids else 0
-            decode = f"  decode={forward.decode}" if forward.decode else ""
-            out.append(f"{pad}    forward {forward.name!r} on {forward.input!r}  ({rows} rows x {width} tokens){decode}")
-            for tap in forward.taps:
-                address = tap.address
-                where = address.component + (f"[{address.layer}]" if address.layer is not None else "")
-                where += "" if tap.step is None else f" @step {tap.step}"
-                for write in tap.writes:
-                    args = [] if write.operand is None else [str(write.operand)]
-                    args += [f"{k}={v}" for k, v in write.params.items()]
-                    out.append(
-                        f"{pad}      write {write.name!r} at {where} pos={_pos(write.at)}{_features(write.at)} "
-                        f"{write.mechanism}({', '.join(args)}) via {write.featurizer!r}"
-                        f"{'' if write.features is None else f' on its features {list(write.features)}'}"
-                    )
-                for read in tap.reads:
-                    # a read the run cuts out of the continuation is one op
-                    # per decode step in the plan and one read in the
-                    # document; print the document's
-                    if read.stack and tap.step != 0:
-                        continue
-                    name = read.stack or read.name
-                    at = where.split(" @step")[0] if read.stack else where
-                    steps = f" over {forward.decode} steps" if read.stack else ""
-                    view = "" if read.view == "raw" else f" as {read.view}"
-                    out.append(
-                        f"{pad}      read  {name!r} at {at}{steps} pos={_pos(read.at)}{_features(read.at)} via {read.featurizer!r}{view}"
-                    )
+    elif isinstance(step, Forward):
+        rows, width = len(step.input_ids), len(step.input_ids[0]) if step.input_ids else 0
+        call = "forward"
+        if isinstance(step, Generate):
+            call = "generate" + "".join(
+                f" {key}={value}" for key, value in {"max_new_tokens": step.max_new_tokens, **step.generation}.items()
+            )
+        kept = f"  keeps={list(step.keep)}" if step.keep else ""
+        out.append(f"{pad}{name}: {call} on {step.input!r}  ({rows} rows x {width} tokens){kept}{tail}")
+        for tap in step.taps:
+            address = tap.address
+            where = address.component + (f"[{address.layer}]" if address.layer is not None else "")
+            where += "" if tap.step is None else f" @step {tap.step}"
+            for write in tap.writes:
+                args = [] if write.operand is None else [str(write.operand)]
+                args += [f"{k}={v}" for k, v in write.params.items()]
+                out.append(
+                    f"{pad}    write {write.name!r} at {where} pos={_pos(write.at)}{_features(write.at)} "
+                    f"{write.mechanism}({', '.join(args)}) via {write.featurizer!r}"
+                    f"{'' if write.features is None else f' on its features {list(write.features)}'}"
+                )
+            for read in tap.reads:
+                # a read the run cuts out of the continuation is one op per
+                # decode step in the plan and one read in the document;
+                # print the document's
+                if read.stack and tap.step != 0:
+                    continue
+                label = read.stack or read.name
+                at = where.split(" @step")[0] if read.stack else where
+                steps = f" over {step.max_new_tokens} steps" if read.stack and isinstance(step, Generate) else ""
+                view = "" if read.view == "raw" else f" as {read.view}"
+                out.append(
+                    f"{pad}    read  {label!r} at {at}{steps} pos={_pos(read.at)}{_features(read.at)} via {read.featurizer!r}{view}"
+                )
+    elif isinstance(step, Metric):
+        rows = "" if step.rows is None else f" rows={list(step.rows)}"
+        out.append(f"{pad}{name}: metric {step.kind}({step.of}){rows}{tail}")
+    elif isinstance(step, Reduce):
+        out.append(f"{pad}{name}: reduce {step.reduce}{'' if step.k is None else step.k}({step.of}){tail}")
     elif isinstance(step, Weights):
         out.append(f"{pad}{name}: Weights  names={list(step.names)}{tail}")
     return out

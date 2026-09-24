@@ -12,6 +12,7 @@ import pathlib
 
 import pytest
 import torch
+from conftest import of_kind
 
 from causalab_mini import plan
 from causalab_mini.engine.engines.hooks import HooksEngine
@@ -61,7 +62,7 @@ def _agree(a, b):
 
 def test_a_window_of_a_forward_is_the_same_taps_over_fewer_rows(data_root, model_engine):
     built = plan.build_request(_point("window_patch.json"), data_root, model_engine)
-    forward = built.step("score", plan.Observe).forwards[-1]
+    forward = of_kind(built, plan.Forward)[-1]
     small = plan.window(forward, 1, 3)
 
     assert small.input_ids == forward.input_ids[1:3]
@@ -162,7 +163,7 @@ def test_a_per_row_output_reaches_the_window_of_its_own_rows(data_root, model_en
     }
     direct = model_engine.execute(plan.build_request(_point("patching.json"), data_root, model_engine))
     chained = model_engine.execute(plan.build_request(raw, data_root, model_engine), batch_size=1)
-    assert _agree(direct.result("logit_diff"), chained.step("score", plan.Observe).results["logit_diff"])
+    assert _agree(direct.result("logit_diff"), chained.result("score.logit_diff"))
 
 
 # --------------------------------------------------------------------- #

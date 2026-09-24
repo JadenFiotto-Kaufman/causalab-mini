@@ -18,6 +18,7 @@ import pathlib
 import pytest
 import torch
 from pydantic import ValidationError
+from conftest import of_kind
 
 from causalab_mini import plan
 from causalab_mini.address import AddressError
@@ -116,7 +117,7 @@ def test_two_sites_of_disjoint_heads_are_one_tap_and_add_up(data_root, model_eng
     one["models"]["patched"]["writes"] = ["patch", "patch_rest"]
 
     built = plan.build_request(raw, data_root, model_engine)
-    (tap,) = [t for t in built.step("score", plan.Observe).forwards[-1].taps if t.writes]
+    (tap,) = [t for t in of_kind(built, plan.Forward)[-1].taps if t.writes]
     assert [(w.at.groups, w.at.take) for w in tap.writes] == [(4, (0, 1)), (4, (2, 3))]
     assert torch.equal(
         model_engine.execute(built).result("logit_diff"),
@@ -182,7 +183,7 @@ def test_the_pattern_is_a_distribution_over_keys_per_head(data_root, eager_engin
     raw = json.loads(KNOCKOUT.read_text())
     raw["sites"]["one_head"]["heads"] = [0]
     executed = eager_engine.execute(plan.build_request(raw, data_root, eager_engine))
-    pattern = executed.step("score", plan.Observe).results["last_pattern"]
+    pattern = executed.result("pattern")
 
     rows, window, flat = pattern.shape
     assert (rows, window) == (4, 1) and flat % 4 == 0
@@ -198,13 +199,11 @@ def test_the_scores_are_what_the_softmax_turns_into_the_pattern(data_root, eager
     one["reads"]["scores"] = {**one["reads"]["pattern"], "site": "scores"}
     one["models"]["patched"]["writes"] = []
     raw["steps"]["score"]["outputs"]["last_scores"] = {"read": "scores"}
-    results = eager_engine.execute(plan.build_request(raw, data_root, eager_engine)).step(
-        "score", plan.Observe
-    ).results
+    executed = eager_engine.execute(plan.build_request(raw, data_root, eager_engine))
 
-    rows = results["last_scores"].shape[0]
-    scores = results["last_scores"].reshape(rows, 4, -1)
-    assert torch.equal(scores.softmax(-1), results["last_pattern"].reshape(rows, 4, -1))
+    rows = executed.result("scores").shape[0]
+    scores = executed.result("scores").reshape(rows, 4, -1)
+    assert torch.equal(scores.softmax(-1), executed.result("pattern").reshape(rows, 4, -1))
 
 
 def test_knocking_out_a_head_is_zeroing_its_z(data_root, eager_engine):
@@ -232,7 +231,7 @@ def test_the_pattern_survives_being_shipped(data_root, eager_engine):
     raw["sites"]["one_head"]["heads"] = [1]
     here = eager_engine.execute(plan.build_request(raw, data_root, eager_engine))
     shipped = eager_engine.execute(plan.build_request(raw, data_root, eager_engine), remote="local")
-    for name in ("logit_diff", "last_pattern"):
+    for name in ("logit_diff", "pattern"):
         assert torch.equal(here.result(name), shipped.result(name)), name
 
 
@@ -266,7 +265,7 @@ def test_units_are_single_features_of_any_site_with_a_width(data_root, model_eng
     width = model_engine.width(model_engine.locate("mlp_activation", 0))
     raw["sites"]["target"]["units"] = [1, 5]
     built = plan.build_request(raw, data_root, model_engine)
-    (tap,) = [t for t in built.step("score", plan.Observe).forwards[-1].taps if t.writes]
+    (tap,) = [t for t in of_kind(built, plan.Forward)[-1].taps if t.writes]
     assert (tap.writes[0].at.groups, tap.writes[0].at.take) == (width, (1, 5))
     assert "features=[1, 5]/" in __import__("causalab_mini.plan.explain", fromlist=["x"]).explain(built)
 
@@ -339,11 +338,12 @@ def test_the_patched_head_looks_where_it_did_on_the_counterfactual(data_root, ea
     one["reads"]["bystander_before"] = {"site": "bystander", "pos": -1, "model": "original", "input": "base"}
     raw["steps"]["score"]["outputs"] = {name: {"read": read} for name, read in (
         ("theirs", "their_pattern"), ("after", "ours_after"), ("by_after", "bystander_after"), ("by_before", "bystander_before"))}
-    got = eager_engine.execute(plan.build_request(raw, data_root, eager_engine)).step("score", plan.Observe).results
+    got = eager_engine.execute(plan.build_request(raw, data_root, eager_engine)).result
 
-    assert torch.equal(got["after"], got["theirs"]), "head 2 now attends as it did on the counterfactual"
-    assert torch.equal(got["by_after"], got["by_before"]), "head 1 was not touched"
-    assert torch.allclose(got["after"].sum(-1), torch.ones(got["after"].shape[:2]), atol=1e-6), "still a distribution"
+    assert torch.equal(got("ours_after"), got("their_pattern")), "head 2 now attends as it did on the counterfactual"
+    assert torch.equal(got("bystander_after"), got("bystander_before")), "head 1 was not touched"
+    after = got("ours_after")
+    assert torch.allclose(after.sum(-1), torch.ones(after.shape[:2]), atol=1e-6), "still a distribution"
 
 
 def test_a_pattern_from_the_same_prompt_changes_nothing(data_root, eager_engine):

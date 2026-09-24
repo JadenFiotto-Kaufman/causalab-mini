@@ -30,7 +30,7 @@ def lens_raw():
 def test_the_lens_reads_a_probability_per_row_at_every_layer(lens_raw, data_root, model_engine):
     executed = model_engine.execute(plan.build_request(lens_raw, data_root, model_engine))
     for point in ("layers=0", "layers=1"):
-        p = executed.step(point, plan.Plan).step("lens", plan.Observe).results["p_answer"]
+        p = executed.step(point, plan.Plan).result("p_answer")
         assert p.shape == (4,) and ((p > 0) & (p < 1)).all(), point
 
 
@@ -42,9 +42,9 @@ def test_the_two_engines_project_identically(lens_raw, data_root, model_engine):
     traced = model_engine.execute(plan.build_request(lens_raw, data_root, model_engine))
     hooked = hooks.execute(plan.build_request(lens_raw, data_root, hooks))
     for point in ("layers=0", "layers=1"):
-        a = traced.step(point, plan.Plan).step("lens", plan.Observe).results
-        b = hooked.step(point, plan.Plan).step("lens", plan.Observe).results
-        assert torch.equal(a["p_answer"], b["p_answer"]) and torch.equal(a["top1"], b["top1"]), point
+        a, b = (one.step(point, plan.Plan) for one in (traced, hooked))
+        assert torch.equal(a.result("p_answer"), b.result("p_answer")), point
+        assert torch.equal(a.result("top1"), b.result("top1")), point
 
 
 def test_the_lens_is_one_document_with_one_point_per_layer(lens_raw, data_root, model_engine):
@@ -56,7 +56,7 @@ def test_the_lens_is_one_document_with_one_point_per_layer(lens_raw, data_root, 
 
     executed = model_engine.execute(built)
     per_layer = [
-        executed.step(point, plan.Plan).step("lens", plan.Observe).results["p_answer"]
+        executed.step(point, plan.Plan).result("p_answer")
         for point in built.steps
     ]
     assert not torch.equal(per_layer[0], per_layer[1]), "two layers, two answers"

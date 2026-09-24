@@ -34,18 +34,28 @@ from .plan import (
     Featurizers,
     Fit,
     Forward,
-    MetricOp,
-    Observe,
-    OutputOp,
+    Generate,
+    Metric,
     Plan,
     PlanError,
     ReadOp,
+    Reduce,
     SaveFile,
     Step,
     Tap,
     Weights,
     WriteOp,
 )
+
+
+#: One forward's padded batch: its ids, its mask, row 0 as the client's
+#: tokenizer decodes it, and per row the runs the frame located in it.
+_Batch = tuple[TokenRows, TokenRows, str, tuple[dict[str, tuple[int, int]], ...]]
+
+#: Every site's three compiled facts, by site: its address, which part of
+#: the feature axis it is (`(groups, take)`, where it names heads or units),
+#: and how wide the tensor is where a continuation read buffers.
+_Sites = tuple[dict[str, Address], dict[str, Any], dict[str, int]]
 
 
 def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
@@ -123,9 +133,13 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
     #: the block would only find out from a shape error.
     output_rows: dict[str, int | None] = {}
     output_widths: dict[str, tuple[int | None, Any]] = {}  # the read's width, how reduced
-    def compile_one(name: str, step: Any) -> Step:
-        """One step with at most one intervention, compiled. `name` is its
-        path, which is what its refusals print."""
+    #: an output's name -> the value it is: a read, or a reduction
+    aliases: dict[str, str] = {}
+    qualified = sum(1 for one in spec.steps.values() if getattr(one, "kind", "") == "observe" and not isinstance(one.interventions, list)) > 1
+
+    def compile_one(name: str, step: Any) -> dict[str, Step]:
+        """One step with at most one intervention, compiled to the steps it
+        runs. `name` is its path, which is what its refusals print."""
         kind = type(step).__name__
         experiment = (
             replace(_Experiment.of_spec(spec, spec.intervention_of(step)), features=features, widths=stack_widths)
@@ -177,17 +191,17 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
         if kind == "Observe":
             assert experiment is not None
             rows = table(step.rows)
-            outputs = tuple(
-                OutputOp(name=out_name, read=out.read, reduce=out.reduce, k=out.k)
-                for out_name, out in step.outputs.items()
-            )
-            observe = _pass(experiment, rows, addresses, engine.tokenizer)
+            # a scope running several observe steps qualifies each one's names
+            # by it, so two steps' `logits` are two values
+            prefix = f"{name}." if qualified else ""
+            fragment = _pass(experiment, rows, addresses, engine.tokenizer, prefix, aliases)
             read_widths = {
-                read.name: read.at.where.width if read.at.where is not None else None
-                for forward in observe.forwards for tap in forward.taps for read in tap.reads
+                op.name: op.at.where.width if op.at.where is not None else None
+                for one in fragment.values() if isinstance(one, Forward)
+                for tap in one.taps for op in tap.reads
             }
-            for out in outputs:
-                width = read_widths[out.read]
+            for out_name, out in step.outputs.items():
+                width = read_widths[prefix + out.read]
                 if out.reduce == "pca" and width is not None:
                     # k directions need more than k vectors: the rows are
                     # centered first, which costs one rank. Known here, from
@@ -197,28 +211,32 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
                     assert out.k is not None
                     if out.k > vectors - 1:
                         raise PlanError(
-                            f"step {name!r}: output {out.name!r} asks for {out.k} principal "
+                            f"step {name!r}: output {out_name!r} asks for {out.k} principal "
                             f"directions of {vectors} vector(s); centered, they span at most "
                             f"{max(vectors - 1, 0)}. Harvest more rows, or more positions per row"
                         )
-                output_rows[out.name] = None if out.reduce == "mean" else len(rows["base"])
-                output_widths[out.name] = (
-                    width,
-                    out.reduce if out.reduce == "pca" else out.reduce == "mean",
-                )
-            return replace(
-                observe,
-                outputs=outputs,
-                saves=_spec_saves(step.saves, spec, rows["base"], widths, outputs={o.name for o in outputs}),
-            )
+                output_rows[out_name] = None if out.reduce == "mean" else len(rows["base"])
+                output_widths[out_name] = (width, out.reduce if out.reduce == "pca" else out.reduce == "mean")
+                if out.reduce == "none":
+                    # an output kept as it is comes home, as outputs did
+                    aliases[out_name] = prefix + out.read
+                    _keep(fragment, prefix + out.read)
+                else:
+                    fragment[out_name] = Reduce(of=prefix + out.read, reduce=out.reduce, k=out.k)
+                    aliases[out_name] = out_name
+            for save in _spec_saves(step.saves, spec, rows["base"], widths, outputs=set(step.outputs)):
+                _place(fragment, save, prefix, aliases)
+            return fragment
         elif kind == "Fit":
             assert experiment is not None
-            return _spec_fit(step, spec, experiment, table, addresses, engine, widths)
+            return {name: _spec_fit(step, spec, experiment, table, addresses, engine, widths, aliases)}
         elif kind == "Weights":
-            return Weights(
-                names=tuple(step.names),
-                saves=_spec_saves(step.saves, spec, [], widths, sites=_sites_of(spec)),
-            )
+            return {
+                name: Weights(
+                    names=tuple(step.names),
+                    saves=_spec_saves(step.saves, spec, [], widths, sites=_sites_of(spec)),
+                )
+            }
         else:  # pragma: no cover — the discriminated union has no other arm
             raise PlanError(f"step {name!r}: {kind} is not a step this compiler knows")
 
@@ -226,17 +244,49 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
         if isinstance(getattr(step, "interventions", None), list):
             # A list is lowered, not executed specially: one nested plan per
             # intervention, each holding this step as a one-intervention
-            # document would compile it — so each gets its own directory
-            # and its own results path, `<step>/<intervention>/<step>`.
+            # document would compile it — so each gets its own directory.
             steps[name] = Plan(
-                steps={
-                    child: Plan(steps={name: compile_one(f"{name}/{child}", one)})
-                    for child, one in spec.lower(name, step).items()
-                }
+                steps={child: Plan(steps=compile_one(f"{name}/{child}", one)) for child, one in spec.lower(name, step).items()}
             )
         else:
-            steps[name] = compile_one(name, step)
+            for key, one in compile_one(name, step).items():
+                if key in steps:
+                    raise PlanError(f"step {name!r}: {key!r} is already a step of this plan")
+                steps[key] = one
     return Plan(steps=steps, source=spec.model_dump(mode="json"))
+
+
+def _place(fragment: dict[str, Step], save: SaveFile, prefix: str, aliases: dict[str, str]) -> None:
+    """Put one save on the step that produces its value: a metric's on the
+    metric, a reduction's on the reduction, a kept read's on the forward that
+    reads it — which then brings it home — and a decode's ids on the decode."""
+    value = save.value
+    if value.endswith(".generated"):
+        key = prefix + value.removesuffix(".generated")
+        save = replace(save, value=key)
+    elif prefix + value in fragment:
+        key = prefix + value
+        save = replace(save, value=key, of=prefix + save.of if save.of else "")
+    elif isinstance(fragment.get(aliases.get(value, "")), Reduce):
+        key = aliases[value]
+        save = replace(save, value=key)
+    else:
+        key = _keep(fragment, aliases[value])
+        save = replace(save, value=aliases[value])
+    fragment[key] = replace(fragment[key], saves=(*fragment[key].saves, save))
+
+
+def _keep(fragment: dict[str, Step], read: str) -> str:
+    """Bring `read` home from the forward that reads it, and name that forward."""
+    key = next(
+        one for one, step in fragment.items()
+        if isinstance(step, Forward) and any(op.name == read for tap in step.taps for op in tap.reads)
+    )
+    forward = fragment[key]
+    assert isinstance(forward, Forward)
+    if read not in forward.keep:
+        fragment[key] = replace(forward, keep=(*forward.keep, read))
+    return key
 
 
 def _spec_fit(
@@ -247,6 +297,7 @@ def _spec_fit(
     addresses: dict[str, Address],
     engine: Any,
     widths: dict[str, int],
+    aliases: dict[str, str],
 ) -> Fit:
     rows = table(step.rows)
     evaluation_rows = table(step.eval.rows)
@@ -262,17 +313,17 @@ def _spec_fit(
     order = random.Random(step.seed)
     epochs = tuple(
         tuple(
-            _pass(experiment, _take(rows, draw[start : start + step.pairs]), addresses, engine.tokenizer)
+            Plan(steps=_pass(experiment, _take(rows, draw[start : start + step.pairs]), addresses, engine.tokenizer, "", aliases))
             for start in range(0, count, step.pairs)
         )
         for draw in (order.sample(range(count), count) for _ in range(step.epochs))
     )
+    evaluation = _pass(experiment, evaluation_rows, addresses, engine.tokenizer, "", aliases)
+    for save in _spec_saves(step.eval.saves, spec, evaluation_rows["base"], widths):
+        _place(evaluation, save, "", aliases)
     return Fit(
         epochs=epochs,
-        evaluation=replace(
-            _pass(experiment, evaluation_rows, addresses, engine.tokenizer),
-            saves=_spec_saves(step.eval.saves, spec, evaluation_rows["base"], widths),
-        ),
+        evaluation=Plan(steps=evaluation),
         objective=tuple((weight, term) for weight, term in step.objective),
         params=tuple(step.params),
         lr=step.optimizer.lr,
@@ -611,10 +662,13 @@ def build(document: Document, data_root: str | Path, engine: Any) -> Plan:
     fit = _fit(document, data_root, rows, addresses, tokenizer)
     if fit is not None:
         steps["fit"] = fit
-    steps["observe"] = replace(
-        _pass(_Experiment.of_document(document), rows, addresses, tokenizer),
-        saves=metric_saves,
-    )
+    scored = _pass(_Experiment.of_document(document), rows, addresses, tokenizer)
+    for save in metric_saves:
+        scored[save.value] = replace(scored[save.value], saves=(*scored[save.value].saves, save))
+    for key, one in scored.items():
+        if key in steps or key == "weights":
+            raise PlanError(f"{key!r} names a model or a metric and a step of the plan; rename one")
+        steps[key] = one
     if featurizers:
         steps["weights"] = Weights(
             names=tuple(one.name for one in featurizers), saves=weight_saves
@@ -627,37 +681,70 @@ def _pass(
     rows: dict[str, list[rows_module.Row]],
     addresses: dict[str, Address],
     tokenizer: Any,
-) -> Observe:
-    """One execution of the document's forwards over one set of rows. A
-    training update, an eval pass and the scored run are all this step, over
-    different rows."""
-    batches = {role: _batch(tokenizer, role, experiment, table) for role, table in rows.items()}
-    forwards = tuple(
-        _forward(name, role, experiment, batches[role], addresses, rows[role])
-        for name, role in _schedule(experiment)
-    )
+    prefix: str = "",
+    published: dict[str, str] | None = None,
+) -> dict[str, Step]:
+    """The document's forwards and metrics over one set of rows, as the
+    steps that run them, by name: each forward under its model's, each metric
+    under its own. A training update, an evaluation and the scored run are
+    all these steps, over different rows.
+
+    `prefix` qualifies every name the experiment gives — its models, reads,
+    writes and metrics — and `published` names the value each earlier
+    output is, for a write that takes one."""
+    batches = {role: _batch(tokenizer, f"role {role!r}", experiment.fields[role], table) for role, table in rows.items()}
+    sites = (addresses, experiment.features, experiment.widths)
+    decode = experiment.decode
+
+    def operand(write: Any) -> Any:
+        one = _operand(write)
+        if not isinstance(one, str):
+            return one
+        return prefix + one if one in experiment.reads else (published or {}).get(one, one)
+
+    def forward(name: str, role: str) -> Forward:
+        model = experiment.models.get(name)
+        return _forward(
+            role,
+            experiment.fields[role],
+            writes=[(prefix + one, experiment.writes[one], operand(experiment.writes[one])) for one in (model.writes if model else ())],
+            reads=[(prefix + one, spec) for one, spec in experiment.reads.items() if (spec.model, spec.input) == (name, role)],
+            batch=batches[role],
+            rows=rows[role],
+            sites=sites,
+            decode=decode,
+            # greedy, with EOS held off so the bound is the length (FINDINGS §12.4)
+            generation={"min_new_tokens": decode, "do_sample": False} if decode else None,
+        )
+
+    order = _schedule(experiment)
+    # a forward is its model's; a model run over both roles is one per role
+    twice = {name for name, _ in order if sum(1 for one, _ in order if one == name) > 1}
+    steps: dict[str, Step] = {
+        prefix + (f"{name}.{role}" if name in twice else name): forward(name, role) for name, role in order
+    }
+    forwards = tuple(one for one in steps.values() if isinstance(one, Forward))
     _check_patterns(forwards)
     base_rows = rows["base"]  # base is the schema of the pair: metrics read its columns
-    metrics = tuple(
-        _metric(name, spec, base_rows, tokenizer) for name, spec in experiment.metrics.items()
-    )
-    return Observe(forwards=forwards, metrics=metrics)
+    for name, spec in experiment.metrics.items():
+        if prefix + name in steps:
+            raise PlanError(f"metric {name!r} shares its name with a model; rename one")
+        steps[prefix + name] = _metric(name, spec.kind, spec, base_rows, tokenizer, prefix + spec.of, forwards)
+    return steps
 
 
-def _batch(
-    tokenizer: Any, role: str, experiment: _Experiment, table: list[rows_module.Row]
-) -> tuple[TokenRows, TokenRows, str, tuple[dict[str, tuple[int, int]], ...]]:
-    """One role's padded batch, and the runs the frame located in it.
+def _batch(tokenizer: Any, what: str, field: str, table: list[rows_module.Row]) -> _Batch:
+    """One forward's padded batch, and the runs the frame located in it.
+    `what` is the forward as a refusal names it.
 
-    A role's field may hold a string or a conversation, and which it is, is
-    the row's to say — so a chat prompt costs the document nothing and the
+    A field may hold a string or a conversation, and which it is, is the
+    row's to say — so a chat prompt costs the document nothing and the
     dataset one column. What the template rendered has the family's opening
     token in it already, which is why it is encoded without another.
     """
-    field = experiment.fields[role]
     values = [rows_module.field_value(row, field) for row in table]
     texts = [
-        tokens.rendered(tokenizer, value, f"role {role!r} field {field!r}, row {row}")
+        tokens.rendered(tokenizer, value, f"{what} field {field!r}, row {row}")
         for row, value in enumerate(values)
     ]
     chat = any(not isinstance(value, str) for value in values)
@@ -666,21 +753,28 @@ def _batch(
     return ids, mask, sample, spans
 
 
-def _metric(name: str, spec: Any, base_rows: list[rows_module.Row], tokenizer: Any) -> MetricOp:
+def _metric(
+    name: str, kind: str, spec: Any, rows: list[rows_module.Row], tokenizer: Any, of: str, forwards: tuple[Forward, ...]
+) -> Metric:
     """One metric over one batch of rows, with the rows it cannot be computed
-    for taken out here, where the data is."""
-    keep = rows_module.eligible(base_rows, tuple(spec.columns))
+    for taken out here, where the data is. `of` is its read, as the plan
+    names it, and one of `forwards` reads it."""
+    keep = rows_module.eligible(rows, tuple(spec.columns))
     if not any(keep):
         raise PlanError(
-            f"metric {name!r}: none of these {len(base_rows)} row(s) has a value in "
+            f"metric {name!r}: none of these {len(rows)} row(s) has a value in "
             f"{list(spec.columns)}; a metric of nothing has no mean"
         )
-    return MetricOp(
-        name=name,
-        kind=spec.kind,
-        of=spec.of,
-        ids=_ids(spec, base_rows, keep, tokenizer),
+    # A read comes back flat — one entry per row it found — when its form
+    # is ragged. For a read cut out of the continuation the spec says, since
+    # the cut happened over the decode steps and not at the tap.
+    op = next(op for one in forwards for tap in one.taps for op in tap.reads if of in (op.name, op.stack))
+    return Metric(
+        kind=kind,
+        of=of,
+        ids=_ids(spec, rows, keep, tokenizer),
         rows=None if all(keep) else tuple(index for index, one in enumerate(keep) if one),
+        flat=op.at.flat if not op.stack else op.at.where is not None and op.at.where.ragged,
     )
 
 
@@ -813,19 +907,14 @@ def _fit(
     order = random.Random(spec.seed)
     epochs = tuple(
         tuple(
-            _pass(
-                _Experiment.of_document(document),
-                _take(rows, draw[start : start + spec.pairs]),
-                addresses,
-                tokenizer,
-            )
+            Plan(steps=_pass(_Experiment.of_document(document), _take(rows, draw[start : start + spec.pairs]), addresses, tokenizer))
             for start in range(0, count, spec.pairs)
         )
         for draw in (order.sample(range(count), count) for _ in range(spec.epochs))
     )
     return Fit(
         epochs=epochs,
-        evaluation=_pass(_Experiment.of_document(document), evaluation, addresses, tokenizer),
+        evaluation=Plan(steps=_pass(_Experiment.of_document(document), evaluation, addresses, tokenizer)),
         objective=spec.objective,
         params=spec.params,
         lr=spec.lr,
@@ -983,17 +1072,18 @@ def _stacks(pos: Where) -> bool:
     return pos.frame == "generated" and not (pos.index is not None and pos.index >= 0)
 
 
-def _fits(name: str, site: str, experiment: _Experiment, rows: int) -> None:
+def _fits(name: str, site: str, sites: _Sites, decode: int, rows: int) -> None:
     """What a stacked read will hold, before anything holds it."""
-    groups, take = experiment.features.get(site) or (None, None)
-    wide = experiment.widths.get(site, 0)
+    _, features, widths = sites
+    groups, take = features.get(site) or (None, None)
+    wide = widths.get(site, 0)
     if take is not None and groups:
         wide = len(take) * (wide // groups)
-    held = experiment.decode * rows * wide * 4
+    held = decode * rows * wide * 4
     if held > STACK_LIMIT:
         raise PlanError(
             f"read {name!r} keeps every decode step to cut against the continuation: "
-            f"{experiment.decode} steps x {rows} rows x {wide} wide is {held / 2**20:.0f} MiB, "
+            f"{decode} steps x {rows} rows x {wide} wide is {held / 2**20:.0f} MiB, "
             f"over the {STACK_LIMIT / 2**20:.0f} MiB a read may hold. The count is this pass's "
             "rows, whatever --batch-size the run uses: name the step ({'frame': 'generated', "
             "'index': k}), decode fewer tokens, or score fewer rows in one pass"
@@ -1001,53 +1091,60 @@ def _fits(name: str, site: str, experiment: _Experiment, rows: int) -> None:
 
 
 def _forward(
-    name: str,
     role: str,
-    experiment: _Experiment,
-    batch: tuple[TokenRows, TokenRows, str, tuple[dict[str, tuple[int, int]], ...]],
-    addresses: dict[str, Address],
+    field: str,
+    writes: list[tuple[str, Any, Any]],
+    reads: list[tuple[str, Any]],
+    batch: _Batch,
     rows: list[rows_module.Row],
+    sites: _Sites,
+    decode: int = 0,
+    generation: dict[str, Any] | None = None,
 ) -> Forward:
-    """One model pass: its taps, grouped by address and put in forward order.
+    """One model call over the rows `role` names: the writes in force, in the
+    order they apply, as `(op name, spec, operand)` with the operand as the
+    plan names its value, and the reads taken, as `(op name, spec)` —
+    grouped into taps by address and put in forward order. With `decode`, a
+    `Generate`.
+
+    Every front end hands a model call over in this one shape, so how a
+    format says which writes a call has is its own business and nothing
+    below here can tell the formats apart.
 
     Nothing here resolves a position. What it does compile is the *anchor*: a
     text-anchored spec names a variable, and which text that is on this row
     is a fact about the dataset, which only the client has.
     """
+    addresses, features, _ = sites
 
     def anchors(pos: Where) -> tuple[str, ...]:
         if pos.scope is None or pos.scope.variable is None:
             return ()
-        field = experiment.fields[role]
         return tuple(rows_module.variable_text(row, field, pos.scope.variable) for row in rows)
 
-    # a tap is one place: an address, and — when the forward decodes — a step
-    writes: dict[tuple[Address, Any], list[WriteOp]] = {}
-    if name in experiment.models:
-        for write_name in experiment.models[name].writes:
-            spec = experiment.writes[write_name]
-            # which decode step the tap acts at: none in the prompt frame,
-            # every one of them for a steering write, else the step it names
-            step = None if spec.pos.frame == "prompt" else ("all" if spec.pos.all else spec.pos.index)
-            writes.setdefault((addresses[spec.site], step), []).append(
-                WriteOp(
-                    name=write_name,
-                    at=_selection(spec.pos, anchors(spec.pos), experiment.features.get(spec.site)),
-                    operand=_operand(spec),
-                    mechanism=spec.mechanism,
-                    featurizer=spec.featurizer,
-                    params=dict(getattr(spec, "params", {})),
-                    features=None if getattr(spec, "features", None) is None else tuple(spec.features),
-                )
+    # a tap is one place: an address, and — when the call decodes — a step
+    written: dict[tuple[Address, Any], list[WriteOp]] = {}
+    for write_name, spec, operand in writes:
+        # which decode step the tap acts at: none in the prompt frame,
+        # every one of them for a steering write, else the step it names
+        step = None if spec.pos.frame == "prompt" else ("all" if spec.pos.all else spec.pos.index)
+        written.setdefault((addresses[spec.site], step), []).append(
+            WriteOp(
+                name=write_name,
+                at=_selection(spec.pos, anchors(spec.pos), features.get(spec.site)),
+                operand=operand,
+                mechanism=spec.mechanism,
+                featurizer=spec.featurizer,
+                params=dict(getattr(spec, "params", {})),
+                features=None if getattr(spec, "features", None) is None else tuple(spec.features),
             )
-    reads: dict[tuple[Address, Any], list[ReadOp]] = {}
-    for read_name, spec in experiment.reads.items():
-        if (spec.model, spec.input) != (name, role):
-            continue
-        at = _selection(spec.pos, anchors(spec.pos), experiment.features.get(spec.site))
+        )
+    read: dict[tuple[Address, Any], list[ReadOp]] = {}
+    for read_name, spec in reads:
+        at = _selection(spec.pos, anchors(spec.pos), features.get(spec.site))
         if not _stacks(spec.pos):
             step = None if spec.pos.frame == "prompt" else ("all" if spec.pos.all else spec.pos.index)
-            reads.setdefault((addresses[spec.site], step), []).append(
+            read.setdefault((addresses[spec.site], step), []).append(
                 ReadOp(
                     name=read_name,
                     at=at,
@@ -1057,9 +1154,9 @@ def _forward(
             )
             continue
         # one ordinary read per decode step, which the run stacks and cuts
-        _fits(read_name, spec.site, experiment, len(batch[0]))
-        for step in range(experiment.decode):
-            reads.setdefault((addresses[spec.site], step), []).append(
+        _fits(read_name, spec.site, sites, decode, len(batch[0]))
+        for step in range(decode):
+            read.setdefault((addresses[spec.site], step), []).append(
                 ReadOp(
                     name=f"{read_name}@{step}",
                     at=at,
@@ -1075,25 +1172,26 @@ def _forward(
         address, step = place
         return (0 if step is None else 1, -1 if step == "all" else (step if step is not None else -1), address.key)
 
-    for place in sorted(set(writes) | set(reads), key=order):
+    for place in sorted(set(written) | set(read), key=order):
         taps.append(
             Tap(
                 address=place[0],
                 # A read in model M sees M's writes applied, upstream and at the
                 # same address — so at one address the writes go first.
-                writes=tuple(writes.get(place, ())),
-                reads=tuple(reads.get(place, ())),
+                writes=tuple(written.get(place, ())),
+                reads=tuple(read.get(place, ())),
                 step=place[1],
             )
         )
-    return Forward(
-        name=name,
+    forward = Forward(
         input=role,
         input_ids=batch[0],
         attention_mask=batch[1],
         sample=batch[2],
         segments=batch[3],
         taps=tuple(taps),
-        decode=experiment.decode,
     )
+    if not decode:
+        return forward
+    return Generate(**vars(forward), max_new_tokens=decode, generation=dict(generation or {}))
 

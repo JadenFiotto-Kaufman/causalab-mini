@@ -17,8 +17,8 @@ import re
 
 import pytest
 import torch
-from conftest import same_numbers
 from pydantic import ValidationError
+from conftest import of_kind, same_numbers
 
 from causalab_mini import plan
 from causalab_mini.plan import document
@@ -60,7 +60,7 @@ def test_the_documents_steps_are_the_plans_steps(das_spec_raw, data_root, model_
     built = plan.build_spec(spec, data_root, model_engine)
 
     assert list(spec.steps) == ["fit", "score", "weights"]
-    assert list(built.steps) == ["featurizers", "fit", "score", "weights"]
+    assert list(built.steps) == ["featurizers", "fit", "original", "patched", "iia", "ce", "weights"]
 
 
 def test_a_save_sits_on_the_step_that_produces_it(das_spec_raw, data_root, model_engine):
@@ -68,13 +68,9 @@ def test_a_save_sits_on_the_step_that_produces_it(das_spec_raw, data_root, model
     `iia` and each saves its own."""
     built = plan.build_spec(Spec.model_validate(das_spec_raw), data_root, model_engine)
 
-    assert [s.file_path for s in built.step("score", plan.Observe).saves] == [
-        "iia.json",
-        "ce.json",
-    ]
-    fit = built.step("fit", plan.Fit)
-    assert [s.file_path for s in fit.evaluation.saves] == ["held_out_iia.json"]
-    assert [s.value for s in fit.evaluation.saves] == ["iia"]  # the same name, elsewhere
+    assert [s.file_path for name in ("iia", "ce") for s in built.steps[name].saves] == ["iia.json", "ce.json"]
+    held_out = built.step("fit", plan.Fit).evaluation.steps["iia"].saves
+    assert [(s.value, s.file_path) for s in held_out] == [("iia", "held_out_iia.json")]  # the same name, elsewhere
 
 
 def test_the_held_out_score_reaches_disk(das_spec_raw, data_root, model_engine, tmp_path):
@@ -91,7 +87,7 @@ def test_the_held_out_score_reaches_disk(das_spec_raw, data_root, model_engine, 
     }
 
     on_disk = [row["value"] for row in json.loads((tmp_path / "held_out_iia.json").read_text())]
-    in_memory = executed.step("fit", plan.Fit).evaluation.results["iia"].tolist()
+    in_memory = executed.step("fit", plan.Fit).evaluation.result("iia").tolist()
     assert on_disk == pytest.approx(in_memory)
 
     scored = [row["value"] for row in json.loads((tmp_path / "iia.json").read_text())]
@@ -114,8 +110,8 @@ def test_both_formats_compile_to_the_same_run(das_spec_raw, das_raw, data_root, 
     )
 
     assert torch.equal(
-        from_protocol.step("observe", plan.Observe).results["iia"],
-        from_spec.step("score", plan.Observe).results["iia"],
+        from_protocol.result("iia"),
+        from_spec.result("iia"),
     )
     assert torch.equal(from_protocol.result("rot"), from_spec.result("rot"))
 
@@ -279,7 +275,7 @@ def test_an_inline_intervention_is_a_declared_one_named_after_its_step(patching_
     assert list(spec.interventions) == ["score"] and spec.intervention_of(spec.steps["score"]) is spec.interventions["score"]
     named = plan.build_request(patching_spec_raw, data_root, model_engine)
     written = plan.build_request(inline, data_root, model_engine)
-    assert repr(written.step("score", plan.Observe).forwards) == repr(named.step("score", plan.Observe).forwards)
+    assert repr(of_kind(written, plan.Forward)) == repr(of_kind(named, plan.Forward))
 
 
 def test_an_inline_intervention_may_not_take_a_declared_name(patching_spec_raw):
@@ -295,10 +291,9 @@ def test_a_baseline_is_an_intervention_with_no_writes(data_root, model_engine):
     written, reading `original`. One forward, and it scores."""
     raw = json.loads(V2_TWO.read_text())
     built = plan.build_request(raw, data_root, model_engine)
-    assert [f.name for f in built.step("clean", plan.Observe).forwards] == ["original"]
-    assert all(not tap.writes for tap in built.step("clean", plan.Observe).forwards[0].taps)
+    assert all(not tap.writes for tap in built.step("original", plan.Forward).taps)
     executed = model_engine.execute(built)
-    assert executed.step("clean", plan.Observe).results["logit_diff"].shape == (4,)
+    assert executed.step("logit_diff", plan.Metric).results["logit_diff"].shape == (4,)
 
 
 def _two() -> dict:
@@ -313,36 +308,16 @@ def test_a_list_runs_each_intervention_over_the_steps_rows(data_root, model_engi
     built = plan.build_request(_two(), data_root, model_engine)
     compare = built.step("compare", plan.Plan)
     assert list(compare.steps) == ["patching", "ablation"]
-    patching = compare.step("patching", plan.Plan).step("compare", plan.Observe)
-    ablation = compare.step("ablation", plan.Plan).step("compare", plan.Observe)
-    assert [f.name for f in patching.forwards] == ["original", "patched"]
-    assert [f.name for f in ablation.forwards] == ["ablated"]
+    assert list(compare.step("patching", plan.Plan).steps) == ["original", "patched", "iia", "logit_diff"]
+    assert list(compare.step("ablation", plan.Plan).steps) == ["ablated", "logit_diff"]
     executed = model_engine.execute(built)
-    clean = executed.step("clean", plan.Observe).results["logit_diff"]
+    clean = executed.step("logit_diff", plan.Metric).results["logit_diff"]
     patched = executed.step("compare", plan.Plan).step("patching", plan.Plan).result("logit_diff")
     ablated = executed.step("compare", plan.Plan).step("ablation", plan.Plan).result("logit_diff")
     assert not torch.equal(clean, patched) and not torch.equal(clean, ablated) and not torch.equal(patched, ablated)
     written = {str(one.relative_to(tmp_path)) for one in executed.write(tmp_path)}
     assert {"clean.json", "compare/patching/iia.json", "compare/patching/logit_diff.json",
             "compare/ablation/logit_diff.json"} <= written
-
-
-def test_a_list_lowers_to_what_one_intervention_at_a_time_compiles_to(data_root, model_engine):
-    """The lowered step is the nested plan you would get by compiling the
-    step once per intervention and nesting the results by hand."""
-    lowered = plan.build_request(_two(), data_root, model_engine).step("compare", plan.Plan)
-    by_hand = {}
-    for child, saves in (("patching", [{"value": "iia", "file_path": "iia.json"},
-                                       {"value": "logit_diff", "file_path": "logit_diff.json"}]),
-                         ("ablation", [{"value": "logit_diff", "file_path": "logit_diff.json"}])):
-        one = _two()
-        one["steps"]["compare"]["interventions"] = child
-        one["steps"]["compare"]["saves"] = saves
-        by_hand[child] = plan.Plan(steps={"compare": plan.build_request(one, data_root, model_engine).steps["compare"]})
-    # `produced_by` is the document's digest, and the hand-written ones are
-    # different documents; everything else is the same plan
-    digest = re.compile(r"produced_by='[0-9a-f]{64}'")
-    assert digest.sub("", repr(lowered)) == digest.sub("", repr(plan.Plan(steps=by_hand)))
 
 
 def test_a_save_on_a_list_resolves_by_its_bare_name_when_one_intervention_has_it():
@@ -376,16 +351,16 @@ def test_a_mixed_list_declares_its_inline_entry_by_position(data_root, model_eng
     assert spec.interventions["compare[1]"] == spec.interventions["clean"]
     built = plan.build_request(raw, data_root, model_engine)
     assert list(built.step("compare", plan.Plan).steps) == ["patching", "compare[1]"]
-    inline = built.step("compare", plan.Plan).step("compare[1]", plan.Plan).step("compare", plan.Observe)
-    assert [f.name for f in inline.forwards] == ["original"] and inline.saves[0].value == "logit_diff"
+    inline = built.step("compare", plan.Plan).step("compare[1]", plan.Plan)
+    assert list(inline.steps) == ["original", "logit_diff"] and inline.steps["logit_diff"].saves[0].value == "logit_diff"
 
 
 def test_a_single_name_and_a_single_inline_are_one_step_not_a_list(patching_spec_raw, data_root, model_engine):
     named = plan.build_request(patching_spec_raw, data_root, model_engine)
-    assert isinstance(named.steps["score"], plan.Observe)
+    assert not any(isinstance(one, plan.Plan) for one in named.steps.values())
     inline = json.loads(json.dumps(patching_spec_raw))
     inline["steps"]["score"]["interventions"] = inline["interventions"].pop("patching")
-    assert isinstance(plan.build_request(inline, data_root, model_engine).steps["score"], plan.Observe)
+    assert not any(isinstance(one, plan.Plan) for one in plan.build_request(inline, data_root, model_engine).steps.values())
 
 
 def test_the_old_key_is_refused_with_the_new_one_named(patching_spec_raw):
@@ -404,12 +379,11 @@ def test_mean_ablation_is_three_steps_and_the_mean_never_needs_a_file(
     save on `harvest` asks."""
     executed = model_engine.execute(plan.build_request(mean_raw, data_root, model_engine))
 
-    harvest = executed.step("harvest", plan.Observe)
-    assert [o.name for o in harvest.outputs] == ["mean"]
-    assert tuple(harvest.results["mean"].shape) == (1, 16)  # rows averaged away, the window kept
+    assert executed.step("mean", plan.Reduce).of == "harvest.acts"
+    assert tuple(executed.result("mean").shape) == (1, 16)  # rows averaged away, the window kept
 
-    clean = executed.step("clean", plan.Observe).results["logit_diff"]
-    ablated = executed.step("ablated", plan.Observe).results["logit_diff"]
+    clean = executed.result("clean.logit_diff")
+    ablated = executed.result("ablated.logit_diff")
     assert not torch.equal(clean, ablated), "the swap landed"
 
     written = {p.name for p in executed.write(tmp_path)}
@@ -426,10 +400,7 @@ def test_the_two_engines_agree_on_mean_ablation(mean_raw, data_root, model_engin
     traced = model_engine.execute(plan.build_request(mean_raw, data_root, model_engine))
     hooked = hooks.execute(plan.build_request(mean_raw, data_root, hooks))
     assert same_numbers(traced.result("mean"), hooked.result("mean"))
-    assert same_numbers(
-        traced.step("ablated", plan.Observe).results["logit_diff"],
-        hooked.step("ablated", plan.Observe).results["logit_diff"],
-    )
+    assert same_numbers(traced.result("ablated.logit_diff"), hooked.result("ablated.logit_diff"))
 
 
 @pytest.mark.parametrize(

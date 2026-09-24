@@ -10,8 +10,8 @@ import pathlib
 
 import pytest
 import torch
-from conftest import same_numbers
 from pydantic import ValidationError
+from conftest import same_numbers
 
 from causalab_mini import ops, plan
 from causalab_mini.engine.engines.hooks import HooksEngine
@@ -70,10 +70,10 @@ def test_an_operand_is_a_name_a_number_or_nothing():
 
 def test_zero_ablation_runs_and_moves_the_logits(zero_raw, data_root, model_engine):
     executed = model_engine.execute(plan.build_request(zero_raw, data_root, model_engine))
-    clean = executed.step("clean", plan.Observe).results["logit_diff"]
-    zeroed = executed.step("zeroed", plan.Observe).results["logit_diff"]
+    clean = executed.result("clean.logit_diff")
+    zeroed = executed.result("zeroed.logit_diff")
     assert not torch.equal(clean, zeroed)
-    p = executed.step("zeroed", plan.Observe).results["p_answer"]
+    p = executed.result("zeroed.p_answer")
     assert ((p > 0) & (p < 1)).all()
 
 
@@ -83,8 +83,8 @@ def test_the_two_engines_agree_on_zero_ablation(zero_raw, data_root, model_engin
     hooked = hooks.execute(plan.build_request(zero_raw, data_root, hooks))
     for name in ("logit_diff", "p_answer"):
         assert same_numbers(
-            traced.step("zeroed", plan.Observe).results[name],
-            hooked.step("zeroed", plan.Observe).results[name],
+            traced.result(f"zeroed.{name}"),
+            hooked.result(f"zeroed.{name}"),
         ), name
 
 
@@ -92,9 +92,8 @@ def test_a_literal_operand_orders_no_forward(zero_raw, data_root, model_engine):
     """A write whose operand is a number depends on no read, so its model is
     scheduled like an un-intervened one: one forward, no source pass."""
     built = plan.build_request(zero_raw, data_root, model_engine)
-    forwards = built.step("zeroed", plan.Observe).forwards
-    assert [f.name for f in forwards] == ["zeroed"]
-    write = forwards[0].taps[0].writes[0]
+    zeroed = built.step("zeroed.zeroed", plan.Forward)
+    write = zeroed.taps[0].writes[0]
     assert write.operand == 0.0 and write.mechanism == "swap"
 
 
@@ -172,8 +171,8 @@ def test_clamping_to_zero_is_zero_ablation(zero_raw, data_root, model_engine):
     clamped = model_engine.execute(plan.build_request(zero_raw, data_root, model_engine))
     for name in ("logit_diff", "p_answer"):
         assert torch.equal(
-            zeroed.step("zeroed", plan.Observe).results[name],
-            clamped.step("zeroed", plan.Observe).results[name],
+            zeroed.result(f"zeroed.{name}"),
+            clamped.result(f"zeroed.{name}"),
         ), name
 
 
@@ -185,12 +184,12 @@ def test_steering_then_renormalizing_on_the_model(engine_name, data_root, model_
     answer differently."""
     raw = json.loads(STEER.read_text())
     engine = model_engine if engine_name == "nnterp" else HooksEngine.load(Spec.model_validate(raw).model, device_map="cpu")
-    results = engine.execute(plan.build_request(raw, data_root, engine)).step("steer", plan.Observe).results
+    result = engine.execute(plan.build_request(raw, data_root, engine)).result
 
-    before, after, raw_after = (results[name].norm(dim=-1) for name in ("norm_before", "norm_after", "norm_steered"))
+    before, after, raw_after = (result(name).norm(dim=-1) for name in ("steer.before", "steer.after", "steer.after_raw"))
     assert torch.allclose(after, before, rtol=1e-5)
     assert (raw_after > before).all()
-    assert not torch.equal(results["logit_diff"], results["logit_diff_raw"])
+    assert not torch.equal(result("steer.logit_diff"), result("steer.logit_diff_raw"))
 
 
 @pytest.mark.parametrize(
