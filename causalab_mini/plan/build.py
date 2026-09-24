@@ -676,9 +676,6 @@ def _metric(
             f"metric {name!r}: none of these {len(rows)} row(s) has a value in "
             f"{list(spec.columns)}; a metric of nothing has no mean"
         )
-    # A read comes back flat — one entry per row it found — when its form
-    # is ragged. For a read cut out of the continuation the spec says, since
-    # the cut happened over the decode steps and not at the tap.
     ops = [(tap.address, op) for one in forwards for tap in one.taps for op in tap.reads if of in (op.name, op.stack, op.layered)]
     op = ops[0][1]
     return Metric(
@@ -686,7 +683,7 @@ def _metric(
         of=of,
         ids=_ids(spec, rows, keep, tokenizer),
         rows=None if all(keep) else tuple(index for index, one in enumerate(keep) if one),
-        flat=op.at.flat if not op.stack else op.at.where is not None and op.at.where.ragged,
+        flat=op.flat,
         layers=tuple(address.layer for address, one in ops if one.layered and address.layer is not None),
     )
 

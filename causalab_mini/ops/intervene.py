@@ -145,17 +145,16 @@ def at_step(at: Selection, tensor: Any, seq_axis: int, frame: int | str | None, 
     return at
 
 
-def rows(tensor: Any, positions: Positions | None, start: int, stop: int) -> Any:
-    """Rows `start:stop` of a gathered value. A rectangle is sliced; a ragged
-    value is flat, so its rows are wherever their windows' lengths put them.
-    `positions` None is a value with no row axis — a mean, a basis — which
-    every window of rows shares whole."""
-    if positions is None:
-        return tensor
-    if is_ragged(positions):
-        before = sum(len(window) for window in positions[:start])
-        return tensor[before : before + sum(len(window) for window in positions[start:stop])]
-    return tensor[start:stop]
+def rows(tensor: Any, flat: Positions | None, start: int, stop: int) -> Any:
+    """Rows `start:stop` of a value that has rows. A rectangle — `flat`
+    None — is sliced. A value gathered flat is one entry per position found,
+    so its rows are wherever `flat`, their windows, put them — and that is so
+    whether or not the windows happen to be one width: a text anchor three
+    tokens long on every row is still flat, three entries a row."""
+    if flat is None:
+        return tensor[start:stop]
+    before = sum(len(window) for window in flat[:start])
+    return tensor[before : before + sum(len(window) for window in flat[start:stop])]
 
 
 def resolve_operand(values: dict[str, Any], operand: Any) -> Any:

@@ -56,9 +56,11 @@ class State:
     featurizers: dict[str, Any] = field(default_factory=dict)
     #: Every value the steps so far produced, by name.
     values: dict[str, Any] = field(default_factory=dict)
-    #: For a value that still has its rows: the window each row got, which
-    #: says where each row is in it. Absent for one with no row axis.
-    layout: dict[str, Any] = field(default_factory=dict)
+    #: For a value that still has its rows, whether it came back flat — one
+    #: entry per position found, where its record's windows say — or as a
+    #: rectangle, a row per row. Absent for a value with no row axis: a mean,
+    #: a basis, a metric, a read stacked over every layer.
+    flat: dict[str, bool] = field(default_factory=dict)
     #: Where each op acted, per row — the whole of a run's `Record`.
     records: Record = field(default_factory=dict)
     #: The ops whose record comes home: those of a step with a position the
@@ -78,17 +80,27 @@ class State:
         return State(
             featurizers=self.featurizers,
             values=dict(self.values),
-            layout=dict(self.layout),
+            flat=dict(self.flat),
             records=dict(self.records),
             reported=set(self.reported),
             batch_size=self.batch_size,
             attached=attached,
         )
 
-    def publish(self, name: str, value: Any, layout: Positions | None = None) -> None:
+    def publish(self, name: str, value: Any, flat: bool | None = None) -> None:
+        """Keep a value for the steps after this one; `flat` as the field
+        says, None for a value with no rows."""
         self.values[name] = value if self.attached else value.detach()
-        if layout is not None:
-            self.layout[name] = layout
+        if flat is not None:
+            self.flat[name] = flat
+
+    def window(self, name: str, start: int, stop: int) -> Any:
+        """Rows `start:stop` of a value, as a window of rows needs it: sliced
+        by its own form, or whole if it has no rows to slice."""
+        value = self.values[name]
+        if name not in self.flat:
+            return value
+        return intervene.rows(value, self.records[name]["rows"] if self.flat[name] else None, start, stop)
 
 
 def run(engine: Any, step: Step, state: State | None = None, batch_size: int | None = None, name: str = "") -> None:
@@ -162,7 +174,7 @@ def call(engine: Any, name: str, step: Forward, state: State) -> None:
     windows: list[Record] = []
     for start in range(0, rows, size):
         stop = min(start + size, rows)
-        values = {one: intervene.rows(state.values[one], state.layout.get(one), start, stop) for one in operands}
+        values = {one: state.window(one, start, stop) for one in operands}
         ready, found = located(engine, plan_module.window(step, start, stop), start, dynamic)
         # the operands' own windows over these rows, for the checks at the write
         taken = {one: {key: part[start:stop] for key, part in state.records[one].items()} for one in operands if one in state.records}
@@ -191,12 +203,11 @@ def call(engine: Any, name: str, step: Forward, state: State) -> None:
         for part in parts:
             del record[part]
     state.records.update(record)
+    # a read has its own form; a call's own result is a rectangle; a read at
+    # every layer has the layers first, and no rows a later window could take
+    forms = {op.stack or op.name: op.flat for tap in step.taps for op in tap.reads if not op.layered}
     for one, whole in made.items():
-        # a read has its rows where its record says; a call's own result is a
-        # rectangle; a read at every layer has the layers first, and no rows
-        # a later step's windows could take
-        layout = None if one in layered else record[one]["rows"] if one in record else ((0,),) * rows
-        state.publish(one, whole, layout)
+        state.publish(one, whole, forms.get(one, False if one == name else None))
     if isinstance(step, Generate) or step.logits:
         step.results[name] = state.values[name].detach().cpu()
     step.results.update({one: state.values[one].detach().cpu() for one in step.keep})

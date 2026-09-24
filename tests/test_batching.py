@@ -74,17 +74,18 @@ def test_a_window_of_a_forward_is_the_same_taps_over_fewer_rows(data_root, model
     assert plan.window(forward, 0, len(forward.input_ids)) == forward
 
 
-def test_rows_of_a_value_follow_its_layout():
+def test_rows_of_a_value_follow_its_form():
     rectangle = torch.arange(24.0).reshape(4, 2, 3)
-    assert torch.equal(intervene.rows(rectangle, ((0, 1),) * 4, 1, 3), rectangle[1:3])
+    assert torch.equal(intervene.rows(rectangle, None, 1, 3), rectangle[1:3])
 
     ragged = ((0, 1), (), (2,), (0, 1, 2))  # 2 + 0 + 1 + 3 positions, flat
     flat = torch.arange(18.0).reshape(6, 3)
     assert torch.equal(intervene.rows(flat, ragged, 1, 3), flat[2:3])
     assert torch.equal(intervene.rows(flat, ragged, 3, 4), flat[3:6])
 
-    mean = torch.ones(3)
-    assert intervene.rows(mean, None, 1, 3) is mean, "a value with no rows is shared whole"
+    # flat and one width on every row is still flat: three entries a row
+    even = ((4, 5, 6),) * 4
+    assert torch.equal(intervene.rows(torch.arange(36.0).reshape(12, 3), even, 1, 2), torch.arange(9.0, 18.0).reshape(3, 3))
 
 
 # --------------------------------------------------------------------- #
@@ -154,6 +155,70 @@ def test_a_per_row_value_reaches_the_window_of_its_own_rows(data_root, model_eng
     whole = model_engine.execute(plan.build_request(raw, data_root, model_engine))
     one_by_one = model_engine.execute(plan.build_request(raw, data_root, model_engine), batch_size=1)
     assert _agree(whole.result("logit_diff"), one_by_one.result("logit_diff"))
+
+
+def _even(read, write=None, rows="weekdays_even/train"):
+    """An interchange over rows whose entities are all three tokens long: an
+    anchored read there is flat, and one width on every row."""
+    raw = _point("patching.json")
+    raw["data"]["pairs"]["path"] = rows
+    raw["steps"]["counterfactual"]["reads"]["v_cf"]["pos"] = read
+    raw["steps"]["patched"]["interventions"]["writes"]["patch"]["pos"] = write or read
+    return raw
+
+
+ENTITY = {"all": True, "scope": {"variable": "entity"}}
+
+
+@pytest.mark.parametrize("batch_size", [None, 1, 2, 4])
+def test_a_flat_value_of_one_width_is_still_flat(batch_size, data_root, model_engine):
+    """A text anchor three tokens long on every row comes back flat — three
+    entries a row — though its windows happen to be one width, and a later
+    step's windows take three entries a row of it. The same patch spelled as
+    the rectangle those windows are, `{"span": [3, 6]}`, is the check, to the
+    bit, windowed alike."""
+    anchored = model_engine.execute(plan.build_request(_even(ENTITY), data_root, model_engine), batch_size=batch_size)
+    rectangle = model_engine.execute(plan.build_request(_even({"span": [3, 6]}), data_root, model_engine), batch_size=batch_size)
+    assert anchored.step("counterfactual", plan.Forward).results["positions"]["counterfactual.v_cf"]["rows"] == ((4, 5, 6),) * 6
+    assert torch.equal(anchored.result("logit_diff"), rectangle.result("logit_diff"))
+
+
+def test_a_one_row_minibatch_takes_its_flat_operand_whole(data_root, model_engine):
+    """A fit of one row per update: every update's steps are one row, and a
+    flat operand of one width is three entries of it, not one. The rotation
+    it trains is the rectangle's, to the bit."""
+    def fitted(read):
+        raw = _point("das.json")
+        raw["data"] = {"train": {"path": "weekdays_even/train"}}
+        raw["interventions"]["cf_read"]["reads"]["v_cf"]["pos"] = read
+        raw["interventions"]["das"]["writes"]["patch"]["pos"] = read
+        raw["steps"]["fit"].update(batch_size=1, epochs=2, eval={"data": {"train": "train"}})
+        for name in ("iia", "ce"):
+            for column in ("a", "b", "target"):
+                for one in (raw["steps"][name], raw["steps"]["fit"]["steps"][name]):
+                    if column in one:
+                        one[column] = one[column].replace("test.", "train.")
+        return model_engine.execute(plan.build_request(raw, data_root, model_engine))
+
+    anchored, rectangle = fitted(ENTITY), fitted({"span": [3, 6]})
+    assert torch.equal(anchored.result("train/loss"), rectangle.result("train/loss"))
+    assert torch.equal(anchored.result("rot"), rectangle.result("rot"))
+
+
+def test_a_read_stacked_over_the_decode_is_flat_too(data_root, model_engine):
+    """A read of every decode step is cut out of the continuation: flat by
+    its form, and one width on every row because the decode runs to its
+    bound. Taken by a later step, it is the rectangle `{"span": [0, 3]}` of
+    the same steps, to the bit, whole and one row at a time."""
+    def run(read, write, batch_size):
+        raw = _even(read, write)
+        raw["steps"]["counterfactual"].update(kind="generate", max_new_tokens=3, min_new_tokens=3, do_sample=False)
+        return model_engine.execute(plan.build_request(raw, data_root, model_engine), batch_size=batch_size)
+
+    for batch_size in (None, 1):
+        stacked = run({"frame": "generated", "all": True}, ENTITY, batch_size).result("logit_diff")
+        rectangle = run({"frame": "generated", "span": [0, 3]}, {"span": [3, 6]}, batch_size).result("logit_diff")
+        assert torch.equal(stacked, rectangle), batch_size
 
 
 # --------------------------------------------------------------------- #

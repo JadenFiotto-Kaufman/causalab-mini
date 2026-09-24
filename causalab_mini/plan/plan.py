@@ -77,6 +77,16 @@ class ReadOp:
     #: the layers are stacked under — in layer order, the layer axis first.
     layered: str = ""
 
+    @property
+    def flat(self) -> bool:
+        """Whether the value this read makes comes back flat — one entry per
+        position found — rather than a row per row. A read cut out of the
+        continuation is cut after the decode, so its spec says; any other,
+        its selection."""
+        if self.stack:
+            return self.at.where is not None and self.at.where.ragged
+        return self.at.flat
+
 
 @dataclass(frozen=True)
 class WriteOp:
