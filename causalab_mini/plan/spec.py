@@ -45,9 +45,9 @@ import functools
 import hashlib
 import json
 import re
-from typing import Annotated, Any, Iterator, Literal, Union
+from typing import Annotated, Any, Iterator, Literal, NamedTuple, Union
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Discriminator, Field, StringConstraints, Tag, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Discriminator, Field, PrivateAttr, StringConstraints, Tag, model_validator
 
 from .. import address
 from ..ops.metrics import COLUMNS as METRIC_COLUMNS
@@ -331,11 +331,6 @@ class _Call(Node):
     #: Reads of this call that belong to no intervention.
     reads: dict[Name, Read] = Field(default_factory=dict)
 
-    @property
-    def decode(self) -> int:
-        """How many tokens the call generates, at most: 0 is one forward."""
-        return 0
-
 
 class Forward(_Call):
     kind: Literal["forward"]
@@ -377,10 +372,6 @@ class Generate(_Call):
     #: steps are numbered below it.
     max_new_tokens: int = Field(gt=0)
     __pydantic_extra__: dict[str, int | float | bool | str | list[int] | None]  # pyright: ignore[reportIncompatibleVariableOverride]
-
-    @property
-    def decode(self) -> int:
-        return self.max_new_tokens
 
     @property
     def generation(self) -> dict[str, Any]:
@@ -602,7 +593,10 @@ Fit.model_rebuild()
 #: every layer — `ids`, `logits`, `metric`, `mean`, `pca`, `fit`, `trained`), the node that says what it is (for a read, the
 #: `Read`; for a mean or a basis, the `Read` it reduced), and the scope it
 #: belongs to — `""` for the root, a fit's name for its body.
-Ref = tuple[str, Any, str]
+class Ref(NamedTuple):
+    kind: str
+    node: Any
+    scope: str
 
 #: A reference's kind, as a refusal says it.
 SAID = {
@@ -630,6 +624,8 @@ class Spec(Node):
     #: the ones it runs.
     interventions: dict[Name, Intervention] = Field(default_factory=dict)
     steps: Steps
+    #: each forward's ops, by the step's identity, once resolved (`ops`)
+    _ops: dict[int, tuple[dict[str, Read], dict[str, Write]]] = PrivateAttr(default_factory=dict)
 
     @property
     def digest(self) -> str:
@@ -661,7 +657,13 @@ class Spec(Node):
         """A forward's reads and the writes in force, each by name: its own
         reads, then each listed intervention's reads and writes, in the order
         the list gives. One name means one op of the step, so a name two of
-        them share is refused, naming both."""
+        them share is refused, naming both. Resolved once per step: the
+        checks and the compiler all ask."""
+        if id(step) not in self._ops:
+            self._ops[id(step)] = self._resolve(step)
+        return self._ops[id(step)]
+
+    def _resolve(self, step: Any) -> tuple[dict[str, Read], dict[str, Write]]:
         listed = step.interventions if isinstance(step.interventions, list) else [step.interventions]
         reads: dict[str, Read] = dict(step.reads)
         writes: dict[str, Write] = {}
@@ -774,12 +776,12 @@ class Spec(Node):
             )
             _refuse(file not in files, f"saves: {files.get(file)!r} and {ref!r} are both saved to {file!r}")
             files[file] = ref
-            table = found[0] == "metric"
+            table = found.kind == "metric"
             _refuse(
                 file.endswith(".json" if table else ".safetensors"),
                 f"saves: {ref!r} is " + (
                     "a metric, one row per example: a table, saved to a .json file"
-                    if table else f"{SAID[found[0]]}, a tensor: saved to a .safetensors file"
+                    if table else f"{SAID[found.kind]}, a tensor: saved to a .safetensors file"
                 ) + f", not {file!r}",
             )
         return self
@@ -805,7 +807,7 @@ def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, 
     fits = {ref for ref, (kind, _, _) in outer.items() if kind == "fit"} | ({fit} if fit else set())
 
     def publish(ref: str, kind: str, node: Any, scope: str = fit) -> None:
-        visible[ref] = produced[ref] = (kind, node, scope)
+        visible[ref] = produced[ref] = Ref(kind, node, scope)
 
     for name, step in steps.items():
         where = f"step {(f'{fit}.' if fit else '') + name!r}"
@@ -819,22 +821,22 @@ def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, 
         elif isinstance(step, (_Metric, Reduce)):
             found = visible.get(step.of)
             _refuse(
-                found is not None and found[0] in ("read", "layers") and found[2] == fit,
+                found is not None and found.kind in ("read", "layers") and found.scope == fit,
                 f"{where}: `of` is {step.of!r}, which is not a read of a step before it in this "
                 "`steps`; a metric or a reduce is of `<step>.<read>`",
             )
             assert found is not None
             _refuse(
-                isinstance(step, _Metric) or found[0] == "read",
+                isinstance(step, _Metric) or found.kind == "read",
                 f"{where}: {step.of!r} is read at every layer; a metric scores it layer by layer, "
                 "and a reduction of it is not implemented",
             )
             if isinstance(step, Reduce):
-                publish(name, step.reduce, found[1])
+                publish(name, step.reduce, found.node)
                 continue
             _refuse(
-                found[1].pos.width == 1,
-                f"{where} scores {step.of!r}, a window of {found[1].pos.width or 'varying'} "
+                found.node.pos.width == 1,
+                f"{where} scores {step.of!r}, a window of {found.node.pos.width or 'varying'} "
                 "positions; a metric scores one position per row",
             )
             datasets = {one.partition(".")[0] for one in step.references}
@@ -885,7 +887,8 @@ def _call(
             f"{where}: undeclared dataset {step.data!r}; declared: {sorted(spec.data)} — or "
             'write one in place, {"path": …}',
         )
-    decode = step.decode
+    # how many steps a continuation-frame position may name: none on a forward
+    bound = step.max_new_tokens if isinstance(step, Generate) else 0
 
     def site(what: str, ref: str | Site) -> Site:
         _refuse(
@@ -897,10 +900,10 @@ def _call(
     def frame(what: str, pos: Where) -> None:
         if pos.frame != "generated":
             return
-        _refuse(decode, f"{where}: {what}: a position in the continuation frame needs a generate step")
+        _refuse(bound, f"{where}: {what}: a position in the continuation frame needs a generate step")
         _refuse(
-            pos.index is None or pos.index < decode,
-            f"{where}: {what}: step {pos.index} of a {decode}-token decode",
+            pos.index is None or pos.index < bound,
+            f"{where}: {what}: step {pos.index} of a {bound}-token decode",
         )
 
     for read_name, read in reads.items():

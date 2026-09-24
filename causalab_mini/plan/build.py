@@ -72,8 +72,9 @@ def build_spec(spec: Spec, data_root: str | Path, engine: Any) -> Plan:
     names it. What this adds is what needs a model and rows: the addresses,
     the widths, the tokens, the row counts.
     """
-    reads = [read for _, step in spec.forwards() for read in spec.ops(step)[0].values()]
-    ops = reads + [write for _, step in spec.forwards() for write in spec.ops(step)[1].values()]
+    calls = [spec.ops(step) for _, step in spec.forwards()]
+    reads = [read for one, _ in calls for read in one.values()]
+    ops = reads + [write for _, one in calls for write in one.values()]
     sites = _resolve_sites(
         # every site the document names: declared, or written in place
         {**spec.sites, **dict(spec.site(op.site) for op in ops)},
@@ -100,7 +101,7 @@ def build_spec(spec: Spec, data_root: str | Path, engine: Any) -> Plan:
     scope: dict[str, Step] = {}
     for name, step in spec.steps.items():
         if step.kind != "fit":
-            scope[name] = _spec_step(spec, spec.steps, name, step, scope, table, sites, engine.tokenizer)
+            scope[name] = _spec_step(spec, name, step, scope, table, sites, engine.tokenizer)
             continue
         scope[name] = replace(
             _spec_fit(spec, name, step, table, sites, engine.tokenizer),
@@ -116,7 +117,6 @@ def build_spec(spec: Spec, data_root: str | Path, engine: Any) -> Plan:
 
 def _spec_step(
     spec: Spec,
-    steps: Any,
     name: str,
     step: Any,
     scope: dict[str, Step],
@@ -148,7 +148,7 @@ def _spec_step(
             batch=_batch(tokenizer, f"step {name!r}", step.field, rows),
             rows=rows,
             sites=sites,
-            decode=step.decode,
+            max_new_tokens=step.max_new_tokens if step.kind == "generate" else 0,
             generation=step.generation if step.kind == "generate" else None,
         )
     source = scope[step.of.partition(".")[0]]
@@ -256,7 +256,7 @@ def _spec_fit(spec: Spec, name: str, fit: Any, table: Any, sites: _Sites, tokeni
     def body(rows: Callable[[str], list[rows_module.Row]]) -> dict[str, Step]:
         scope: dict[str, Step] = {}
         for inner, step in fit.steps.items():
-            scope[inner] = _spec_step(spec, fit.steps, inner, step, scope, rows, sites, tokenizer)
+            scope[inner] = _spec_step(spec, inner, step, scope, rows, sites, tokenizer)
         _check_patterns(tuple(one for one in scope.values() if isinstance(one, Forward)))
         return scope
 
@@ -965,6 +965,12 @@ def _stacks(pos: Where) -> bool:
     return pos.frame == "generated" and not (pos.index is not None and pos.index >= 0)
 
 
+def _decode_step(pos: Where) -> int | str | None:
+    """Which decode step a tap acts at: none for the prompt frame, every one
+    of them for `{"all": true}` — a steering write — else the one it names."""
+    return None if pos.frame == "prompt" else ("all" if pos.all else pos.index)
+
+
 def _fits(name: str, site: str, sites: _Sites, decode: int, rows: int) -> None:
     """What a stacked read will hold, before anything holds it."""
     _, features, widths = sites
@@ -991,14 +997,14 @@ def _forward(
     batch: _Batch,
     rows: list[rows_module.Row],
     sites: _Sites,
-    decode: int = 0,
+    max_new_tokens: int = 0,
     generation: dict[str, Any] | None = None,
 ) -> Forward:
     """One model call over the rows `role` names — a steps-first dataset, or
     a protocol role: the writes in force, in the order they apply, as
     `(op name, spec, operand)` with the operand as the plan names its value,
     and the reads taken, as `(op name, spec)` — grouped into taps by address
-    and put in forward order. With `decode`, a `Generate`.
+    and put in forward order. With `max_new_tokens`, a `Generate`.
 
     Every front end hands a model call over in this one shape, so how a
     format says which writes a call has is its own business and nothing
@@ -1018,10 +1024,7 @@ def _forward(
     # a tap is one place: an address, and — when the call decodes — a step
     written: dict[tuple[Address, Any], list[WriteOp]] = {}
     for write_name, spec, operand in writes:
-        # which decode step the tap acts at: none in the prompt frame,
-        # every one of them for a steering write, else the step it names
-        step = None if spec.pos.frame == "prompt" else ("all" if spec.pos.all else spec.pos.index)
-        written.setdefault((addresses[spec.site], step), []).append(
+        written.setdefault((addresses[spec.site], _decode_step(spec.pos)), []).append(
             WriteOp(
                 name=write_name,
                 at=_selection(spec.pos, anchors(spec.pos), features.get(spec.site)),
@@ -1035,7 +1038,7 @@ def _forward(
     read: dict[tuple[Address, Any], list[ReadOp]] = {}
     for read_name, spec in reads:
         at = _selection(spec.pos, anchors(spec.pos), features.get(spec.site))
-        step = None if spec.pos.frame == "prompt" else ("all" if spec.pos.all else spec.pos.index)
+        step = _decode_step(spec.pos)
         if isinstance(addresses[spec.site], tuple):
             # a read at every layer: one per layer, which the run stacks
             for address in addresses[spec.site]:
@@ -1050,7 +1053,6 @@ def _forward(
                 )
             continue
         if not _stacks(spec.pos):
-            step = None if spec.pos.frame == "prompt" else ("all" if spec.pos.all else spec.pos.index)
             read.setdefault((addresses[spec.site], step), []).append(
                 ReadOp(
                     name=read_name,
@@ -1061,8 +1063,8 @@ def _forward(
             )
             continue
         # one ordinary read per decode step, which the run stacks and cuts
-        _fits(read_name, spec.site, sites, decode, len(batch[0]))
-        for step in range(decode):
+        _fits(read_name, spec.site, sites, max_new_tokens, len(batch[0]))
+        for step in range(max_new_tokens):
             read.setdefault((addresses[spec.site], step), []).append(
                 ReadOp(
                     name=f"{read_name}@{step}",
@@ -1090,15 +1092,14 @@ def _forward(
                 step=place[1],
             )
         )
-    forward = Forward(
+    decodes: dict[str, Any] = {"max_new_tokens": max_new_tokens, "generation": dict(generation or {})} if max_new_tokens else {}
+    return (Generate if max_new_tokens else Forward)(
         input=role,
         input_ids=batch[0],
         attention_mask=batch[1],
         sample=batch[2],
         segments=batch[3],
         taps=tuple(taps),
+        **decodes,
     )
-    if not decode:
-        return forward
-    return Generate(**vars(forward), max_new_tokens=decode, generation=dict(generation or {}))
 
