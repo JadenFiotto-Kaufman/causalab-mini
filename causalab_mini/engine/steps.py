@@ -504,12 +504,8 @@ def _writes_land(forward: Forward, record: Record) -> None:
     """
     for tap in forward.taps:
         for write in tap.writes:
-            reasons = record.get(write.name, {}).get("reason", ())
-            missed = {
-                row: (reasons[row] if row < len(reasons) else "") or "out_of_range"
-                for row, window in enumerate(write.at.positions)
-                if not window
-            }
+            # an empty window was resolved here, so it has a record and a reason
+            missed = {row: record[write.name]["reason"][row] for row, window in enumerate(write.at.positions) if not window}
             if missed:
                 raise PlanError(
                     f"write {write.name!r} has nothing to write on row(s) {missed}. A read "
