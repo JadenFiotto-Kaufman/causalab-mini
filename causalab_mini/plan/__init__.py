@@ -13,16 +13,16 @@ Two frozen descriptions and one compiler between them.
   per point.
 * `sweep.py` does that lowering, on the raw JSON, before anything is compiled.
 * `write.py` puts what a run produced on disk.
-* `spec.py` is a **second** authoring format, shaped like the plan itself:
-  its `steps` are the plan's steps and a save sits on the step whose result
-  it names. Both formats compile through the same helpers, so they cannot
-  drift into producing different plans.
+* `spec.py` is the steps-first format: the document's `steps` are what
+  runs, in order, one plan step each, and a step's name is how everything
+  after it reaches what it produced. It and the protocol's compile through
+  the same helpers, so they cannot drift into producing different plans.
 
 Nothing in here knows how to execute anything: that is an engine's job, and a
 plan that knew would only work on one engine.
 """
 
-from .build import build, build_request, build_spec, build_spec_v2
+from .build import build, build_request, build_spec
 from .document import Document, DocumentError
 from .plan import (
     FeaturizerOp,
@@ -66,7 +66,6 @@ __all__ = [
     "build",
     "build_request",
     "build_spec",
-    "build_spec_v2",
     "children",
     "steps_of",
 ]

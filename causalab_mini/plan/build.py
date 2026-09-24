@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import random
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -415,286 +415,6 @@ def _featurizer_op(
     )
 
 
-# --------------------------------------------------------------------- #
-# the roles-and-interventions format (`spec_v2.py`), until the corpus is
-# rewritten in the steps-first one
-# --------------------------------------------------------------------- #
-
-
-def build_spec_v2(spec: Any, data_root: str | Path, engine: Any) -> Plan:
-    """Compile a roles-and-interventions document (`spec_v2.py`) into a plan.
-
-    Each step reduces its one intervention to `_Experiment` and compiles the
-    shared `_pass`; a step that lists several is lowered to one nested plan
-    per entry.
-    """
-    stacking = {
-        read.site
-        for one in spec.interventions.values()
-        for read in one.reads.values()
-        if _stacks(read.pos)
-    }
-    addresses, features, stack_widths = _resolve_sites(dict(spec.sites), stacking, engine)
-    fit_steps = [one for _, one, _ in spec.runs() if type(one).__name__ == "Fit"]
-    featurizers = tuple(
-        _v2_featurizer(name, one, spec, addresses, engine, fit_steps)
-        for name, one in spec.featurizers.items()
-    )
-    widths = {one.name: one.d for one in featurizers}
-    spaces = {one.name: one.k for one in featurizers}
-    for label, one in spec.interventions.items():
-        for write_name, write in one.writes.items():
-            if write.features is None:
-                continue
-            k = spaces.get(write.featurizer, engine.width(addresses[write.site]) if write.featurizer == "identity" else 0)
-            if not write.features or len(set(write.features)) != len(write.features) or not 0 <= min(write.features) <= max(write.features) < k:
-                raise PlanError(
-                    f"interventions.{label}: write {write_name!r}: features {write.features} of a "
-                    f"{k}-dimensional feature space; they are distinct indices below {k}"
-                )
-
-    def table(refs: dict[str, str]) -> dict[str, list[rows_module.Row]]:
-        loaded = {role: rows_module.load(data_root, ref) for role, ref in refs.items()}
-        counts = {role: len(one) for role, one in loaded.items()}
-        if len(set(counts.values())) != 1:
-            raise PlanError(f"roles must have the same row count, got {counts}")
-        return loaded
-
-    steps: dict[str, Step] = {}
-    if featurizers:
-        # Declaring a featurizer is what builds it; the document does not
-        # spell out a step whose whole content would be the declaration.
-        steps["featurizers"] = Featurizers(specs=featurizers)
-    #: An unreduced output is (rows, w, width), and a write that swaps it in
-    #: needs the same rows and the same window. The compiler knows all of it;
-    #: the block would only find out from a shape error.
-    output_rows: dict[str, int | None] = {}
-    output_widths: dict[str, tuple[int | None, Any]] = {}  # the read's width, how reduced
-    #: an output's name -> the value it is: a read, or a reduction
-    aliases: dict[str, str] = {}
-    qualified = sum(1 for one in spec.steps.values() if getattr(one, "kind", "") == "observe" and not isinstance(one.interventions, list)) > 1
-
-    def compile_one(name: str, step: Any) -> dict[str, Step]:
-        """One step with at most one intervention, compiled to the steps it
-        runs. `name` is its path, which is what its refusals print."""
-        kind = type(step).__name__
-        experiment = (
-            replace(_Experiment.of_spec(spec, spec.intervention_of(step)), features=features, widths=stack_widths)
-            if kind in ("Observe", "Fit")
-            else None
-        )
-        if experiment is not None:
-            count = len(table(step.rows)["base"])
-            for write_name, write in spec.intervention_of(step).writes.items():
-                if type(write.operand).__name__ == "Reference":
-                    have = output_rows[write.operand.ref]
-                    if have is not None and have != count:
-                        raise PlanError(
-                            f"step {name!r}: write {write_name!r} swaps in "
-                            f"{write.operand.ref!r}, which has {have} rows, over {count} "
-                            "rows; reduce the output or run over the same rows"
-                        )
-                    per_row, reduced = output_widths[write.operand.ref]  # per_row: None is ragged
-                    if reduced == "pca":
-                        raise PlanError(
-                            f"step {name!r}: write {write_name!r} names {write.operand.ref!r}, a "
-                            "pca basis, as its operand; a basis is loaded as a featurizer, "
-                            "not written at a site"
-                        )
-                    ragged_source = per_row is None
-                    want = write.pos.width  # None: the write is ragged
-                    # What an output may land in. A mean over a ragged read is
-                    # one vector and broadcasts anywhere; a mean over a
-                    # rectangle keeps its window and must match; an unreduced
-                    # rectangle must match; an unreduced ragged read must be
-                    # reduced first, or read in the same pass.
-                    if reduced and ragged_source:
-                        fits = True
-                    elif reduced:
-                        fits = (want == per_row) or (want is None and per_row == 1)
-                    elif not ragged_source:
-                        fits = want == per_row
-                    else:
-                        fits = False
-                    if not fits:
-                        raise PlanError(
-                            f"step {name!r}: write {write_name!r} covers "
-                            f"{want if want is not None else 'a varying number of'} "
-                            f"position(s) but {write.operand.ref!r} was read over "
-                            f"{[per_row] if per_row is not None else 'a varying number of'}"
-                            f"{'' if reduced else ', unreduced'}; "
-                            "the windows must match, or reduce the output"
-                        )
-        if kind == "Observe":
-            assert experiment is not None
-            rows = table(step.rows)
-            # a scope running several observe steps qualifies each one's names
-            # by it, so two steps' `logits` are two values
-            prefix = f"{name}." if qualified else ""
-            fragment = _pass(experiment, rows, addresses, engine.tokenizer, prefix, aliases)
-            read_widths = {
-                op.name: op.at.where.width if op.at.where is not None else None
-                for one in fragment.values() if isinstance(one, Forward)
-                for tap in one.taps for op in tap.reads
-            }
-            for out_name, out in step.outputs.items():
-                width = read_widths[prefix + out.read]
-                if out.reduce == "pca" and width is not None:
-                    # k directions need more than k vectors: the rows are
-                    # centered first, which costs one rank. Known here, from
-                    # the form and the row count, before any forward — a
-                    # text-anchored read has neither until it runs.
-                    vectors = width * len(rows["base"])
-                    assert out.k is not None
-                    if out.k > vectors - 1:
-                        raise PlanError(
-                            f"step {name!r}: output {out_name!r} asks for {out.k} principal "
-                            f"directions of {vectors} vector(s); centered, they span at most "
-                            f"{max(vectors - 1, 0)}. Harvest more rows, or more positions per row"
-                        )
-                output_rows[out_name] = None if out.reduce == "mean" else len(rows["base"])
-                output_widths[out_name] = (width, out.reduce if out.reduce == "pca" else out.reduce == "mean")
-                if out.reduce == "none":
-                    # an output kept as it is comes home, as outputs did
-                    aliases[out_name] = prefix + out.read
-                    _keep(fragment, prefix + out.read)
-                else:
-                    fragment[out_name] = Reduce(of=prefix + out.read, reduce=out.reduce, k=out.k)
-                    aliases[out_name] = out_name
-            for save in _v2_saves(step.saves, spec, rows["base"], widths, outputs=set(step.outputs)):
-                _place(fragment, save, prefix, aliases)
-            return fragment
-        elif kind == "Fit":
-            assert experiment is not None
-            return {name: _v2_fit(step, spec, experiment, table, addresses, engine, widths, aliases)}
-        elif kind == "Weights":
-            return {
-                name: Weights(
-                    names=tuple(step.names),
-                    saves=_v2_saves(step.saves, spec, [], widths, sites=_v2_sites_of(spec)),
-                )
-            }
-        else:  # pragma: no cover — the discriminated union has no other arm
-            raise PlanError(f"step {name!r}: {kind} is not a step this compiler knows")
-
-    for name, step in spec.steps.items():
-        if isinstance(getattr(step, "interventions", None), list):
-            # A list is lowered, not executed specially: one nested plan per
-            # intervention, each holding this step as a one-intervention
-            # document would compile it — so each gets its own directory.
-            steps[name] = Plan(
-                steps={child: Plan(steps=compile_one(f"{name}/{child}", one)) for child, one in spec.lower(name, step).items()}
-            )
-        else:
-            for key, one in compile_one(name, step).items():
-                if key in steps:
-                    raise PlanError(f"step {name!r}: {key!r} is already a step of this plan")
-                steps[key] = one
-    return Plan(steps=steps, source=spec.model_dump(mode="json"))
-
-
-def _place(fragment: dict[str, Step], save: SaveFile, prefix: str, aliases: dict[str, str]) -> None:
-    """Put one save on the step that produces its value: a metric's on the
-    metric, a reduction's on the reduction, a kept read's on the forward that
-    reads it — which then brings it home — and a decode's ids on the decode."""
-    value = save.value
-    if value.endswith(".generated"):
-        key = prefix + value.removesuffix(".generated")
-        save = replace(save, value=key)
-    elif prefix + value in fragment:
-        key = prefix + value
-        save = replace(save, value=key, of=prefix + save.of if save.of else "")
-    elif isinstance(fragment.get(aliases.get(value, "")), Reduce):
-        key = aliases[value]
-        save = replace(save, value=key)
-    else:
-        key = _keep(fragment, aliases[value])
-        save = replace(save, value=aliases[value])
-    fragment[key] = replace(fragment[key], saves=(*fragment[key].saves, save))
-
-
-def _keep(fragment: dict[str, Step], read: str) -> str:
-    """Bring `read` home from the forward that reads it, and name that forward."""
-    key = next(
-        one for one, step in fragment.items()
-        if isinstance(step, Forward) and any(op.name == read for tap in step.taps for op in tap.reads)
-    )
-    forward = fragment[key]
-    assert isinstance(forward, Forward)
-    if read not in forward.keep:
-        fragment[key] = replace(forward, keep=(*forward.keep, read))
-    return key
-
-
-def _v2_fit(
-    step: Any,
-    spec: Any,
-    experiment: _Experiment,
-    table: Any,
-    addresses: dict[str, Address],
-    engine: Any,
-    widths: dict[str, int],
-    aliases: dict[str, str],
-) -> Fit:
-    rows = table(step.rows)
-    evaluation_rows = table(step.eval.rows)
-    if step.rows != step.eval.rows:
-        fitted = {json.dumps(row, sort_keys=True) for row in rows["base"]}
-        shared = [one for one in evaluation_rows["base"] if json.dumps(one, sort_keys=True) in fitted]
-        if shared:
-            raise PlanError(
-                f"the eval rows share {len(shared)} row(s) with the fitted rows; "
-                "the two must be endpoint-disjoint"
-            )
-    count = len(rows["base"])
-    order = random.Random(step.seed)
-    epochs = tuple(
-        tuple(
-            Plan(steps=_pass(experiment, _take(rows, draw[start : start + step.pairs]), addresses, engine.tokenizer, "", aliases))
-            for start in range(0, count, step.pairs)
-        )
-        for draw in (order.sample(range(count), count) for _ in range(step.epochs))
-    )
-    evaluation = _pass(experiment, evaluation_rows, addresses, engine.tokenizer, "", aliases)
-    for save in _v2_saves(step.eval.saves, spec, evaluation_rows["base"], widths):
-        _place(evaluation, save, "", aliases)
-    return Fit(
-        epochs=epochs,
-        evaluation=Plan(steps=evaluation),
-        objective=tuple((weight, term) for weight, term in step.objective),
-        params=tuple(step.params),
-        lr=step.optimizer.lr,
-        weight_decay=step.optimizer.weight_decay,
-        # the watched metric, then the fraction each trained gate keeps
-        eval_metrics=(
-            step.early_stop.metric,
-            *(f"{p}.mask" for p in step.params if spec.featurizers[p].kind == "gate"),
-        ),
-        early_stop=step.early_stop.metric,
-        patience=step.early_stop.patience,
-        mode=step.early_stop.mode,
-        anneal=tuple((gate, one.start, one.end) for gate, one in step.anneal.items()),
-        saves=_v2_saves(step.saves, spec, [], widths),
-    )
-
-
-def _v2_featurizer(
-    name: str, one: Any, spec: Any, addresses: dict[str, Address], engine: Any, fits: list[Any]
-) -> FeaturizerOp:
-    site = _v2_sites_of(spec)[name]
-    return _featurizer_op(
-        name,
-        one,
-        spec,
-        site,
-        spec.sites[site],
-        addresses[site],
-        engine,
-        trained=any(name in fit.params for fit in fits),
-        seed=one.seed if one.seed is not None else next((fit.seed for fit in fits if name in fit.params), 0),
-    )
-
-
 def _identity(spec: Any, name: str, label: str, site: Any, d: int) -> dict[str, str]:
     """What a saved featurizer is *of*: the stamp a bundle carries, and the
     expectation a load is checked against. One function, so the two cannot
@@ -772,128 +492,6 @@ def _load_featurizer(name: str, one: Any, spec: Any, label: str, site: Any, d: i
     return safetensors.torch.save(tensors), k
 
 
-def _v2_sites_of(spec: Any) -> dict[str, str]:
-    """Which site each featurizer acts at — derived, never authored, because
-    a featurizer name is one parameter set and the document already says
-    where it is used."""
-    found = {}
-    for name in spec.featurizers:
-        at = {
-            read.site
-            for one in spec.interventions.values()
-            for read in one.reads.values()
-            if read.featurizer == name
-        }
-        at |= {
-            w.site
-            for one in spec.interventions.values()
-            for w in one.writes.values()
-            if w.featurizer == name
-        }
-        (found[name],) = at
-    return found
-
-
-def _v2_saves(
-    saves: list[Any],
-    spec: Any,
-    base_rows: list[rows_module.Row],
-    widths: dict[str, int],
-    sites: dict[str, str] | None = None,
-    outputs: frozenset[str] | set[str] = frozenset(),
-) -> tuple[SaveFile, ...]:
-    """A step's saves. A metric table carries its rows' labels; a fitted
-    parameter carries the identity stamp a later run would check; a
-    published output is a tensor and goes to a safetensors file as it is."""
-    built = []
-    for save in saves:
-        if save.value in outputs or save.value.endswith(".generated"):
-            # an output, or a decoding forward's generated ids: a tensor
-            if not save.file_path.endswith(".safetensors"):
-                raise PlanError(
-                    f"save {save.value!r}: a tensor, not a table; give it a "
-                    f".safetensors path, not {save.file_path!r}"
-                )
-            built.append(SaveFile(file_path=save.file_path, value=save.value))
-            continue
-        if sites is not None and save.value in sites:
-            built.append(
-                SaveFile(
-                    file_path=save.file_path,
-                    value=save.value,
-                    produced_by=spec.digest,
-                    identity={
-                        "produced_by": spec.digest,
-                        **_identity(spec, save.value, sites[save.value], spec.sites[sites[save.value]], widths[save.value]),
-                    },
-                )
-            )
-            continue
-        metric = next(
-            one.metrics[save.value]
-            for one in spec.interventions.values()
-            if save.value in one.metrics
-        )
-        built.append(
-            SaveFile(
-                file_path=save.file_path,
-                value=save.value,
-                example_ids=rows_module.example_ids(base_rows),
-                eligible=_eligible(base_rows, metric),
-                of=metric.of,
-                unit=metrics_module.UNITS[metric.kind][0],
-                estimand_version=metrics_module.UNITS[metric.kind][1],
-                produced_by=spec.digest,
-            )
-        )
-    return tuple(built)
-
-
-@dataclass(frozen=True)
-class _Experiment:
-    """The intervention, in the one shape the compiler works from.
-
-    Both front ends reduce to this: the protocol's flat document
-    (`document.py`) and the plan-shaped one (`spec.py`). Everything below it
-    — the schedule, the taps, the metrics — is written once and shared, so
-    the two formats cannot drift into producing different plans.
-    """
-
-    fields: dict[str, str]  # role -> which column of a row its text is
-    reads: dict[str, Any]
-    writes: dict[str, Any]
-    models: dict[str, Any]
-    metrics: dict[str, Any]
-    decode: int = 0
-    #: site -> `(groups, take)`: which part of the feature axis the site is.
-    features: dict[str, Any] = field(default_factory=dict)
-    #: site -> how wide the tensor there is, for the sites a continuation
-    #: read stacks at. Only those: `engine.width` is a question about the
-    #: checkpoint and there is no reason to ask it where nothing buffers.
-    widths: dict[str, int] = field(default_factory=dict)
-
-    @classmethod
-    def of_document(cls, document: Document) -> "_Experiment":
-        return cls(
-            fields={role: one.field for role, one in document.roles.items()},
-            reads=dict(document.reads),
-            writes=dict(document.writes),
-            models=dict(document.intervened_models),
-            metrics=dict(document.metrics),
-        )
-
-    @classmethod
-    def of_spec(cls, spec: Any, intervention: Any) -> "_Experiment":
-        return cls(
-            fields={role: one.field for role, one in spec.roles.items()},
-            reads=dict(intervention.reads),
-            writes=dict(intervention.writes),
-            models=dict(intervention.models),
-            metrics=dict(intervention.metrics),
-            decode=intervention.decode,
-        )
-
-
 def build_request(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Plan:
     """Compile a document — either format, whatever number of experiments.
 
@@ -904,15 +502,11 @@ def build_request(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Pl
     the difference: a point is an ordinary plan, and the engine that runs the
     root is walking the same tree it always walks.
 
-    This is the one entry point. It tells the formats apart by shape (a
-    steps-first document has `steps` and `data`, the roles-and-interventions
-    one `steps` and `roles`, the protocol's neither), lowers sweeps on the
-    raw JSON — which no format has to know about — and hands each point to
-    its compiler.
+    This is the one entry point. It tells the two formats apart by shape (a
+    steps-first document has `steps`), lowers sweeps on the raw JSON — which
+    neither format has to know about — and hands each point to its compiler.
     """
-    compile_point = (
-        _compile_spec_v2 if "roles" in raw else _compile_spec if "steps" in raw else _compile_document
-    )
+    compile_point = _compile_spec if "steps" in raw else _compile_document
     points = sweep.points(raw)
     if len(points) == 1 and not points[0][0]:
         return replace(compile_point(raw, data_root, engine), source=raw)
@@ -933,12 +527,6 @@ def _compile_spec(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Pl
     from .spec import Spec  # here, not at the top: spec.py is the front end and this is below it
 
     return build_spec(Spec.model_validate(raw), data_root, engine)
-
-
-def _compile_spec_v2(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Plan:
-    from .spec_v2 import Spec
-
-    return build_spec_v2(Spec.model_validate(raw), data_root, engine)
 
 
 def build(document: Document, data_root: str | Path, engine: Any) -> Plan:
@@ -990,7 +578,7 @@ def build(document: Document, data_root: str | Path, engine: Any) -> Plan:
     fit = _fit(document, data_root, rows, addresses, tokenizer)
     if fit is not None:
         steps["fit"] = fit
-    scored = _pass(_Experiment.of_document(document), rows, addresses, tokenizer)
+    scored = _steps_over(document, rows, addresses, tokenizer)
     for save in metric_saves:
         scored[save.value] = replace(scored[save.value], saves=(*scored[save.value].saves, save))
     for key, one in scored.items():
@@ -1004,60 +592,46 @@ def build(document: Document, data_root: str | Path, engine: Any) -> Plan:
     return Plan(steps=steps)
 
 
-def _pass(
-    experiment: _Experiment,
+def _steps_over(
+    document: Document,
     rows: dict[str, list[rows_module.Row]],
     addresses: dict[str, Address],
     tokenizer: Any,
-    prefix: str = "",
-    published: dict[str, str] | None = None,
 ) -> dict[str, Step]:
-    """The document's forwards and metrics over one set of rows, as the
-    steps that run them, by name: each forward under its model's, each metric
-    under its own. A training update, an evaluation and the scored run are
-    all these steps, over different rows.
-
-    `prefix` qualifies every name the experiment gives — its models, reads,
-    writes and metrics — and `published` names the value each earlier
-    output is, for a write that takes one."""
-    batches = {role: _batch(tokenizer, f"role {role!r}", experiment.fields[role], table) for role, table in rows.items()}
-    sites = (addresses, experiment.features, experiment.widths)
-    decode = experiment.decode
-
-    def operand(write: Any) -> Any:
-        one = _operand(write)
-        if not isinstance(one, str):
-            return one
-        return prefix + one if one in experiment.reads else (published or {}).get(one, one)
+    """A protocol document's forwards and metrics over one set of rows, as
+    the steps that run them, by name: each forward under its model's, each
+    metric under its own. The scored run, a training update and an
+    evaluation are all these steps, over different rows."""
+    batches = {
+        role: _batch(tokenizer, f"role {role!r}", document.roles[role].field, table) for role, table in rows.items()
+    }
 
     def forward(name: str, role: str) -> Forward:
-        model = experiment.models.get(name)
+        model = document.intervened_models.get(name)
         return _forward(
             role,
-            experiment.fields[role],
-            writes=[(prefix + one, experiment.writes[one], operand(experiment.writes[one])) for one in (model.writes if model else ())],
-            reads=[(prefix + one, spec) for one, spec in experiment.reads.items() if (spec.model, spec.input) == (name, role)],
+            document.roles[role].field,
+            writes=[(one, document.writes[one], document.writes[one].operand) for one in (model.writes if model else ())],
+            reads=[(one, spec) for one, spec in document.reads.items() if (spec.model, spec.input) == (name, role)],
             batch=batches[role],
             rows=rows[role],
-            sites=sites,
-            decode=decode,
-            # greedy, with EOS held off so the bound is the length (FINDINGS §12.4)
-            generation={"min_new_tokens": decode, "do_sample": False} if decode else None,
+            # the protocol's sites name no heads or units, and it does not decode
+            sites=(addresses, {}, {}),
         )
 
-    order = _schedule(experiment)
+    order = _schedule(document)
     # a forward is its model's; a model run over both roles is one per role
     twice = {name for name, _ in order if sum(1 for one, _ in order if one == name) > 1}
     steps: dict[str, Step] = {
-        prefix + (f"{name}.{role}" if name in twice else name): forward(name, role) for name, role in order
+        (f"{name}.{role}" if name in twice else name): forward(name, role) for name, role in order
     }
     forwards = tuple(one for one in steps.values() if isinstance(one, Forward))
     _check_patterns(forwards)
     base_rows = rows["base"]  # base is the schema of the pair: metrics read its columns
-    for name, spec in experiment.metrics.items():
-        if prefix + name in steps:
+    for name, spec in document.metrics.items():
+        if name in steps:
             raise PlanError(f"metric {name!r} shares its name with a model; rename one")
-        steps[prefix + name] = _metric(name, spec.kind, spec, base_rows, tokenizer, prefix + spec.of, forwards)
+        steps[name] = _metric(name, spec.kind, spec, base_rows, tokenizer, spec.of, forwards)
     return steps
 
 
@@ -1235,14 +809,14 @@ def _fit(
     order = random.Random(spec.seed)
     epochs = tuple(
         tuple(
-            Plan(steps=_pass(_Experiment.of_document(document), _take(rows, draw[start : start + spec.pairs]), addresses, tokenizer))
+            Plan(steps=_steps_over(document, _take(rows, draw[start : start + spec.pairs]), addresses, tokenizer))
             for start in range(0, count, spec.pairs)
         )
         for draw in (order.sample(range(count), count) for _ in range(spec.epochs))
     )
     return Fit(
         epochs=epochs,
-        evaluation=Plan(steps=_pass(_Experiment.of_document(document), evaluation, addresses, tokenizer)),
+        evaluation=Plan(steps=_steps_over(document, evaluation, addresses, tokenizer)),
         objective=spec.objective,
         params=spec.params,
         lr=spec.lr,
@@ -1308,50 +882,35 @@ def _check_keys(write: Any, forward: Forward, source: Forward | None) -> None:
 
 
 def _take(rows: dict[str, list[rows_module.Row]], picked: list[int]) -> dict[str, list[rows_module.Row]]:
-    """One minibatch. Every role is indexed the same way, because rows are
+    """One minibatch. Every table is indexed the same way, because rows are
     paired by index and a shuffle that broke the pairing would silently fit a
     rotation against mismatched counterfactuals."""
     return {role: [table[index] for index in picked] for role, table in rows.items()}
 
 
-def _operand(write: Any) -> str | float | None:
-    """A write's operand as the compiler carries it: a name for a read of
-    this pass or for an output published before it, the number itself for a
-    literal. The plan-shaped format spells a reference as an object and the
-    protocol's as a bare name, and this is the one place that differs."""
-    return getattr(write, "operand_name", None) or write.operand
-
-
-def _schedule(experiment: _Experiment) -> list[tuple[str, str]]:
-    """The forwards, as (model, input) pairs, in execution order.
+def _schedule(document: Document) -> list[tuple[str, str]]:
+    """A protocol document's forwards, as (model, input) pairs, in execution
+    order.
 
     Cross-model data flow has one channel: a read in model A may be the operand
     of a write in force in model B, so B runs after A. The graph must be
-    acyclic; it *is* the schedule.
+    acyclic; it *is* the schedule. (A steps-first document writes its order.)
     """
     units: dict[tuple[str, str], set[str]] = {}
     read_home: dict[str, tuple[str, str]] = {}
-    for name, spec in experiment.reads.items():
+    for name, spec in document.reads.items():
         unit = (spec.model, spec.input)
         units.setdefault(unit, set())
         read_home[name] = unit
-    for name, spec in experiment.models.items():
+    for name, spec in document.intervened_models.items():
         units.setdefault((name, spec.input), set())
         for write in spec.writes:
-            operand = _operand(experiment.writes[write])
-            if isinstance(operand, str):  # a literal or nothing orders no forward
-                units[(name, spec.input)].add(operand)
+            units[(name, spec.input)].add(document.writes[write].operand)
 
     ordered: list[tuple[str, str]] = []
     remaining = dict(units)
     while remaining:
-        ready = [
-            unit
-            for unit, operands in remaining.items()
-            # an operand that is not a read of this pass was published by an
-            # earlier step; it is already there and orders nothing
-            if all(read_home[operand] in ordered for operand in operands if operand in read_home)
-        ]
+        ready = [unit for unit, operands in remaining.items() if all(read_home[one] in ordered for one in operands)]
         if not ready:
             raise PlanError(f"the model/read graph has a cycle: {sorted(remaining)}")
         ready.sort()
@@ -1430,11 +989,11 @@ def _forward(
     decode: int = 0,
     generation: dict[str, Any] | None = None,
 ) -> Forward:
-    """One model call over the rows `role` names: the writes in force, in the
-    order they apply, as `(op name, spec, operand)` with the operand as the
-    plan names its value, and the reads taken, as `(op name, spec)` —
-    grouped into taps by address and put in forward order. With `decode`, a
-    `Generate`.
+    """One model call over the rows `role` names — a steps-first dataset, or
+    a protocol role: the writes in force, in the order they apply, as
+    `(op name, spec, operand)` with the operand as the plan names its value,
+    and the reads taken, as `(op name, spec)` — grouped into taps by address
+    and put in forward order. With `decode`, a `Generate`.
 
     Every front end hands a model call over in this one shape, so how a
     format says which writes a call has is its own business and nothing
