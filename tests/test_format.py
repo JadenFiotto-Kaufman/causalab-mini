@@ -591,6 +591,22 @@ def test_a_read_from_outside_a_fits_body_is_not_its_operand(das):
     _refused(das, "is a read from outside the fit's body")
 
 
+def test_a_fits_held_out_run_replaces_every_dataset_of_its_body(das):
+    """A dataset the eval map leaves out would be scored on the rows the fit
+    trained on, beside the ones it replaces — a held-out number that is half
+    training data. So every dataset the body names is mapped, and one
+    written in place, which has no name to map, is refused."""
+    one = copy.deepcopy(das)
+    one["data"]["train_cf"] = {"path": "weekdays/data#train"}
+    one["steps"]["fit"]["steps"]["counterfactual"]["data"] = "train_cf"
+    _refused(one, re.escape("step 'fit': eval.data says nothing of ['train_cf']"))
+    two = copy.deepcopy(das)
+    two["steps"]["fit"]["steps"]["counterfactual"]["data"] = {"path": "weekdays/data#train"}
+    _refused(two, "step 'fit': step 'counterfactual' writes its dataset in place")
+    one["steps"]["fit"]["eval"]["data"]["train_cf"] = "test"
+    Spec.model_validate(one)
+
+
 def test_the_held_out_pass_is_the_body_on_other_rows(das, data_root, model_engine):
     """`eval.data` puts one declared dataset in place of another, and the two
     must not share a row — unless they are the same dataset, which is the

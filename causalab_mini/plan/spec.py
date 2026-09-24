@@ -1076,6 +1076,15 @@ def _fit(spec: Spec, where: str, name: str, fit: Fit, body: dict[str, Ref]) -> N
         f"{where}: early_stop watches {fit.early_stop.metric!r}, which is not a metric of its "
         f"body ({sorted(metrics)})",
     )
+    # The held-out run is the body with every dataset it names replaced, so
+    # each must have a name to be replaced by, and each must be: one left out
+    # would be scored on the rows the fit trained on, beside ones that were not.
+    for inner, one in fit.steps.items():
+        _refuse(
+            not isinstance(one, _Call) or isinstance(one.data, str),
+            f"{where}: step {inner!r} writes its dataset in place; a fit's body declares each one "
+            "under `data`, so `eval.data` can say what its held-out run uses instead",
+        )
     named = {one.data for _, one in fit.steps.items() if isinstance(one, _Call) and isinstance(one.data, str)}
     named |= {one.dataset for _, one in fit.steps.items() if isinstance(one, _Metric)}
     for trained, held_out in fit.eval.data.items():
@@ -1084,3 +1093,10 @@ def _fit(spec: Spec, where: str, name: str, fit: Fit, body: dict[str, Ref]) -> N
             f"{where}: eval replaces {trained!r}, which its body does not use ({sorted(named)})",
         )
         _refuse(held_out in spec.data, f"{where}: eval: undeclared dataset {held_out!r}")
+    missing = sorted(named - set(fit.eval.data))
+    _refuse(
+        not missing,
+        f"{where}: eval.data says nothing of {missing}, which its body uses; the held-out run "
+        "would score them on the rows the fit trained on. Map each to its held-out dataset — "
+        "or to itself, which is the train-equals-test ablation, and says so",
+    )

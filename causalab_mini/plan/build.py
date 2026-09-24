@@ -274,7 +274,7 @@ def _spec_fit(spec: Spec, name: str, fit: Any, table: Any, sites: _Sites, tokeni
     )
 
     def held(key: str) -> list[rows_module.Row]:
-        return table(fit.eval.data.get(key, key))
+        return table(fit.eval.data[key])
 
     evaluation = body(held)
     # a body's value a save names, `<fit>.<ref>`, is its held-out run's;
