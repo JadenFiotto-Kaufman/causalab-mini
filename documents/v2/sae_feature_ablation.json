@@ -109,6 +109,10 @@
         {
           "value": "p_answer",
           "file_path": "p_answer.json"
+        },
+        {
+          "value": "active",
+          "file_path": "latents.safetensors"
         }
       ],
       "outputs": {

@@ -164,6 +164,18 @@
         {
           "value": "logit_diff_raw",
           "file_path": "logit_diff_steered.json"
+        },
+        {
+          "value": "norm_before",
+          "file_path": "norm_before.safetensors"
+        },
+        {
+          "value": "norm_after",
+          "file_path": "norm_after.safetensors"
+        },
+        {
+          "value": "norm_steered",
+          "file_path": "norm_steered.safetensors"
         }
       ]
     }
