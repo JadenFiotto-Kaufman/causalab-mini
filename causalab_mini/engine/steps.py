@@ -561,14 +561,14 @@ def fit(engine: Any, step: Fit, state: State) -> None:
     losses, scores = [], []
     best, waited = None, 0
     for epoch in step.epochs:
-        _training(featurizers, step.params, True)
+        for name in step.params:
+            featurizers[name].training = True  # a gate is soft while it is updated
         for update in epoch:
             for name, first, last in step.anneal:
                 # geometric, from `first` on the first update to `last` on the last
                 featurizers[name].temperature = first * (last / first) ** (done / max(total - 1, 1))
             done += 1
-            scored = _scored(engine, update, state)
-            scored.update({f"{name}.mask": gate.mask for name, gate in gates.items()})
+            scored = _scored(engine, update, state, gates)
             loss = objective(step.objective, scored)
             optimizer.zero_grad()
             loss.backward()
@@ -576,10 +576,10 @@ def fit(engine: Any, step: Fit, state: State) -> None:
             losses.append(loss.detach().cpu())
         # The evaluation runs in eval mode: no gradients, and on rows the fit
         # never saw.
-        _training(featurizers, step.params, False)
+        for name in step.params:
+            featurizers[name].training = False  # and hard whenever it is scored
         with torch.no_grad():
-            evaluated = _scored(engine, step.evaluation, state)
-            evaluated.update({f"{name}.mask": gate.mask for name, gate in gates.items()})
+            evaluated = _scored(engine, step.evaluation, state, gates)
         # each on the CPU first: a metric is wherever the model is, a gate's mask
         # wherever its parameter is, and a record is neither's
         scores.append(torch.stack([evaluated[name].mean().cpu() for name in step.eval_metrics]))
@@ -596,27 +596,17 @@ def fit(engine: Any, step: Fit, state: State) -> None:
     step.results.update({name: featurizers[name].weight.detach().cpu() for name in step.params})
 
 
-def _scored(engine: Any, steps: Plan, state: State) -> dict[str, Any]:
-    """Every value a fit's subtree produced, live: the metrics its objective
-    and its early stop name are among them, still attached to their graph."""
+def _scored(engine: Any, steps: Plan, state: State, gates: dict[str, Any]) -> dict[str, Any]:
+    """Every value a fit's subtree produced, live — the metrics its objective
+    and its early stop name are among them, still attached to their graph —
+    and each gate's mask, as `<name>.mask`."""
     inner = state.child()
     run(engine, steps, inner)
-    return inner.values
-
-
-def _training(featurizers: dict[str, Any], names: tuple[str, ...], on: bool) -> None:
-    """The one piece of mode: a gate is soft while it is being updated and
-    hard whenever it is scored. A rotation has no use for the flag."""
-    for name in names:
-        featurizers[name].training = on
+    return inner.values | {f"{name}.mask": gate.mask for name, gate in gates.items()}
 
 
 def objective(terms: tuple[tuple[float, str], ...], scored: dict[str, Any]) -> Any:
     """Σ wᵢ · termᵢ, minimized. The sign of the weight is the direction — a
     positive weight on a cross-entropy minimizes it, a −1 on a logit_diff
     maximizes the margin — and there is no `maximize` flag anywhere."""
-    total = None
-    for weight, name in terms:
-        term = weight * scored[name].mean()
-        total = term if total is None else total + term
-    return total
+    return sum(weight * scored[name].mean() for weight, name in terms)
