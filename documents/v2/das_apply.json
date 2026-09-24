@@ -88,7 +88,7 @@
   "steps": {
     "apply": {
       "kind": "observe",
-      "intervention": "das",
+      "interventions": "das",
       "rows": {
         "base": "weekdays/data#test",
         "counterfactual": "weekdays/data#test"

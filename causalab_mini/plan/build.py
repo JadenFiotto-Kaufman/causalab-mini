@@ -88,7 +88,7 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
     # `widths` below is the featurizers'; this is the sites' own, and only
     # for the ones a continuation read buffers at
     stack_widths = {name: engine.width(addresses[name]) for name in sorted(stacking)}
-    fit_steps = [one for one in spec.steps.values() if type(one).__name__ == "Fit"]
+    fit_steps = [one for _, one, _ in spec.runs() if type(one).__name__ == "Fit"]
     featurizers = tuple(
         _spec_featurizer(name, one, spec, addresses, engine, fit_steps)
         for name, one in spec.featurizers.items()
@@ -123,7 +123,9 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
     #: the block would only find out from a shape error.
     output_rows: dict[str, int | None] = {}
     output_widths: dict[str, tuple[int | None, Any]] = {}  # the read's width, how reduced
-    for name, step in spec.steps.items():
+    def compile_one(name: str, step: Any) -> Step:
+        """One step with at most one intervention, compiled. `name` is its
+        path, which is what its refusals print."""
         kind = type(step).__name__
         experiment = (
             replace(_Experiment.of_spec(spec, spec.intervention_of(step)), features=features, widths=stack_widths)
@@ -204,21 +206,36 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
                     width,
                     out.reduce if out.reduce == "pca" else out.reduce == "mean",
                 )
-            steps[name] = replace(
+            return replace(
                 observe,
                 outputs=outputs,
                 saves=_spec_saves(step.saves, spec, rows["base"], widths, outputs={o.name for o in outputs}),
             )
         elif kind == "Fit":
             assert experiment is not None
-            steps[name] = _spec_fit(step, spec, experiment, table, addresses, engine, widths)
+            return _spec_fit(step, spec, experiment, table, addresses, engine, widths)
         elif kind == "Weights":
-            steps[name] = Weights(
+            return Weights(
                 names=tuple(step.names),
                 saves=_spec_saves(step.saves, spec, [], widths, sites=_sites_of(spec)),
             )
         else:  # pragma: no cover — the discriminated union has no other arm
             raise PlanError(f"step {name!r}: {kind} is not a step this compiler knows")
+
+    for name, step in spec.steps.items():
+        if isinstance(getattr(step, "interventions", None), list):
+            # A list is lowered, not executed specially: one nested plan per
+            # intervention, each holding this step as a one-intervention
+            # document would compile it — so each gets its own directory
+            # and its own results path, `<step>/<intervention>/<step>`.
+            steps[name] = Plan(
+                steps={
+                    child: Plan(steps={name: compile_one(f"{name}/{child}", one)})
+                    for child, one in spec.lower(name, step).items()
+                }
+            )
+        else:
+            steps[name] = compile_one(name, step)
     return Plan(steps=steps, source=spec.model_dump(mode="json"))
 
 

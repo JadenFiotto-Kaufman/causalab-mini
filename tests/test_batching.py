@@ -156,9 +156,9 @@ def test_a_per_row_output_reaches_the_window_of_its_own_rows(data_root, model_en
     }
     score = raw["steps"].pop("score")
     raw["steps"] = {
-        "harvest": {"kind": "observe", "intervention": "harvest", "rows": score["rows"],
+        "harvest": {"kind": "observe", "interventions": "harvest", "rows": score["rows"],
                     "outputs": {"kept": {"read": "v_cf"}}},
-        "score": {**score, "intervention": "apply"},
+        "score": {**score, "interventions": "apply"},
     }
     direct = model_engine.execute(plan.build_request(_point("patching.json"), data_root, model_engine))
     chained = model_engine.execute(plan.build_request(raw, data_root, model_engine), batch_size=1)

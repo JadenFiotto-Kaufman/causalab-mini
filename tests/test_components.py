@@ -433,7 +433,7 @@ def _both_heads(model: dict) -> dict:
                 },
             }
         },
-        "steps": {"score": {"kind": "observe", "intervention": "one", "rows": {"base": "weekdays/train"}}},
+        "steps": {"score": {"kind": "observe", "interventions": "one", "rows": {"base": "weekdays/train"}}},
     }
 
 

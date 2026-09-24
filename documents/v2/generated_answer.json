@@ -58,7 +58,7 @@
   "steps": {
     "score": {
       "kind": "observe",
-      "intervention": "say",
+      "interventions": "say",
       "rows": {
         "base": "weekdays/said"
       },

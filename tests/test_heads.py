@@ -373,8 +373,8 @@ def test_a_pattern_published_by_an_earlier_step_cannot_be_checked(data_root, eag
     raw["interventions"]["harvest"] = {"reads": {"their_pattern": one["reads"].pop("their_pattern")}}
     one["writes"]["look_there"]["operand"] = {"ref": "kept"}
     score = raw["steps"].pop("score")
-    raw["steps"] = {"harvest": {"kind": "observe", "intervention": "harvest", "rows": score["rows"],
+    raw["steps"] = {"harvest": {"kind": "observe", "interventions": "harvest", "rows": score["rows"],
                                 "outputs": {"kept": {"read": "their_pattern"}}},
-                    "score": {**score, "intervention": "pattern_patching"}}
+                    "score": {**score, "interventions": "pattern_patching"}}
     with pytest.raises(plan.PlanError, match="swap one read in the same pass"):
         plan.build_request(raw, data_root, eager_engine)

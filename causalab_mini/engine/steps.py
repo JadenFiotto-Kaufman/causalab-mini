@@ -60,8 +60,15 @@ class State:
     batch_size: int | None = None
 
     def child(self) -> "State":
-        """A nested plan's state: the same live featurizers, its own outputs."""
-        return State(featurizers=self.featurizers, batch_size=self.batch_size)
+        """A nested plan's state: the same live featurizers, and the outputs
+        published before it as a copy — it reads what an earlier step
+        published, and what it publishes stays its own."""
+        return State(
+            featurizers=self.featurizers,
+            outputs=dict(self.outputs),
+            layout=dict(self.layout),
+            batch_size=self.batch_size,
+        )
 
 
 def run(engine: Any, step: Step, state: State | None = None, batch_size: int | None = None) -> None:

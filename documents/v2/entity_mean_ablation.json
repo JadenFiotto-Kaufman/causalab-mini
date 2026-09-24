@@ -95,7 +95,7 @@
   "steps": {
     "harvest": {
       "kind": "observe",
-      "intervention": "harvest",
+      "interventions": "harvest",
       "rows": {
         "base": "weekdays/train"
       },
@@ -114,7 +114,7 @@
     },
     "clean": {
       "kind": "observe",
-      "intervention": "clean",
+      "interventions": "clean",
       "rows": {
         "base": "weekdays/train"
       },
@@ -127,7 +127,7 @@
     },
     "ablated": {
       "kind": "observe",
-      "intervention": "ablated",
+      "interventions": "ablated",
       "rows": {
         "base": "weekdays/train"
       },
