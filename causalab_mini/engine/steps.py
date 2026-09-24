@@ -53,10 +53,8 @@ Record = dict[str, dict[str, Any]]
 class State:
     """What one `steps` list shares, for as long as it runs."""
 
-    #: The live parameter sets. The stateless ones exist before any document
-    #: declares anything: `identity` is what a read or a write with no
-    #: `featurizer` names, and it is never declared.
-    featurizers: dict[str, Any] = field(default_factory=lambda: dict(intervene.FEATURIZERS))
+    #: The live parameter sets, by the name the document declared.
+    featurizers: dict[str, Any] = field(default_factory=dict)
     #: Every value the steps so far produced, by name.
     values: dict[str, Any] = field(default_factory=dict)
     #: For a value that still has its rows, whether it came back flat — one

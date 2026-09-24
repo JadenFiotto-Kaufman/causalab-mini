@@ -261,7 +261,7 @@ def _apply(
             intervene.at_step(write.at, activation, tap.address.seq_axis, tap.step, step),
             intervene.resolve_operand(values, write.operand),
             write.mechanism,
-            featurizers[write.featurizer],
+            None if write.featurizer is None else featurizers[write.featurizer],
             tap.address.seq_axis,
             write.params,
             original,
@@ -275,8 +275,10 @@ def _apply(
         )
         if read.view == "logits":
             gathered = intervene.softcap(names.lm_head(names.ln_final(gathered)), names.softcap)
-        with intervene.exact(gathered):
-            values[read.name] = featurizers[read.featurizer].featurize(gathered)[0].clone()
+        if read.featurizer is not None:
+            with intervene.exact(gathered):
+                gathered = featurizers[read.featurizer].featurize(gathered)[0]
+        values[read.name] = gathered.clone()
     return activation
 
 

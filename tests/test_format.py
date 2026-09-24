@@ -610,7 +610,7 @@ def test_a_read_from_outside_a_fits_body_is_not_its_operand(das):
     meet the wrong row."""
     outside = {"kind": "forward", "data": "train", "field": "input", "reads": {"v": {"site": "target", "pos": -1}}}
     das["steps"] = {"outside": outside, **das["steps"]}
-    das["interventions"]["das"]["writes"]["patch"].update(operand="outside.v", featurizer="identity")
+    das["interventions"]["das"]["writes"]["patch"].update(operand="outside.v", featurizer=None)
     _refused(das, "is a read from outside the fit's body")
 
 

@@ -95,9 +95,7 @@ def test_the_fit_leaves_the_gate_hard_and_annealed(dbm_raw, data_root):
     schedule's last value."""
     engine = HooksEngine.load(Spec.model_validate(dbm_raw).model, device_map="cpu")
     built = plan.build_request(dbm_raw, data_root, engine)
-    from causalab_mini.ops import intervene
-
-    state = steps.State(featurizers=dict(intervene.FEATURIZERS))
+    state = steps.State()
     steps.build(built.step("featurizers", plan.Featurizers), state)
     gate = state.featurizers["mask"]
     assert gate.temperature == 1.0 and not gate.training

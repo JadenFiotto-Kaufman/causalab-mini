@@ -148,7 +148,7 @@ def test_the_rotation_reaches_the_read_and_the_write_and_not_the_head(das_plan):
     assert [read.featurizer for read in source.taps[0].reads] == ["rot"]
     assert [write.featurizer for write in patched.taps[0].writes] == ["rot"]
     # the metric's read is a *plain* lm_head read; the document refuses any other.
-    assert [read.featurizer for read in patched.taps[1].reads] == ["identity"]
+    assert [read.featurizer for read in patched.taps[1].reads] == [None]
 
 
 def test_a_k_wider_than_the_site_is_a_load_error(das_raw, data_root, model_engine):

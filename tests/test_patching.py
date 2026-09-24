@@ -70,7 +70,7 @@ def test_a_swap_lands_the_source_read_bit_for_bit(model, model_engine, minimal_p
                     write.at.positions,
                     v_cf,
                     write.mechanism,
-                    write.featurizer,
+                    None,  # a plain patch: no featurizer
                 ),
             )
             landed["after"] = ops.gather(
@@ -153,7 +153,7 @@ def test_a_write_touches_only_the_position_it_declares(model, model_engine, mini
                     write.at.positions,
                     v_cf,
                     write.mechanism,
-                    write.featurizer,
+                    None,  # a plain patch: no featurizer
                 ),
             )
             seen["patched_first"] = ops.gather(

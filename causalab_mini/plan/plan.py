@@ -62,7 +62,9 @@ class PlanError(ValueError):
 class ReadOp:
     name: str
     at: Selection  # where in the tensor: positions, and which features
-    featurizer: str = "identity"
+    #: The parameter set the value is featurized by, or None: the tensor as
+    #: it is.
+    featurizer: str | None = None
     #: "raw" is the tensor at the address. "logits" is that tensor pushed
     #: through the model's final norm and head — the logit lens: what the
     #: model would say if this layer were its last.
@@ -97,7 +99,9 @@ class WriteOp:
     #: that takes none.
     operand: str | float | None
     mechanism: str
-    featurizer: str
+    #: The parameter set the mechanism acts in the space of, or None: on the
+    #: tensor as it is.
+    featurizer: str | None
     #: The mechanism's numbers: a scale, a seed.
     params: dict[str, float] = field(default_factory=dict)
     #: Which coordinates of the featurizer's space the mechanism acts on.

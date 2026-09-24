@@ -161,7 +161,7 @@ def vocab(args: argparse.Namespace) -> dict[str, Any]:
                      f"{'  [heads]' if entry['heads'] else ''}"
                      f"{'  needs ' + entry['needs'] + ' attention' if entry['needs'] else ''}")
     lines.append(f"mechanisms:       {', '.join(payload['mechanisms'])}")
-    lines.append(f"featurizer kinds: {', '.join(payload['featurizer_kinds'])} (plus 'identity', never declared)")
+    lines.append(f"featurizer kinds: {', '.join(payload['featurizer_kinds'])}")
     lines.append("metric kinds:     " + ", ".join(f"{k}({', '.join(v)})" for k, v in payload["metric_kinds"].items()))
     forms = payload["position_forms"]
     lines.append("position forms:   exactly one cut: "

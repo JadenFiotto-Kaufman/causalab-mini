@@ -34,7 +34,7 @@ def test_das_cpu_reduction_parses_to_the_declarations_notes_describes():
     # One name at the read and at the write: that *is* the tying, and it is why
     # the two are one parameter set.
     assert doc.reads["v_cf"].featurizer == doc.writes["patch"].featurizer == "rot"
-    assert doc.reads["logits"].featurizer == "identity"
+    assert doc.reads["logits"].featurizer is None
     assert doc.train is not None
     assert doc.train.objective == ((1.0, "ce"),) and doc.train.params == ("rot",)
     assert (doc.train.lr, doc.train.weight_decay) == (0.001, 0.0)

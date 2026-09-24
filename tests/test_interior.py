@@ -164,7 +164,7 @@ def test_a_swap_at_the_interior_lands_bit_for_bit(model_engine, model, data_root
                     write.at.positions,
                     v_cf,
                     write.mechanism,
-                    write.featurizer,
+                    None,  # a plain patch: no featurizer
                     tap.address.seq_axis,
                 ),
             )
@@ -218,7 +218,7 @@ def test_only_the_declared_position_of_the_query_changes(model_engine, model, da
                     write.at.positions,
                     v_cf,
                     write.mechanism,
-                    write.featurizer,
+                    None,  # a plain patch: no featurizer
                     tap.address.seq_axis,
                 ),
             )

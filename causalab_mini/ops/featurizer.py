@@ -235,10 +235,10 @@ def pca(rows: torch.Tensor, k: int) -> torch.Tensor:
     return vt[:k].T.contiguous()
 
 
-#: The featurizer kinds a document may declare. Unlike `ops.FEATURIZERS` this is
-#: a table of *constructors*, not of instances: a subspace carries a trained
-#: parameter, so one exists per run and not one per process. Each takes the
-#: one tensor it is made of — a Cayley parameter, a basis.
+#: The featurizer kinds a document may declare: a table of *constructors*, not
+#: of instances, because a subspace carries a trained parameter, so one exists
+#: per run and not one per process. Each takes the one tensor it is made of — a
+#: Cayley parameter, a basis.
 KINDS: dict[str, Any] = {
     "subspace": Subspace,
     "pca": Basis,

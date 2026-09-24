@@ -11,10 +11,8 @@ and `ops.gather` without caring which file they live in.
 """
 
 from .intervene import (
-    FEATURIZERS,
     MECHANISMS,
     Featurizer,
-    Identity,
     Mechanism,
     add_scaled,
     applies,
@@ -30,10 +28,8 @@ from .intervene import (
 )
 
 __all__ = [
-    "FEATURIZERS",
     "MECHANISMS",
     "Featurizer",
-    "Identity",
     "Mechanism",
     "add_scaled",
     "applies",

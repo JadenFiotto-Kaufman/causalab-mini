@@ -215,9 +215,10 @@ class Read(Node):
     #: A site declared under `sites`, by name, or one written here in place.
     site: Name | Site
     pos: Position
-    #: `identity`, a declared featurizer, or `<fit>.<name>` — the one a fit
-    #: trains, which is how every read and write of it names it.
-    featurizer: str = "identity"
+    #: A declared featurizer, or `<fit>.<name>` — the one a fit trains,
+    #: which is how every read and write of it names it. None: the tensor
+    #: as it is.
+    featurizer: str | None = None
     #: `"logits"` projects a residual-stream read through the model's final
     #: norm and head. With a layer sweep and a `token_prob` metric that is
     #: the logit lens, as one document.
@@ -237,7 +238,7 @@ class Write(Node):
     #: name; a literal number (zero ablation is `0.0`); or nothing, for a
     #: mechanism that takes none.
     operand: str | float | None = None
-    featurizer: str = "identity"
+    featurizer: str | None = None
     #: Which coordinates of the featurizer's space the mechanism acts on —
     #: SAE latents, directions of a rotation. The others pass through, and
     #: so does whatever the featurizer does not explain (its error term).
@@ -753,7 +754,7 @@ class Spec(Node):
         for _, step in self.forwards():
             reads, writes = self.ops(step)
             for op in (*reads.values(), *writes.values()):
-                if op.featurizer != "identity":
+                if op.featurizer is not None:
                     at.setdefault(op.featurizer.rpartition(".")[2], set()).add(self.site(op.site)[1].spelling)
         for name in self.featurizers:
             _refuse(
@@ -915,7 +916,7 @@ def _call(
             # than a read — a parameter set, a cut over the decode — is one
             # site, or one step, and every layer is many
             _refuse(
-                read.featurizer == "identity",
+                read.featurizer is None,
                 f"{where}: {what}: a read at every layer takes no featurizer; one featurizer "
                 "is one parameter set at one site, and every layer is many sites",
             )
@@ -931,7 +932,7 @@ def _call(
                 f"and {component!r} is not the residual stream (one of {sorted(RESIDUAL_STREAM)})",
             )
             _refuse(
-                read.featurizer == "identity",
+                read.featurizer is None,
                 f"{where}: {what}: a featurized read cannot also be viewed as logits",
             )
         frame(what, read.pos)
@@ -1053,9 +1054,9 @@ def _operand(where: str, what: str, name: str, write: Write, visible: dict[str, 
     )
 
 
-def _featurizer(spec: Spec, where: str, ref: str, trainers: dict[str, str], fits: set[str]) -> None:
-    """A featurizer, as a read or a write names it: `identity`, a declared
-    one no fit trains, or `<fit>.<name>` of a fit that has run — or of the
+def _featurizer(spec: Spec, where: str, ref: str | None, trainers: dict[str, str], fits: set[str]) -> None:
+    """A featurizer, as a read or a write names it: none, a declared one no
+    fit trains, or `<fit>.<name>` of a fit that has run — or of the
     fit whose body this is, where it is the parameter being trained.
 
     One spelling for a trained parameter everywhere is what lets a fit's
@@ -1063,7 +1064,7 @@ def _featurizer(spec: Spec, where: str, ref: str, trainers: dict[str, str], fits
     parameter named before its fit has run would score untrained without
     complaint, so that is refused, with the fix.
     """
-    if ref == "identity":
+    if ref is None:
         return
     head, dot, tail = ref.partition(".")
     if not dot:

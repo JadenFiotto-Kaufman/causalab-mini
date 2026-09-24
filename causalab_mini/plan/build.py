@@ -82,7 +82,7 @@ def build_spec(spec: Spec, data_root: str | Path, engine: Any) -> Plan:
         engine,
     )
     # where each featurizer acts: the document refused one at two sites
-    at = {op.featurizer.rpartition(".")[2]: spec.site(op.site) for op in ops if op.featurizer != "identity"}
+    at = {op.featurizer.rpartition(".")[2]: spec.site(op.site) for op in ops if op.featurizer is not None}
     featurizers = _spec_featurizers(spec, at, sites, engine)
 
     loaded: dict[str, list[rows_module.Row]] = {}
@@ -181,7 +181,8 @@ def _lowered(spec: Spec, op: Any) -> Any:
     """A read or a write as `_forward` takes it: its site by the label its
     address is held under, and its featurizer by the parameter set's own
     name — `fit.rot` is `rot`."""
-    return op.model_copy(update={"site": spec.site(op.site)[0], "featurizer": op.featurizer.rpartition(".")[2]})
+    featurizer = None if op.featurizer is None else op.featurizer.rpartition(".")[2]
+    return op.model_copy(update={"site": spec.site(op.site)[0], "featurizer": featurizer})
 
 
 def _spec_save(
@@ -323,7 +324,7 @@ def _spec_featurizers(spec: Spec, at: dict[str, tuple[str, Any]], sites: _Sites,
         for name, write in spec.ops(step)[1].items():
             if write.features is None:
                 continue
-            base = write.featurizer.rpartition(".")[2]
+            base = None if write.featurizer is None else write.featurizer.rpartition(".")[2]
             k = spaces[base] if base in spaces else engine.width(sites[0][spec.site(write.site)[0]])
             if len(set(write.features)) != len(write.features) or not 0 <= min(write.features) <= max(write.features) < k:
                 raise PlanError(

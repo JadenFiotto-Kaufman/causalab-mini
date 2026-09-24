@@ -24,7 +24,6 @@ from causalab_mini.engine import HooksEngine, NNterpEngine, steps
 from causalab_mini.engine.engines.hooks import HooksEngineError
 from causalab_mini.engine.engines.hooks import engine as hooks
 from causalab_mini.engine.engines.hooks.loading import standardized
-from causalab_mini.ops import intervene
 from causalab_mini.plan import ReadOp, document
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
@@ -124,9 +123,8 @@ def test_a_swap_lands_the_source_read_bit_for_bit(hooks_engine, minimal_raw, dat
     )
 
     values: dict[str, torch.Tensor] = {}
-    featurizers = dict(intervene.FEATURIZERS)
-    hooks_engine.forward(source, values, featurizers)
-    hooks_engine.forward(watched, values, featurizers)
+    hooks_engine.forward(source, values, {})
+    hooks_engine.forward(watched, values, {})
 
     assert values["landed"].shape == (4, 1, hooks_engine.model.config.hidden_size)
     assert torch.equal(values["landed"], values["v_cf"])
@@ -141,7 +139,7 @@ def test_a_forward_leaves_no_hook_behind(hooks_engine, minimal_raw, data_root):
     layer = hooks.resolve(hooks_engine.locate("block_output", 0), standardized(hooks_engine.model))
 
     before = len(layer._forward_hooks)
-    hooks_engine.forward(source, {}, dict(intervene.FEATURIZERS))
+    hooks_engine.forward(source, {}, {})
     assert len(layer._forward_hooks) == before
 
 

@@ -144,10 +144,10 @@ def apply_interventions(
     """One walk over the addresses of one forward, in forward order.
 
     `values` holds the operands this call's writes take, by name — each
-    produced by an earlier step — and receives what it reads. A read's
-    featurizer is applied here too — `v_cf` is `Qᵀx`, not `x` — and it is the
+    produced by an earlier step — and receives what it reads. A read that
+    names a featurizer is featurized here — `v_cf` is `Qᵀx`, not `x` — by the
     same object the write's `inverse` will use, which is what makes one
-    featurizer name one parameter set.
+    featurizer name one parameter set; a read that names none is the tensor.
 
     `step` is None for a plain forward, and the decode step inside a
     generate trace. A tap applies when its frame is this step: the prompt
@@ -165,7 +165,7 @@ def apply_interventions(
                 intervene.at_step(write_op.at, read(model, tap.address), tap.address.seq_axis, tap.step, step),
                 intervene.resolve_operand(values, write_op.operand),
                 write_op.mechanism,
-                featurizers[write_op.featurizer],
+                None if write_op.featurizer is None else featurizers[write_op.featurizer],
                 tap.address.seq_axis,
                 write_op.params,
                 original,
@@ -188,8 +188,10 @@ def apply_interventions(
                 gathered = intervene.softcap(
                     model.lm_head(model.ln_final(gathered)), softcapping(model)
                 )
-            with intervene.exact(gathered):
-                values[read_op.name] = featurizers[read_op.featurizer].featurize(gathered)[0].clone()
+            if read_op.featurizer is not None:
+                with intervene.exact(gathered):
+                    gathered = featurizers[read_op.featurizer].featurize(gathered)[0]
+            values[read_op.name] = gathered.clone()
 
 
 def softcapping(model: Any) -> float | None:

@@ -67,10 +67,6 @@ PARAMETRIZATIONS = ("cayley",)
 OPTIMIZERS = ("adamw",)
 EARLY_STOP_MODES = ("max",)
 
-#: `identity` is what a read or a write with no `featurizer` key gets. It is
-#: never declared, the way `original` is never declared.
-IDENTITY = "identity"
-
 # A metric kind's operands, in the order metrics.compute() takes them. The
 # values are *column names*: the answer is per row, so the document names a
 # column and the table carries the string.
@@ -107,12 +103,12 @@ def _check(condition: object, message: str) -> None:
         raise DocumentError(message)
 
 
-def _featurizer(raw: Json, where: str) -> str:
-    """The one featurizer a read or a write names. A *list* is a chain, which is
-    real protocol surface and is not implemented."""
-    name = raw.get("featurizer", IDENTITY)
+def _featurizer(raw: Json, where: str) -> str | None:
+    """The one featurizer a read or a write names, or None for none. A *list*
+    is a chain, which is real protocol surface and is not implemented."""
+    name = raw.get("featurizer")
     _check(
-        isinstance(name, str),
+        name is None or isinstance(name, str),
         f"{where}: a featurizer chain is not implemented; name exactly one",
     )
     return name
@@ -255,7 +251,7 @@ class ReadSpec:
     pos: Where
     model: str  # "original" or an intervened model name
     input: str  # "base" | "counterfactual"
-    featurizer: str = IDENTITY
+    featurizer: str | None = None
 
     def __post_init__(self) -> None:
         _check(self.input in INPUTS, f"read input must be one of {INPUTS}")
@@ -282,7 +278,7 @@ class WriteSpec:
     pos: Where
     mechanism: str  # "swap"
     operand: str  # a read name
-    featurizer: str = IDENTITY
+    featurizer: str | None = None
 
     def __post_init__(self) -> None:
         _check(
@@ -684,13 +680,10 @@ def _cross_check(
     # its width `d` is derived from. One name at several sites would be one
     # rotation over two widths.
     used_at: dict[str, set[str]] = {}
-    for name, read in reads.items():
-        used_at.setdefault(read.featurizer, set()).add(read.site)
-    for name, write in writes.items():
-        used_at.setdefault(write.featurizer, set()).add(write.site)
+    for op in (*reads.values(), *writes.values()):
+        if op.featurizer is not None:
+            used_at.setdefault(op.featurizer, set()).add(op.site)
     for name, at in used_at.items():
-        if name == IDENTITY:
-            continue
         _check(name in featurizers, f"undeclared featurizer {name!r}")
         _check(
             len(at) == 1,
@@ -707,7 +700,7 @@ def _cross_check(
             f"metric {name!r}: a token-space kind binds to a read of {list(TOKEN_SPACE)}",
         )
         _check(
-            reads[metric.of].featurizer == IDENTITY,
+            reads[metric.of].featurizer is None,
             f"metric {name!r}: a token-space kind binds to a *plain* token-space read, "
             "with no featurizer",
         )

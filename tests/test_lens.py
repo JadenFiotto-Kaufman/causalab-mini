@@ -52,7 +52,7 @@ def test_the_lens_is_one_document_with_one_point_per_layer(lens_raw, data_root, 
     built = plan.build_request(lens_raw, data_root, model_engine)
     assert list(built.steps) == ["layers=0", "layers=1"]  # a one-layer band sweeps as its layer
     text = explain(built)
-    assert "at block_output[0] pos={index:-1} via 'identity' as logits" in text
+    assert "at block_output[0] pos={index:-1} as logits" in text
     assert "at block_output[1]" in text
 
     executed = model_engine.execute(built)

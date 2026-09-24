@@ -81,7 +81,7 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
                 args += [f"{k}={v}" for k, v in write.params.items()]
                 out.append(
                     f"{pad}    write {write.name!r} at {where} pos={_pos(write.at)}{_features(write.at)} "
-                    f"{write.mechanism}({', '.join(args)}) via {write.featurizer!r}"
+                    f"{write.mechanism}({', '.join(args)}){_via(write.featurizer)}"
                     f"{'' if write.features is None else f' on its features {list(write.features)}'}"
                 )
             for read in tap.reads:
@@ -97,7 +97,7 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
                 steps = f" over {step.max_new_tokens} steps" if read.stack and isinstance(step, Generate) else ""
                 view = "" if read.view == "raw" else f" as {read.view}"
                 out.append(
-                    f"{pad}    read  {label!r} at {at}{steps} pos={_pos(read.at)}{_features(read.at)} via {read.featurizer!r}{view}"
+                    f"{pad}    read  {label!r} at {at}{steps} pos={_pos(read.at)}{_features(read.at)}{_via(read.featurizer)}{view}"
                 )
     elif isinstance(step, Metric):
         rows = "" if step.rows is None else f" rows={list(step.rows)}"
@@ -105,3 +105,8 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
     elif isinstance(step, Reduce):
         out.append(f"{pad}{name}: reduce {step.reduce}{'' if step.k is None else step.k}({step.of}){tail}")
     return out
+
+
+def _via(featurizer: str | None) -> str:
+    """The featurizer an op acts through, when it has one."""
+    return "" if featurizer is None else f" via {featurizer!r}"

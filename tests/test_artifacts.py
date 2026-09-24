@@ -95,7 +95,6 @@ def test_pca_is_the_right_singular_vectors_of_the_centered_rows():
     centered = rows - rows.mean(0, keepdim=True)
     _, s, vt = torch.linalg.svd(centered, full_matrices=False)
     assert torch.allclose(basis.abs(), vt[:2].T.abs(), atol=1e-5)  # up to sign
-    assert isinstance(ops.FEATURIZERS["identity"], ops.Featurizer)
     assert isinstance(featurizer.Basis(basis), ops.Featurizer)
 
 
