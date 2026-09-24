@@ -12,25 +12,24 @@ import pathlib
 
 import pytest
 import torch
-from conftest import of_kind
+from conftest import model_block, of_kind
 
 from causalab_mini import ops, plan
 from causalab_mini.data import tokens
 
 from causalab_mini.address import Address
 from causalab_mini.engine import steps
-from causalab_mini.plan import document
 from causalab_mini.engine import NNterpEngine
 from causalab_mini.engine.engines.nnterp import engine as nnterp
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-DOCUMENT = REPO / "documents" / "gpt2_cpu.json"
+DOCUMENT = REPO / "documents" / "v2" / "gpt2_reach.json"
 
 
 @pytest.fixture(scope="session")
 def gpt2_engine():
     """An nnterp engine holding the tiny random GPT-2 the document pins."""
-    return NNterpEngine.load(document.Document.load(DOCUMENT).model, device_map="cpu")
+    return NNterpEngine.load(model_block(DOCUMENT), device_map="cpu")
 
 
 @pytest.fixture(scope="session")
@@ -53,22 +52,19 @@ def _at(raw, component, layer):
     site = {"component": component}
     if layer is not None:
         site["layers"] = [layer]
-    raw["method"]["sites"]["target"] = site
+    raw["sites"]["target"] = site
     return raw
 
 
 def _no_write(raw):
     raw = copy.deepcopy(raw)
-    del raw["method"]["reads"]["v_cf"], raw["method"]["writes"], raw["method"]["intervened_models"]
-    raw["method"]["reads"]["logits"]["model"] = "original"
-    for entry in raw["method"]["save"]:
-        entry["model"] = "original"
+    del raw["steps"]["patched"]["interventions"]
     return raw
 
 
 def _identity_write(raw):
     raw = copy.deepcopy(raw)
-    raw["method"]["reads"]["v_cf"]["input"] = "base"
+    raw["steps"]["counterfactual"]["field"] = "input"
     return raw
 
 
@@ -136,7 +132,7 @@ def test_a_swap_at_the_head_makes_the_patched_run_score_the_counterfactual(gpt2_
 
     # The same run with no write, over the counterfactual prompts as its base.
     counterfactual = _no_write(gpt2_raw)
-    counterfactual["data"]["base"]["field"] = counterfactual["data"]["counterfactual"]["field"]
+    counterfactual["steps"]["patched"]["field"] = counterfactual["steps"]["counterfactual"]["field"]
     reference = gpt2_engine.execute(_build(counterfactual, data_root, gpt2_engine))
 
     assert torch.equal(swapped.result("logit_diff"), reference.result("logit_diff"))
@@ -181,7 +177,7 @@ def test_the_shipped_weekdays_answers_are_not_single_tokens_here(gpt2_engine, gp
     rows."""
     assert gpt2.tokenizer.encode(" Friday", add_special_tokens=False) == [304, 82, 271, 288]
     with pytest.raises(tokens.TokenError, match="is 4 tokens"):
-        plan.build(document.Document.from_json(minimal_raw), data_root, gpt2_engine)
+        plan.build_request(minimal_raw, data_root, gpt2_engine)
 
 
 def test_token_form_is_load_bearing_on_this_tokenizer_and_inert_on_the_llamas(gpt2, model):

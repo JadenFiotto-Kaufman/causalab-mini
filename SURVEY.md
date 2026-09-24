@@ -121,7 +121,7 @@ stand.
 | 8 | ~~**The nine module-boundary components**~~ | 1 | **DONE.** Eight added (`embeddings`, `block_input`, `attention_output`, `mlp_input`, `mlp_output`, `ln_final`, plus the interiors `attention_key` and `attention_z`); eleven then, **eighteen now**: `input_ids` (read-only), `attention_input_norm`, `attention_premix`, `block_mid`, `mlp_input_norm`, `mlp_activation` and `mlp_neuron_output` followed as module boundaries of named children, with no `.source` and no family column — FINDINGS §13. `attention_scores`/`attention_probs` (eager attention, nested `.source`) and pre-RoPE q/k (GPT-2's fused `c_attn`) are still left. **`attention_scores` and `attention_probs` landed** as a nested operation under eager attention — twenty components; FINDINGS §17. |
 | 9 | **Literal scalar operands** (`{"swap": 0.0}`) | 1–2 | Zero ablation, the cheapest baseline there is, is a type widening on `WriteOp.operand`. |
 | 10 | **`add_scaled`, `lerp`, `clamp`, `gaussian`** | 1–2 | One function each behind the existing `Mechanism` protocol. (`renormalize` is cost 3 — it needs the ordering rule.) |
-| 11 | ~~Authorable `subspace.seed`~~ ✓, `pca` kind, `early_stop.mode: "min"` | 1–2 | The seed is **DONE** and bought `random_subspace_cpu.json`. `pca` and the minimizing objective remain. |
+| 11 | ~~Authorable `subspace.seed`~~ ✓, `pca` kind, `early_stop.mode: "min"` | 1–2 | The seed is **DONE** and bought `random_subspace.json`. `pca` and the minimizing objective remain. |
 | 12 | ~~**Per-head feature slice on an address**~~ — **DONE**, as `heads` on a *site* (FINDINGS §17) | 2 | One field plus a slice in `gather`/`scatter`. Head-level work is a large share of real interpretability. |
 | 13 | **Sweep `{"range": …}` and multi-field cross products** | 1–2 | The two commonest sweep spellings; the plan tree already carries the results. |
 | 14 | **Refuse a non-differentiable metric in an objective** | 1 | Mini will happily put `match` in a loss and train on a zero gradient. |
@@ -227,8 +227,8 @@ exactly the shape `data/rows.py` reads, so data is never the blocker; 19 of 24
 name Llama-3.1-8B and 4 name Qwen3.6-35B-A3B, which is a practical blocker on
 this CPU box, not a design one.
 
-> **Three of these are now ported** — `multi_position_patch_cpu.json`,
-> `hydra_effect_cpu.json` and `random_subspace_cpu.json` — with the
+> **Three of these are now ported** — `documents/v2/multi_position_patch.json`,
+> `hydra_effect.json` and `random_subspace.json` — with the
 > `token_logit` metric and an authorable featurizer seed that the latter two
 > needed. `interchange` and `weekdays_8b_interchange` were deliberately not:
 > they are `minimal_cpu` at another layer, so they would add a file and no

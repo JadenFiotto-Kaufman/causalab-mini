@@ -2,8 +2,10 @@
 
 Two frozen descriptions and one compiler between them.
 
-* `document.py` is what was *written* — the protocol JSON, validated, with
-  every feature this slice does not run refused by name at load.
+* `spec.py` is what was *written* — the document, validated: its
+  `steps` are what runs, in order, one plan step each, and a step's name is
+  how everything after it reaches what it produced. Everything it does not
+  run is refused by name.
 * `plan.py` is what will *run* — a tree of steps, strings and integers, with
   every decision already taken.
 * `build.py` is the only thing that sits between them, and it is the only place
@@ -13,17 +15,12 @@ Two frozen descriptions and one compiler between them.
   per point.
 * `sweep.py` does that lowering, on the raw JSON, before anything is compiled.
 * `write.py` puts what a run produced on disk.
-* `spec.py` is the steps-first format: the document's `steps` are what
-  runs, in order, one plan step each, and a step's name is how everything
-  after it reaches what it produced. It and the protocol's compile through
-  the same helpers, so they cannot drift into producing different plans.
 
 Nothing in here knows how to execute anything: that is an engine's job, and a
 plan that knew would only work on one engine.
 """
 
-from .build import build, build_request, build_spec
-from .document import Document, DocumentError
+from .build import build_request, build_spec
 from .plan import (
     FeaturizerOp,
     Featurizers,
@@ -45,8 +42,6 @@ from .plan import (
 )
 
 __all__ = [
-    "Document",
-    "DocumentError",
     "FeaturizerOp",
     "Featurizers",
     "Fit",
@@ -61,7 +56,6 @@ __all__ = [
     "Step",
     "Tap",
     "WriteOp",
-    "build",
     "build_request",
     "build_spec",
     "children",

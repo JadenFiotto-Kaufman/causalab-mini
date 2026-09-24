@@ -15,7 +15,7 @@ from causalab_mini import cli
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 DAS = str(REPO / "documents" / "v2" / "das.json")
-PATCHING = str(REPO / "documents" / "minimal_cpu.json")
+PATCHING = str(REPO / "documents" / "v2" / "patching.json")
 DATA = str(REPO / "documents" / "data")
 TINY = "hf-internal-testing/tiny-random-LlamaForCausalLM"
 REVISION = "9fb191250dd56d0ba7ec9785a025ed29c03d5998"
@@ -104,9 +104,19 @@ def test_data_describes_a_ref(capsys):
     assert out["sample"][0]["input"].startswith("If today is")
 
 
-def test_validate_reads_both_formats(capsys):
-    assert _json(capsys, ["validate", DAS])["format"] == "steps-first"
-    assert _json(capsys, ["validate", PATCHING])["format"] == "protocol"
+def test_validate_says_a_document_is_valid(capsys):
+    out = _json(capsys, ["validate", DAS])
+    assert out["ok"] is True and "fit" in out["steps"]
+
+
+def test_a_protocol_document_is_refused_by_its_key(tmp_path, capsys):
+    """The protocol's `method` shape has no reader any more: a document in it
+    is refused as a document, naming the key it does not have."""
+    old = {"header": {"protocol_version": "3"}, "model": json.loads(pathlib.Path(DAS).read_text())["model"], "method": {}}
+    path = tmp_path / "old.json"
+    path.write_text(json.dumps(old))
+    assert cli.main(["validate", str(path), "--data-root", DATA]) == 1
+    assert "method" in capsys.readouterr().err
 
 
 def test_validate_refuses_with_a_path(tmp_path, capsys):

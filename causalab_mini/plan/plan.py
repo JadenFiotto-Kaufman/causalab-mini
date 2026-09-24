@@ -239,7 +239,7 @@ class Forward(Step):
     reads is published under each read's name; what the call itself returns
     — its logits — under the step's own."""
 
-    #: Which rows these are: the dataset they came from, or a protocol role.
+    #: Which rows these are: the dataset they came from.
     input: str
     input_ids: TokenRows
     attention_mask: TokenRows

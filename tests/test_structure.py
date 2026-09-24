@@ -15,7 +15,7 @@ Two properties are pinned:
 
 **Rule 2 is an architectural rule, not a size one.** The payload argument —
 "a module the block names ships whole" — is true of *instances* (`self`, a
-`Document`, a tokenizer object: cloudpickle carries those by value whatever
+a `Spec`, a tokenizer object: cloudpickle carries those by value whatever
 a registry says) and about to stop being true of modules, which resolve by
 import on a server that has the package installed. What the module blocklist
 protects either way is HANDOFF rules 5 and 9: the block never tokenizes off

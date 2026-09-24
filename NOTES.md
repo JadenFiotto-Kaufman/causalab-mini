@@ -1,5 +1,13 @@
 # causalab-mini — ground truth for the design
 
+> The documents this file reads were in causalab's protocol format, which
+> mini no longer reads: they and their reader are gone from the repository.
+> What they say is still the ground truth this reading records, and each
+> has a steps-first twin in `documents/v2/` pinned to the same numbers —
+> `minimal_cpu.json` is `patching.json`, `das_cpu_reduction.json` is
+> `das.json`, `attention_query_cpu.json` is `attention_query.json`,
+> `gpt2_cpu.json` is `gpt2_reach.json`.
+
 This file is the reading I did of causalab before any design exists. It walks
 the three documents copied into `documents/` field by field, states exactly
 what a runtime must do about each field, and lists — as explicitly as it can —

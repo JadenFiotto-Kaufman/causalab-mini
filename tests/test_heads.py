@@ -18,7 +18,7 @@ import pathlib
 import pytest
 import torch
 from pydantic import ValidationError
-from conftest import of_kind
+from conftest import model_block, of_kind
 
 from causalab_mini import plan
 from causalab_mini.address import AddressError
@@ -236,9 +236,8 @@ def test_the_pattern_survives_being_shipped(data_root, eager_engine):
 
 
 def test_the_pattern_is_at_the_same_address_on_gpt2(data_root):
-    from causalab_mini.plan import document
-
-    spec = document.Document.load(REPO / "documents" / "gpt2_cpu.json").model
+    
+    spec = model_block(REPO / "documents" / "v2" / "gpt2_reach.json")
     engine = NNterpEngine.load(spec, device_map="cpu", attn_implementation="eager")
     located = engine.locate("attention_probs", 0)
     # nnterp's row, which is one name over five per-family overrides, a sink
@@ -246,7 +245,7 @@ def test_the_pattern_is_at_the_same_address_on_gpt2(data_root):
     assert located.accessor == "attention_probabilities"
     assert located.inside, "it is an operation inside the attention, not a module boundary"
     llama = NNterpEngine.load(
-        document.Document.load(REPO / "documents" / "minimal_cpu.json").model,
+        model_block(REPO / "documents" / "v2" / "patching.json"),
         device_map="cpu", attn_implementation="eager",
     )
     other = llama.locate("attention_probs", 0)
@@ -282,9 +281,8 @@ def test_the_mlps_width_is_the_down_projections_input_on_both_families(model_eng
     None to mean four times hidden. Checked against the module the activation
     feeds rather than the config it was read from — which is what caught the
     tiny GPT-2 carrying a stray `intermediate_size: 37` beside 128-wide MLPs."""
-    from causalab_mini.plan import document
-
-    gpt2 = NNterpEngine.load(document.Document.load(REPO / "documents" / "gpt2_cpu.json").model, dispatch=False)
+    
+    gpt2 = NNterpEngine.load(model_block(REPO / "documents" / "v2" / "gpt2_reach.json"), dispatch=False)
     assert gpt2.width(gpt2.locate("mlp_activation", 0)) == gpt2.model.mlps[0].c_proj.weight.shape[0] == 128
     llama = model_engine.model.mlps[0].down_proj.in_features
     assert model_engine.width(model_engine.locate("mlp_neuron_output", 0)) == llama

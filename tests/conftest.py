@@ -6,8 +6,15 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 DATA_ROOT = REPO / "documents" / "data"
-MINIMAL = REPO / "documents" / "minimal_cpu.json"
-DAS = REPO / "documents" / "das_cpu_reduction.json"
+MINIMAL = REPO / "documents" / "v2" / "patching.json"
+DAS = REPO / "documents" / "v2" / "das.json"
+
+
+def model_block(path):
+    """A document's model block, validated — what an engine loads."""
+    from causalab_mini.plan.spec import Model
+
+    return Model.model_validate(json.loads(Path(path).read_text())["model"])
 
 
 @pytest.fixture(scope="session")
@@ -33,9 +40,8 @@ def model_engine():
     CPU in fp32. The engine loads the model: that is part of its contract, and
     a second engine loads it differently."""
     from causalab_mini.engine import NNterpEngine
-    from causalab_mini.plan import document
 
-    return NNterpEngine.load(document.Document.load(MINIMAL).model, device_map="cpu")
+    return NNterpEngine.load(model_block(MINIMAL), device_map="cpu")
 
 
 @pytest.fixture(scope="session")

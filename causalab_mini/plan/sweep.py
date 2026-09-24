@@ -10,7 +10,7 @@ A sweep is **lowered on the client, before anything is compiled**: the wrapper
 is replaced by each of its values in turn, and each resulting document is
 compiled on its own. So a point is an ordinary document in every way — its
 own addresses, its own tokenization, its own digest — and nothing downstream
-of `build` knows a sweep ever happened. That is why the engine did not change
+of `build_request` knows a sweep ever happened. That is why the engine did not change
 to support this.
 
 Several swept fields are their **cross product**, one point per combination,
@@ -129,9 +129,8 @@ def _values(spelled: Any, path: Path) -> list[Any]:
 def wrappers(node: Any, path: Path = ()) -> list[Path]:
     """Every `{"sweep": …}` in the document, by path, in reading order.
 
-    Both front ends call this to refuse a document that still has one: a
-    `Document` and a `Spec` are each one point, so a wrapper reaching either
-    of them has not been lowered.
+    The document calls this to refuse one that still has one: a `Spec` is one
+    point, so a wrapper reaching it has not been lowered.
     """
     if isinstance(node, dict):
         if "sweep" in node and set(node) <= {"sweep", "as"}:

@@ -5,11 +5,10 @@ the tokenizer, the rows on disk, the model's layer count and hidden width, the
 shuffle a seed defines — is decided here, once, on the client. What comes out
 the other side is `plan.Plan`: strings and integers.
 
-Each front end resolves every site to an `Address`, loads the rows, derives
+The compiler resolves every site to an `Address`, loads the rows, derives
 each featurizer's width and compiles its document's steps — once for the
 scored run, and once per training update and evaluation of a fit — and hands
-every model call to `_forward` in one shape, so what a call is cannot differ
-between them. `build_request` is the entry point, and tells them apart.
+every model call to `_forward`. `build_request` is the entry point.
 """
 
 from __future__ import annotations
@@ -30,7 +29,6 @@ from ..ops import locate as locate_module
 from ..ops import metrics as metrics_module
 from . import sweep
 from ..shapes import Selection, TokenRows, Where
-from .document import Document, SaveSpec
 from .plan import (
     FeaturizerOp,
     Featurizers,
@@ -64,7 +62,7 @@ _Sites = tuple[dict[str, Any], dict[str, Any], dict[str, int]]
 
 
 def build_spec(spec: Spec, data_root: str | Path, engine: Any) -> Plan:
-    """Compile a steps-first document (`spec.py`) into a plan.
+    """Compile a document (`spec.py`) into a plan.
 
     The document's steps are the plan's, one for one: a forward or a
     generate is one model call, a metric and a reduce are their own steps,
@@ -498,144 +496,26 @@ def _load_featurizer(name: str, one: Any, spec: Any, label: str, site: Any, d: i
 
 
 def build_request(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Plan:
-    """Compile a document — either format, whatever number of experiments.
+    """Compile a document, whatever number of experiments it holds.
 
     A plain document compiles to one plan. A document with `{"sweep": […]}`
     wrappers is several **points**, and compiles to a root plan holding one
     child per point, named for the values it took — which is also the
     directory its results are written to. Nothing else in the project knows
     the difference: a point is an ordinary plan, and the engine that runs the
-    root is walking the same tree it always walks.
-
-    This is the one entry point. It tells the two formats apart by shape (a
-    steps-first document has `steps`), lowers sweeps on the raw JSON — which
-    neither format has to know about — and hands each point to its compiler.
+    root is walking the same tree it always walks. Sweeps are lowered on the
+    raw JSON, before a point is validated, so the document's model never
+    sees one.
     """
-    compile_point = _compile_spec if "steps" in raw else _compile_document
-    points = sweep.points(raw)
-    if len(points) == 1 and not points[0][0]:
-        return replace(compile_point(raw, data_root, engine), source=raw)
-    return Plan(
-        steps={
-            label: replace(compile_point(point, data_root, engine), source=point)
-            for label, point in points
-        },
-        source=raw,
-    )
-
-
-def _compile_document(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Plan:
-    return build(Document.from_json(raw), data_root, engine)
-
-
-def _compile_spec(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Plan:
     from .spec import Spec  # here, not at the top: spec.py is the front end and this is below it
 
-    return build_spec(Spec.model_validate(raw), data_root, engine)
+    def compile_point(point: dict[str, Any]) -> Plan:
+        return replace(build_spec(Spec.model_validate(point), data_root, engine), source=point)
 
-
-def build(document: Document, data_root: str | Path, engine: Any) -> Plan:
-    """Compile a document into a plan. Takes the **engine**, because four
-    things have to be decided against the loaded model here on the client: the
-    tokenizer resolves prompts and answer columns, `num_layers` bounds the
-    layer band, every site is resolved to an address, and every featurizer's
-    width comes from the site it acts at. A document that cannot be compiled
-    should fail here, not with an IndexError inside someone else's process."""
-    tokenizer = engine.tokenizer
-    for name, site in document.sites.items():
-        if site.layer is not None and not 0 <= site.layer < engine.num_layers:
-            raise PlanError(
-                f"site {name!r}: layer {site.layer} is outside the model's "
-                f"{engine.num_layers} layers"
-            )
-    # One address per site, resolved by the engine now: where a place is,
-    # and whether it is there at all, are facts of the loaded checkpoint, so
-    # a document that cannot be addressed is a load error here, on the client.
-    addresses = {
-        name: engine.locate(site.component, site.layer)
-        for name, site in document.sites.items()
-    }
-    rows = {role: rows_module.load(data_root, spec.dataset) for role, spec in document.roles.items()}
-    counts = {role: len(table) for role, table in rows.items()}
-    if len(set(counts.values())) != 1:
-        raise PlanError(f"roles must have the same row count, got {counts}")
-
-    featurizers = tuple(
-        _featurizer(name, document, addresses, engine) for name in document.featurizers
-    )
-    widths = {one.name: one.d for one in featurizers}
-
-    # The steps, in the order they run. A step that has nothing to do is not
-    # there at all: a document with no featurizers has no `featurizers` step,
-    # rather than one holding an empty tuple.
-    # Each save goes on the step that produces its value: a metric on the
-    # metric, a fitted parameter on the fit that trained it. The
-    # protocol's `save` is one flat list, so this is where the flat list
-    # becomes a tree again.
-    saves = [_save(entry, document, rows["base"], widths) for entry in document.saves]
-    weight_names = {one.name for one in featurizers}
-    metric_saves = tuple(save for save in saves if save.value not in weight_names)
-    weight_saves = tuple(save for save in saves if save.value in weight_names)
-
-    steps: dict[str, Step] = {}
-    if featurizers:
-        steps["featurizers"] = Featurizers(specs=featurizers)
-    fit = _fit(document, data_root, rows, addresses, tokenizer)
-    if fit is not None:
-        # what it trained is among its own results, and saved from there
-        steps["fit"] = replace(fit, saves=weight_saves)
-    scored = _steps_over(document, rows, addresses, tokenizer)
-    for save in metric_saves:
-        scored[save.value] = replace(scored[save.value], saves=(*scored[save.value].saves, save))
-    for key, one in scored.items():
-        if key in steps:
-            raise PlanError(f"{key!r} names a model or a metric and a step of the plan; rename one")
-        steps[key] = one
-    return Plan(steps=steps)
-
-
-def _steps_over(
-    document: Document,
-    rows: dict[str, list[rows_module.Row]],
-    addresses: dict[str, Address],
-    tokenizer: Any,
-) -> dict[str, Step]:
-    """A protocol document's forwards and metrics over one set of rows, as
-    the steps that run them, by name: each forward under its model's, each
-    metric under its own. The scored run, a training update and an
-    evaluation are all these steps, over different rows."""
-    batches = {
-        role: _batch(tokenizer, f"role {role!r}", document.roles[role].field, table) for role, table in rows.items()
-    }
-
-    def forward(name: str, role: str) -> Forward:
-        model = document.intervened_models.get(name)
-        return _forward(
-            role,
-            document.roles[role].field,
-            writes=[(one, document.writes[one], document.writes[one].operand) for one in (model.writes if model else ())],
-            reads=[(one, spec) for one, spec in document.reads.items() if (spec.model, spec.input) == (name, role)],
-            batch=batches[role],
-            rows=rows[role],
-            # the protocol's sites name no heads or units, and it does not decode
-            sites=(addresses, {}, {}),
-            tokenizer=tokenizer,
-        )
-
-    order = _schedule(document)
-    # a forward is its model's; a model run over both roles is one per role
-    twice = {name for name, _ in order if sum(1 for one, _ in order if one == name) > 1}
-    steps: dict[str, Step] = {
-        (f"{name}.{role}" if name in twice else name): forward(name, role) for name, role in order
-    }
-    forwards = tuple(one for one in steps.values() if isinstance(one, Forward))
-    _check_layouts(forwards)
-    base_rows = rows["base"]  # base is the schema of the pair: metrics read its columns
-    for name, spec in document.metrics.items():
-        if name in steps:
-            raise PlanError(f"metric {name!r} shares its name with a model; rename one")
-        steps[name] = _metric(name, spec.kind, spec, base_rows, tokenizer, spec.of, forwards)
-    return steps
+    points = sweep.points(raw)
+    if len(points) == 1 and not points[0][0]:
+        return compile_point(raw)
+    return Plan(steps={label: compile_point(point) for label, point in points}, source=raw)
 
 
 def _batch(tokenizer: Any, what: str, field: str, table: list[rows_module.Row]) -> _Batch:
@@ -703,133 +583,6 @@ def _ids(spec: Any, base_rows: list[rows_module.Row], keep: tuple[bool, ...], to
             if kept and value is not None
         )
         for column in spec.columns
-    )
-
-
-def _featurizer(
-    name: str, document: Document, addresses: dict[str, Address], engine: Any
-) -> FeaturizerOp:
-    """One declared featurizer, with its width filled in from the model.
-
-    `k` is the only width a document authors. `d` is the site's, and a `k` wider
-    than the site it acts in is a load error here rather than a shape error
-    inside someone else's process.
-    """
-    spec = document.featurizers[name]
-    at = {read.site for read in document.reads.values() if read.featurizer == name}
-    at |= {write.site for write in document.writes.values() if write.featurizer == name}
-    (site,) = at  # the document refuses one name at two sites
-    d = engine.width(addresses[site])
-    if not 0 < spec.k <= d:
-        raise PlanError(
-            f"featurizer {name!r}: k={spec.k} is not a subspace of the {d}-wide "
-            f"site {site!r}"
-        )
-    return FeaturizerOp(
-        name=name,
-        kind=spec.kind,
-        k=spec.k,
-        d=d,
-        parametrization=spec.parametrization,
-        # A subspace with no seed of its own takes the fit's, or 0 when there
-        # is no fit at all — which is what makes an untrained subspace a
-        # reproducible random rank-k basis. Authoring one is how a document
-        # sweeps the draw.
-        seed=(
-            spec.seed
-            if spec.seed is not None
-            else (document.train.seed if document.train is not None else 0)
-        ),
-        trained=document.train is not None and name in document.train.params,
-    )
-
-
-def _save(
-    entry: SaveSpec, document: Document, base_rows: list[rows_module.Row], widths: dict[str, int]
-) -> SaveFile:
-    if entry.site is not None:
-        spec = document.featurizers[entry.value]
-        return SaveFile(
-            file_path=entry.file_path,
-            value=entry.value,
-            produced_by=document.digest,
-            # "A rotation fitted against bf16 weights is not the same artifact as
-            # one fitted against fp32 weights, and the stamp is what says so."
-            identity={
-                "produced_by": document.digest,
-                "model_key": document.model.key,
-                "model_revision": document.model.revision,
-                "model_dtype": document.model.dtype,
-                "site": entry.site,
-                "component": document.sites[entry.site].component,
-                "layer": str(document.sites[entry.site].layer),
-                "k": str(spec.k),
-                "d": str(widths[entry.value]),
-                "parametrization": spec.parametrization,
-                "featurizer_dtype": "fp32",
-                "trained_on": document.roles["base"].dataset,
-                "trained_on_digest": rows_module.digest(base_rows),
-                "engine": "causalab-mini",
-            },
-        )
-    kind = document.metrics[entry.value].kind
-    return SaveFile(
-        file_path=entry.file_path,
-        value=entry.value,
-        example_ids=rows_module.example_ids(base_rows),
-        eligible=_eligible(base_rows, document.metrics[entry.value]),
-        of=document.metrics[entry.value].of,
-        unit=metrics_module.UNITS[kind][0],
-        estimand_version=metrics_module.UNITS[kind][1],
-        produced_by=document.digest,
-    )
-
-
-def _fit(
-    document: Document,
-    data_root: str | Path,
-    rows: dict[str, list[rows_module.Row]],
-    addresses: dict[str, Address],
-    tokenizer: Any,
-) -> Fit | None:
-    spec = document.train
-    if spec is None:
-        return None
-    # The eval split is a dataset ref exactly like a `data` entry's, and each
-    # role reads its own field off it.
-    evaluation = {role: rows_module.load(data_root, spec.eval_split) for role in rows}
-    if spec.eval_split != document.roles["base"].dataset:
-        # Two different refs must be endpoint-disjoint. The same ref for both is
-        # the visible train-equals-test ablation, and is allowed.
-        fitted = {json.dumps(row, sort_keys=True) for row in rows["base"]}
-        shared = [row for row in evaluation["base"] if json.dumps(row, sort_keys=True) in fitted]
-        if shared:
-            raise PlanError(
-                f"method.train.eval.split {spec.eval_split!r} shares {len(shared)} row(s) "
-                f"with the fitted rows {document.roles['base'].dataset!r}; the two must "
-                "be endpoint-disjoint"
-            )
-
-    count = len(rows["base"])
-    order = random.Random(spec.seed)
-    epochs = tuple(
-        tuple(
-            Plan(steps=_steps_over(document, _take(rows, draw[start : start + spec.pairs]), addresses, tokenizer))
-            for start in range(0, count, spec.pairs)
-        )
-        for draw in (order.sample(range(count), count) for _ in range(spec.epochs))
-    )
-    return Fit(
-        epochs=epochs,
-        evaluation=Plan(steps=_steps_over(document, evaluation, addresses, tokenizer)),
-        objective=spec.objective,
-        params=spec.params,
-        lr=spec.lr,
-        weight_decay=spec.weight_decay,
-        eval_metrics=spec.eval_metrics,
-        early_stop=spec.early_stop,
-        patience=spec.patience,
-        mode=spec.mode,
     )
 
 
@@ -913,45 +666,6 @@ def _check_keys(write: Any, forward: Forward, source: Forward | None) -> None:
     )
 
 
-def _take(rows: dict[str, list[rows_module.Row]], picked: list[int]) -> dict[str, list[rows_module.Row]]:
-    """One minibatch. Every table is indexed the same way, because rows are
-    paired by index and a shuffle that broke the pairing would silently fit a
-    rotation against mismatched counterfactuals."""
-    return {role: [table[index] for index in picked] for role, table in rows.items()}
-
-
-def _schedule(document: Document) -> list[tuple[str, str]]:
-    """A protocol document's forwards, as (model, input) pairs, in execution
-    order.
-
-    Cross-model data flow has one channel: a read in model A may be the operand
-    of a write in force in model B, so B runs after A. The graph must be
-    acyclic; it *is* the schedule. (A steps-first document writes its order.)
-    """
-    units: dict[tuple[str, str], set[str]] = {}
-    read_home: dict[str, tuple[str, str]] = {}
-    for name, spec in document.reads.items():
-        unit = (spec.model, spec.input)
-        units.setdefault(unit, set())
-        read_home[name] = unit
-    for name, spec in document.intervened_models.items():
-        units.setdefault((name, spec.input), set())
-        for write in spec.writes:
-            units[(name, spec.input)].add(document.writes[write].operand)
-
-    ordered: list[tuple[str, str]] = []
-    remaining = dict(units)
-    while remaining:
-        ready = [unit for unit, operands in remaining.items() if all(read_home[one] in ordered for one in operands)]
-        if not ready:
-            raise PlanError(f"the model/read graph has a cycle: {sorted(remaining)}")
-        ready.sort()
-        ordered.extend(ready)
-        for unit in ready:
-            del remaining[unit]
-    return ordered
-
-
 def _selection(pos: Where, anchors: tuple[str, ...], features: Any) -> Selection:
     """Where an op is: the spec, the per-row text it anchors to, and which
     part of the feature axis. Whether it gathers flat is decided *by the
@@ -1017,7 +731,7 @@ def _fits(name: str, site: str, sites: _Sites, decode: int, rows: int) -> None:
 
 
 def _forward(
-    role: str,
+    dataset: str,
     field: str,
     writes: list[tuple[str, Any, Any]],
     reads: list[tuple[str, Any]],
@@ -1028,15 +742,11 @@ def _forward(
     max_new_tokens: int = 0,
     generation: dict[str, Any] | None = None,
 ) -> Forward:
-    """One model call over the rows `role` names — a steps-first dataset, or
-    a protocol role: the writes in force, in the order they apply, as
-    `(op name, spec, operand)` with the operand as the plan names its value,
-    and the reads taken, as `(op name, spec)` — grouped into taps by address
-    and put in forward order. With `max_new_tokens`, a `Generate`.
-
-    Every front end hands a model call over in this one shape, so how a
-    format says which writes a call has is its own business and nothing
-    below here can tell the formats apart.
+    """One model call over the rows of `dataset`: the writes in force, in the
+    order they apply, as `(op name, spec, operand)` with the operand as the
+    plan names its value, and the reads taken, as `(op name, spec)` —
+    grouped into taps by address and put in forward order. With
+    `max_new_tokens`, a `Generate`.
 
     Nothing here resolves a position. What it does compile is the *anchor*: a
     text-anchored spec names a variable, and which text that is on this row
@@ -1127,7 +837,7 @@ def _forward(
     _fits_every_row(taps, batch, tokenizer)
     decodes: dict[str, Any] = {"max_new_tokens": max_new_tokens, "generation": dict(generation or {})} if max_new_tokens else {}
     return (Generate if max_new_tokens else Forward)(
-        input=role,
+        input=dataset,
         input_ids=batch[0],
         attention_mask=batch[1],
         sample=batch[2],

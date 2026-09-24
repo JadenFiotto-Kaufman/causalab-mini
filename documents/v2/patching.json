@@ -1,6 +1,6 @@
 {
   "header": {
-    "description": "The smallest real interchange: read the residual stream at the last token of the counterfactual prompt, swap it into the same place on the base prompt, and score what the model then says. Two forwards over the same pairs, and two metrics of the second: four steps. The head is a site written in place, because nothing else names it. Compare documents/minimal_cpu.json, the same experiment in the protocol's format."
+    "description": "The smallest real interchange: read the residual stream at the last token of the counterfactual prompt, swap it into the same place on the base prompt, and score what the model then says. Two forwards over the same pairs, and two metrics of the second: four steps. The head is a site written in place, because nothing else names it."
   },
   "model": {
     "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",

@@ -1,9 +1,9 @@
 """Three documents ported from causalab's own corpus, each for one reason.
 
-`documents/minimal_cpu.json` and the DAS pair exercise one write, one model
+`documents/v2/patching.json` and `das.json` exercise one write, one model call
 and one fit. These three exercise what that leaves out: several writes in one
-model, several intervened models feeding each other, and an experiment that
-is three experiments with nothing trained at all.
+call, several intervened calls feeding each other, and an experiment that is
+three experiments with nothing trained at all.
 
 They are retargets, not copies — the tiny CPU Llama has 2 layers where the
 originals name layer 13 of an 8B — and each says so in its own
@@ -21,12 +21,13 @@ from conftest import of_kind
 from causalab_mini import plan
 from causalab_mini.engine import NNterpEngine, steps
 from causalab_mini.engine.engines.hooks import HooksEngine
-from causalab_mini.plan import document
+from causalab_mini.plan.spec import Spec
+from pydantic import ValidationError
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-MULTI = REPO / "documents" / "multi_position_patch_cpu.json"
-HYDRA = REPO / "documents" / "hydra_effect_cpu.json"
-CONTROL = REPO / "documents" / "random_subspace_cpu.json"
+MULTI = REPO / "documents" / "v2" / "multi_position_patch.json"
+HYDRA = REPO / "documents" / "v2" / "hydra_effect.json"
+CONTROL = REPO / "documents" / "v2" / "random_subspace.json"
 
 
 @pytest.fixture
@@ -50,9 +51,8 @@ def control_raw():
 
 
 def test_three_writes_share_one_address_and_one_tap(multi_raw, data_root, model_engine):
-    """Rule 8 is about *overlapping* positions, so three disjoint indices at
-    one site are three legal absolute writes. They compile to one tap,
-    because a tap is an address and these share one."""
+    """Three disjoint indices at one site are three writes. They compile to
+    one tap, because a tap is an address and these share one."""
     built = plan.build_request(multi_raw, data_root, model_engine)
     source, patched = (
         steps.located(model_engine, one)[0]
@@ -60,11 +60,11 @@ def test_three_writes_share_one_address_and_one_tap(multi_raw, data_root, model_
     )
 
     (tap,) = [one for one in patched.taps if one.writes]
-    assert [write.name for write in tap.writes] == ["at_m4", "at_m3", "at_m2"]
+    assert [write.name for write in tap.writes] == ["patched.at_m4", "patched.at_m3", "patched.at_m2"]
     positions = [write.at.positions for write in tap.writes]
     assert len({tuple(one) for one in positions}) == 3, "the three writes must be disjoint"
     # and the three reads they take their operands from share the source tap
-    assert [read.name for read in source.taps[0].reads] == ["v_m4", "v_m3", "v_m2"]
+    assert [read.name for read in source.taps[0].reads] == ["counterfactual.v_m4", "counterfactual.v_m3", "counterfactual.v_m2"]
 
 
 def test_the_joint_patch_is_not_any_of_its_single_positions(multi_raw, data_root, model_engine):
@@ -75,14 +75,11 @@ def test_the_joint_patch_is_not_any_of_its_single_positions(multi_raw, data_root
     alone = {}
     for keep in ("at_m4", "at_m3", "at_m2"):
         one = copy.deepcopy(multi_raw)
-        one["method"]["intervened_models"]["patched"]["writes"] = [keep]
-        one["method"]["writes"] = {keep: one["method"]["writes"][keep]}
-        operand = one["method"]["writes"][keep]["do"]["swap"]
-        one["method"]["reads"] = {
-            name: spec
-            for name, spec in one["method"]["reads"].items()
-            if name in (operand, "logits")
-        }
+        writes = one["steps"]["patched"]["interventions"]["writes"]
+        one["steps"]["patched"]["interventions"]["writes"] = {keep: writes[keep]}
+        operand = writes[keep]["operand"].partition(".")[2]
+        reads = one["steps"]["counterfactual"]["reads"]
+        one["steps"]["counterfactual"]["reads"] = {operand: reads[operand]}
         alone[keep] = model_engine.execute(
             plan.build_request(one, data_root, model_engine)
         ).result("logit_diff")
@@ -109,7 +106,7 @@ def test_the_multi_position_document_agrees_across_engines(multi_raw, data_root,
     So it enters after the replacement is installed, somewhere in how nnsight
     continues the forward — which is nnsight's internals, not mini's.
     """
-    hooks = HooksEngine.load(document.Document.from_json(multi_raw).model, device_map="cpu")
+    hooks = HooksEngine.load(Spec.model_validate(multi_raw).model, device_map="cpu")
     traced = model_engine.execute(plan.build_request(multi_raw, data_root, model_engine))
     hooked = hooks.execute(plan.build_request(multi_raw, data_root, hooks))
 
@@ -119,26 +116,26 @@ def test_the_multi_position_document_agrees_across_engines(multi_raw, data_root,
 
 
 # --------------------------------------------------------------------- #
-# five intervened models, and one feeding another
+# several intervened calls, and one feeding another
 # --------------------------------------------------------------------- #
 
 
-def test_a_read_inside_one_intervened_model_is_another_models_operand(
+def test_a_read_inside_one_intervened_call_is_another_calls_operand(
     hydra_raw, data_root, model_engine
 ):
-    """The only cross-model operand chain in causalab's corpus: `a1_abl` is
-    read inside `ablated`, and `with_inj1_abl` writes it. The schedule is
-    what has to notice — `ablated` must run before `with_inj1_abl`, and
-    nothing but the read graph says so."""
+    """The only cross-call operand chain in causalab's corpus: `a1` is read
+    inside `ablated`, under its ablation, and `inj1_abl` writes it. The steps
+    run in the order the document wrote them, so the chain is the document's
+    to order — and one that names a step not yet run is refused."""
     built = plan.build_request(hydra_raw, data_root, model_engine)
-    order = [name.split(".")[0] for name, one in built.steps.items() if isinstance(one, plan.Forward)]
+    order = [name for name, one in built.steps.items() if isinstance(one, plan.Forward)]
+    assert order == ["noise", "clean", "ablated", "inj0_clean", "inj1_clean", "inj1_abl"]
+    assert built.step("inj1_abl", plan.Forward).taps[0].writes[0].operand == "ablated.a1"
 
-    # Six, not five: `original` runs twice, once per input role, because the
-    # resample operand is read off the counterfactual and everything else off
-    # the base. A (model, input) pair is the unit, not a model.
-    assert len(order) == 6 and order.count("original") == 2
-    assert order.index("ablated") < order.index("with_inj1_abl")
-    assert order.index("original") < order.index("with_inj0_clean")
+    steps = hydra_raw["steps"]
+    hydra_raw["steps"] = {"inj1_abl": steps.pop("inj1_abl"), **steps}
+    with pytest.raises(ValidationError, match="ablated.a1"):
+        Spec.model_validate(hydra_raw)
 
 
 def test_the_hydra_document_runs_and_the_ablation_moves_the_measured_logit(
@@ -201,7 +198,7 @@ def test_an_authored_seed_is_reproducible_and_beats_the_fit_default(
     two = plan.build_request(control_raw, data_root, model_engine)
     assert one == two
 
-    control_raw["method"]["featurizers"]["rot"]["seed"] = 7
+    control_raw["featurizers"]["rot"]["seed"] = 7
     single = plan.build_request(control_raw, data_root, model_engine)
     (spec,) = single.step("featurizers", plan.Featurizers).specs
     assert spec.seed == 7

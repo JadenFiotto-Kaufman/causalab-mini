@@ -30,8 +30,7 @@ from .engine.base import EngineError
 from .engine.engines.hooks import HooksEngine
 from .ops import featurizer, intervene, metrics
 from .ops.locate import LocateError
-from .plan import document, sweep
-from .plan.document import DocumentError
+from .plan import sweep
 from .plan.explain import explain
 from .plan.plan import PlanError
 from .plan.spec import METRIC_COLUMNS, Model, Reduce, Spec
@@ -50,18 +49,17 @@ SHAPE_ONLY = {"dispatch": False}
 
 #: What this package raises when it means "no". Every one carries a message
 #: written for the person who wrote the document, so the entry point prints
-#: that and nothing else. `ValidationError` is pydantic's and is how the
-#: steps-first format refuses; `RenamingError` is nnterp's, which mini
+#: that and nothing else. `ValidationError` is pydantic's and is how a
+#: document refuses; `RenamingError` is nnterp's, which mini
 #: forwards wherever a place is a family's to have or not have.
 REFUSALS: tuple[type[Exception], ...] = (
     PlanError,          # the compiler, and the run's own refusals
-    DocumentError,      # the protocol format
     AddressError,       # a component, a layer, an attention implementation
     TokenError,         # a prompt, a conversation, an answer column
     LocateError,        # a frame the resolver cannot build
     DataError,          # a dataset ref, a column, a row
     EngineError,        # a runtime asked for something it does not have
-    ValidationError,    # the steps-first format
+    ValidationError,    # the document
     RenamingError,      # nnterp, where a place is not this family's
 )
 
@@ -75,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="verb", required=True)
 
-    sub.add_parser("schema", help="the JSON Schema of a steps-first document")
+    sub.add_parser("schema", help="the JSON Schema of a document")
     sub.add_parser("vocab", help="step kinds, components, mechanisms, featurizer kinds, metric kinds, position forms")
 
     one = sub.add_parser("model", help="what a model looks like: layers, widths, which components resolve")
@@ -103,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         ("run", "execute a document and write its outputs"),
     ):
         one = sub.add_parser(verb, help=help_text)
-        one.add_argument("document", help="a steps-first document (it has `steps`), or a protocol_version 3 one")
+        one.add_argument("document", help="a document")
         one.add_argument("--data-root", default="documents/data")
         one.add_argument("--engine", default="nnterp", choices=list(ENGINES))
         if verb == "run":
@@ -306,13 +304,10 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
     nothing downloaded but the config and the tokenizer, so there is no
     reason for a cheaper check that passes documents `explain` refuses.
     """
-    raw = _read(args.document)
-    shape = "steps-first" if "steps" in raw else "protocol"
     _, built = _compile(args, **SHAPE_ONLY)
     return {
-        "text": f"ok: {args.document} is a valid {shape} document, {_plural(len(built.steps), 'step')}",
+        "text": f"ok: {args.document} is a valid document, {_plural(len(built.steps), 'step')}",
         "ok": True,
-        "format": shape,
         "steps": list(built.steps),
     }
 
@@ -321,10 +316,8 @@ def _compile(args: argparse.Namespace, **options: Any) -> tuple[Any, Any]:
     raw = _read(args.document)
     engine_class = ENGINES[args.engine][0]
     # The model is the same at every point of a sweep — a sweep may not touch
-    # it — so the first point says what to load, in either format.
-    first = sweep.points(raw)[0][1]
-    model_block = Model.model_validate(first.get("model")) if "steps" in raw else document.Document.from_json(first).model
-    engine = engine_class.load(model_block, **options)
+    # it — so the first point says what to load.
+    engine = engine_class.load(Model.model_validate(sweep.points(raw)[0][1].get("model")), **options)
     return engine, plan_module.build_request(raw, args.data_root, engine)
 
 

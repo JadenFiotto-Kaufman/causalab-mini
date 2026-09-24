@@ -33,10 +33,9 @@ because resolving them is what a compiler does against a loaded model — so
 checks that need the rows or the model (how many rows, how wide a site)
 are the compiler's, and everything that is about the document alone is here.
 
-pydantic does two things a hand-written checker was doing badly: `extra=
-"forbid"` refuses an unknown key *anywhere* with the path to it, which is
-the catch-all `document.py` needed four bugs to learn it wanted, and the
-model dump is a JSON Schema — which the protocol itself does not have.
+pydantic does two things a hand-written checker does badly: `extra="forbid"`
+refuses an unknown key *anywhere* with the path to it, and the model dump is
+a JSON Schema.
 """
 
 from __future__ import annotations
@@ -136,7 +135,7 @@ class Site(Node):
                 "layers must be a one-element band, or \"all\"; a band spanning several "
                 "layers is one address and is not implemented"
             )
-        # the same question the protocol format asks, of the same table
+        # the table says which components take a layer
         wrong = address.layered(self.component, 0 if self.layers == "all" else self.layers[0] if self.layers else None)
         if wrong is not None:
             raise ValueError(wrong)
@@ -672,8 +671,8 @@ class Spec(Node):
 
     @property
     def digest(self) -> str:
-        """Identity of the experiment, the same rule the protocol format
-        uses: everything but `header`, which is authoring metadata. It is
+        """Identity of the experiment: everything but `header`, which is
+        authoring metadata. It is
         what a metric row is `produced_by` and what a saved featurizer is
         stamped with."""
         body = {key: value for key, value in self.model_dump(mode="json").items() if key != "header"}

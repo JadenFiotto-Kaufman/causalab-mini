@@ -36,17 +36,17 @@ It **imports nothing from causalab**. Only the JSON documents were copied.
 
 ## 2. State as of this handoff
 
-`master`, clean tree, pushed to GitHub (private). **585 tests passing**
+`master`, clean tree, pushed to GitHub (private). **527 tests passing**
 (`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~30 s), `uvx pyright` at 0
-errors. **8,032 lines** across 31 files in `causalab_mini/`.
+errors. **6,948 lines** across 30 files in `causalab_mini/`.
 
 The package is five sub-packages and a short spine, each named for what it is
 allowed to know:
 
     __init__.py shapes.py address.py cli.py       vocabulary, the architecture
                                                   map, the entry point
-    plan/   document.py spec.py plan.py           the request, as pure data
-            build.py    write.py  sweep.py         (two authoring formats)
+    plan/   spec.py     plan.py                   the request, as pure data
+            build.py    write.py  sweep.py
     data/   rows.py     tokens.py                  the corpus -> padded tokens
     ops/    intervene.py metrics.py featurizer.py  agnostic: tensors only
             locate.py                              a position spec -> indices
@@ -55,36 +55,32 @@ allowed to know:
       engines/nnterp/   engine.py  loading.py      one directory per runtime
       engines/hooks/    engine.py  loading.py      plain HF + forward hooks
 
-`plan/document.py` is 702 of those lines and was deliberately left whole: it is
-one concept (the protocol surface) and splitting it would need a third file for
-the shared refusal helpers, which is more concepts, not fewer.
-
 Working end to end: activation patching, one `.source` interior
 (`attention_query`), GPT-2 as a reach-only probe, and a DAS fit — all inside
 **one** nnsight session, with `remote="local"` producing bit-identical results.
 
 There is now a **second engine**, `engines/hooks`: a plain
 `AutoModelForCausalLM` driven by `register_forward_hook`, no nnsight anywhere.
-It runs `minimal_cpu.json` and the DAS fit to numbers bit-identical to the
+It runs `patching.json` and the DAS fit to numbers bit-identical to the
 nnterp engine's, refuses the interior and `remote` by name, and needed no
 change to `steps.py`, `ops/`, `plan/` or `address.py`. What it had to supply by
 hand — and what turned out to be free — is FINDINGS §6. It is not wired into
 the CLI: `--engine` is a flag nobody has needed yet.
 
-Documents: **nine** in `documents/` (the protocol format), **23** in
-`documents/v2/` (the steps-first one) and **five** in `documents/real/`,
-which pin real checkpoints and are compiled but not run by the suite. The
-nine, ported from causalab's own corpus:
-`multi_position_patch_cpu.json` (three disjoint absolute writes in one
-intervened model), `hydra_effect_cpu.json` (five intervened models, and a
-read taken inside one that is the operand of a write in another — the only
-cross-model operand chain in causalab's corpus), and
-`random_subspace_cpu.json` (the matched-k control: three untrained seeded
-rotations, no fit at all). The rest: `minimal_cpu.json` (patching, shipped),
-`das.json` (shipped, unrunnable here — Llama-3.1-8B), `das_cpu_reduction.json`
-(authored, four changes from `das.json`), `attention_query_cpu.json` (authored,
-the interior), `gpt2_cpu.json` (authored, the reach probe). Authored documents
-say so in their own `header.description`.
+Documents: **29** in `documents/v2/` and **five** in `documents/real/`, which
+pin real checkpoints and are compiled but not run by the suite. Among the v2
+ones, ported from causalab's own corpus: `multi_position_patch.json` (three
+disjoint writes at one site in one call, the bit-for-bit twin of
+`window_patch.json`'s one window), `hydra_effect.json` (a read taken inside
+one intervened call is the operand of a write in another — the only
+cross-call operand chain in causalab's corpus) and `random_subspace.json`
+(the matched-k control: three untrained seeded rotations, no fit at all).
+Authored for mini: `attention_query.json` (an interior),
+`gpt2_reach.json` (the reach probe on a second family) and
+`pos_sweep.json` (one document, three experiments). Authored documents say
+so in their own `header.description`. causalab's protocol format has no
+reader here; `documents/intervention_protocol.md` is its specification,
+which the vocabulary still follows.
 
 ## 3. Rules that must not be broken
 
@@ -95,14 +91,11 @@ These are load-bearing. Several tests enforce them.
    `model.session(remote=remote)`. Not a session per forward, not a lazy
    per-read path. `remote=True` on that session is the *only* difference
    between local and remote — there is no second code path.
-3. **There are two authoring formats and one compiler.** `document.py`
-   reads the protocol's JSON; `spec.py` reads the steps-first one, whose
-   `steps` are what runs — forwards, generates, metrics, reduces, fits —
-   and whose step names are how later steps and `saves` reach what each
-   produced. Both hand every model call to `build._forward` in one shape
-   and share every helper below it, so they cannot drift into producing
-   different plans — `tests/test_format.py` asserts the same numbers from
-   both.
+3. **One document format, one compiler.** `spec.py` reads the document,
+   whose `steps` are what runs — forwards, generates, metrics, reduces,
+   fits — and whose step names are how later steps and `saves` reach what
+   each produced. `build.py` compiles it, handing every model call to
+   `build._forward`.
 4. **A plan is pure data; an engine turns it into tensors.** A *fresh* plan
    holds strings, ints, tuples and dicts only — its `results` dicts are empty
    until it runs, and they are the only mutable thing in the tree. A plan has
@@ -292,19 +285,17 @@ where it differs from the plan written here before it was built:
 
 ### The sweep, and what it proved
 
-Built, in `plan/sweep.py` and `build_request`. `documents/pos_sweep_cpu.json`
+Built, in `plan/sweep.py` and `build_request`. `documents/v2/pos_sweep.json`
 is one document that is three experiments — the same interchange patched at
 the last token, the one before it, and the one before that.
 
 A sweep is lowered on the **raw JSON, before anything is compiled**: the
 wrapper is replaced by each value in turn and each resulting document is
 compiled on its own, so a point is an ordinary document with its own
-addresses, its own tokenization and its own digest. The slice is narrow in
-`document.py`'s style — one wrapper, at one field, holding a literal list;
-the range form, several swept fields, and a sweep of `model` or `header` are
-each refused by name.
+addresses, its own tokenization and its own digest. A sweep of `model` or
+`header` is refused by name.
 
-**The whole cost was 22 lines in `build.py`, one refusal in `document.py` and
+**The whole cost was 22 lines in `build.py`, one refusal in the document and
 a new file that is mostly refusals.** Nothing in `engine/`, `steps.py`,
 `plan/plan.py`, `plan/write.py`, `ops/` or `address.py` changed — the engine
 walks the same tree it always walked, and the writer already recursed. That
@@ -362,9 +353,9 @@ Full detail in `FINDINGS.md`; these are the ones that reach past mini.
 - **A subspace swap leaves the complement untouched only as arithmetic** — in
   fp32 it moves by up to ~4e-7, because the complement is reconstructed by a
   projection rather than copied. Bit-identity needs an axis-aligned write.
-- **`document.py` is a quarter of the project** (702 of 2,818 lines), almost all
-  refusals. The weight of causalab is in its document surface, not its
-  execution.
+- **The protocol reader was a quarter of the project** (702 of 2,818 lines when
+  it was written), almost all refusals. The weight of causalab is in its
+  document surface, not its execution.
 - **A layer-0 query interchange is a no-op** when the two prompts share a length
   and a last token. It looks exactly like a broken write.
 - **A `yield` cannot appear inside an nnsight block.** nnsight recompiles a
@@ -395,7 +386,7 @@ Full detail in `FINDINGS.md`; these are the ones that reach past mini.
 - Tiny CPU models: `hf-internal-testing/tiny-random-LlamaForCausalLM` pinned to
   a commit SHA (see the documents), and a tiny GPT-2. Tiny GPT-2 cannot run the
   weekdays documents — `" Friday"` is four tokens there — hence
-  `documents/data/counting` and `gpt2_cpu.json`.
+  `documents/data/counting` and `documents/v2/gpt2_reach.json`.
 
 ## 8. The wider context this sits in
 

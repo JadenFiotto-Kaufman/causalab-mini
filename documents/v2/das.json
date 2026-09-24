@@ -1,6 +1,6 @@
 {
   "header": {
-    "description": "DAS on the tiny CPU Llama. The fit's body is the experiment, run once per minibatch of 16 pairs: the counterfactual read through the rotation, and swapped into the base in its space. The same two declared interventions are then scored on the training pairs after it. `fit.rot` is the one name of the rotation — inside the body it is the rotation being trained, after it the trained one — and the held-out run is the body with `test` in place of `train`. Compare documents/das_cpu_reduction.json, the same run in the protocol's format."
+    "description": "DAS on the tiny CPU Llama. The fit's body is the experiment, run once per minibatch of 16 pairs: the counterfactual read through the rotation, and swapped into the base in its space. The same two declared interventions are then scored on the training pairs after it. `fit.rot` is the one name of the rotation — inside the body it is the rotation being trained, after it the trained one — and the held-out run is the body with `test` in place of `train`."
   },
   "model": {
     "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",

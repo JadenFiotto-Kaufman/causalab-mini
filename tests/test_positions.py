@@ -9,7 +9,7 @@ they promise a compiler, and what a document may not write, is here.
 The claim that decides whether a window is the right abstraction: patching
 the last three tokens in ONE write must equal patching them in three, to the
 bit. `documents/v2/window_patch.json` and
-`documents/multi_position_patch_cpu.json` are that pair.
+`documents/v2/multi_position_patch.json` are that pair.
 """
 
 import json
@@ -28,7 +28,7 @@ from causalab_mini.shapes import Where
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 WINDOW = REPO / "documents" / "v2" / "window_patch.json"
-THREE = REPO / "documents" / "multi_position_patch_cpu.json"
+THREE = REPO / "documents" / "v2" / "multi_position_patch.json"
 
 
 # --------------------------------------------------------------------- #
@@ -136,7 +136,7 @@ def test_a_published_mean_broadcasts_into_a_window():
 
 def test_one_window_write_equals_three_single_writes_to_the_bit(data_root, model_engine):
     """The test of what a window is. `window_patch.json` swaps -4, -3, -2 in
-    one write; `multi_position_patch_cpu.json` swaps them in three. Same rows,
+    one write; `multi_position_patch.json` swaps them in three. Same rows,
     same site, same operand tokens — same logits.
 
     (The first draft of the document said `{"last": 3}`, which is -3, -2, -1,

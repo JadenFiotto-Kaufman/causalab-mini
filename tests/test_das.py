@@ -2,7 +2,7 @@
 
 The first half is arithmetic — the defining property of a subspace swap, checked
 on tensors with no model anywhere near them. The second half runs
-`documents/das_cpu_reduction.json` end to end.
+`documents/v2/das.json` end to end.
 """
 
 import json
@@ -14,7 +14,7 @@ from conftest import of_kind, tensors
 
 from causalab_mini import cli, ops, plan
 from causalab_mini.ops import featurizer
-from causalab_mini.plan import document
+from causalab_mini.plan.spec import Spec
 from causalab_mini.engine import NNterpEngine
 
 
@@ -152,19 +152,13 @@ def test_the_rotation_reaches_the_read_and_the_write_and_not_the_head(das_plan):
 
 
 def test_a_k_wider_than_the_site_is_a_load_error(das_raw, data_root, model_engine):
-    das_raw["method"]["featurizers"]["rot"]["k"] = 17
+    das_raw["featurizers"]["rot"]["k"] = 17
     with pytest.raises(plan.PlanError, match="not a subspace of the 16-wide site"):
         plan.build_request(das_raw, data_root, model_engine)
 
 
-def test_an_eval_split_sharing_rows_with_the_fit_is_a_load_error(das_raw, data_root, model_engine):
-    das_raw["method"]["train"]["eval"]["split"] = "weekdays/data"  # train + test
-    with pytest.raises(plan.PlanError, match="endpoint-disjoint"):
-        plan.build_request(das_raw, data_root, model_engine)
-
-
 def test_the_same_ref_for_both_is_the_visible_train_equals_test_ablation(das_raw, data_root, model_engine):
-    das_raw["method"]["train"]["eval"]["split"] = "weekdays/data#train"
+    das_raw["steps"]["fit"]["eval"]["data"] = {"train": "train"}
     fitted = plan.build_request(das_raw, data_root, model_engine)
     assert of_kind(fitted.step("fit", plan.Fit).evaluation, plan.Forward)[0].input_ids == (
         of_kind(fitted, plan.Forward)[0].input_ids
@@ -226,7 +220,7 @@ def test_early_stopping_ends_the_fit_before_its_epoch_budget(fitted):
 
 def test_the_same_seed_fits_the_same_rotation_and_another_seed_does_not(das_raw, data_root, model_engine):
     def fit(seed):
-        das_raw["method"]["train"]["seed"] = seed
+        das_raw["steps"]["fit"]["seed"] = seed
         built = plan.build_request(das_raw, data_root, model_engine)
         return model_engine.execute(built).result("rot")
 
@@ -239,13 +233,13 @@ def test_a_full_width_rotation_is_a_plain_swap_end_to_end(das_raw, data_root, mo
     the complement is empty, so DAS's write lands the counterfactual activation
     entire — whatever the rotation is, trained or not — and the run's metrics are
     the identity featurizer's to five decimals."""
-    das_raw["method"]["featurizers"]["rot"]["k"] = 16
+    das_raw["featurizers"]["rot"]["k"] = 16
     rotated = model_engine.execute(plan.build_request(das_raw, data_root, model_engine))
 
-    del das_raw["method"]["featurizers"], das_raw["method"]["train"]
-    del das_raw["method"]["reads"]["v_cf"]["featurizer"]
-    del das_raw["method"]["writes"]["patch"]["featurizer"]
-    das_raw["method"]["save"] = das_raw["method"]["save"][:2]
+    del das_raw["featurizers"], das_raw["steps"]["fit"]
+    del das_raw["interventions"]["cf_read"]["reads"]["v_cf"]["featurizer"]
+    del das_raw["interventions"]["das"]["writes"]["patch"]["featurizer"]
+    das_raw["steps"]["saves"] = {"iia": "iia.json", "ce": "ce.json"}
     plain = model_engine.execute(plan.build_request(das_raw, data_root, model_engine))
 
     for name in ("iia", "ce"):
@@ -278,10 +272,10 @@ def test_the_artifact_is_written_stamped_and_reloads_to_the_trained_values(model
     # the manifest, plus the two files every run carries: the document that
     # produced it and what ran it
     assert sorted(path.name for path in written) == [
-        "ce.json", "document.json", "iia.json", "rot.safetensors", "run.json"
+        "ce.json", "document.json", "held_out_iia.json", "iia.json", "rot.safetensors", "run.json"
     ]
     assert sorted(path.name for path in tmp_path.iterdir()) == [
-        "ce.json", "document.json", "iia.json", "rot.safetensors", "run.json"
+        "ce.json", "document.json", "held_out_iia.json", "iia.json", "rot.safetensors", "run.json"
     ]
     with safetensors.safe_open(tmp_path / "rot.safetensors", "pt") as bundle:
         assert bundle.keys() == ["weight"]  # one auto-declared slot, `rot.weight`
@@ -292,8 +286,8 @@ def test_the_artifact_is_written_stamped_and_reloads_to_the_trained_values(model
     assert stamp["k"] == "8" and stamp["d"] == "16"
     assert stamp["model_dtype"] == "fp32"
     assert stamp["parametrization"] == "cayley"
-    assert stamp["trained_on"] == "weekdays/data#train"
-    assert stamp["produced_by"] == document.Document.load(data_root.parent / "das_cpu_reduction.json").digest
+    assert stamp["kind"] == "subspace"
+    assert stamp["produced_by"] == Spec.model_validate(das_plan.source).digest
     assert [row["unit"] for row in json.loads((tmp_path / "ce.json").read_text())] == ["nat", "nat"]
 
 
@@ -301,7 +295,7 @@ def test_the_cli_runs_the_das_document_end_to_end(tmp_path, data_root):
     exit_code = cli.main(
         [
             "run",
-            str(data_root.parent / "das_cpu_reduction.json"),
+            str(data_root.parent / "v2" / "das.json"),
             "--data-root",
             str(data_root),
             "--out",
@@ -326,15 +320,5 @@ def test_a_fit_leaves_no_gradient_on_the_model(model_engine, das_plan):
     assert not module.training
     assert all(not p.requires_grad and p.grad is None for p in module.parameters())
 
-    hooks = HooksEngine.load(das_plan_model(), device_map="cpu")
+    hooks = HooksEngine.load(Spec.model_validate(das_plan.source).model, device_map="cpu")
     assert all(not p.requires_grad for p in hooks.model.parameters()) and not hooks.model.training
-
-
-def das_plan_model():
-    import json, pathlib
-
-    from causalab_mini.plan.spec import Spec
-
-    return Spec.model_validate(
-        json.loads((pathlib.Path(__file__).resolve().parents[1] / "documents" / "v2" / "das.json").read_text())
-    ).model

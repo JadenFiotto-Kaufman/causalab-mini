@@ -2,9 +2,8 @@
 
 The corpus is the project's evidence that the library does what it says, so a
 change that moves a number in it has to be one somebody meant. This runs each
-document that the tiny CPU models can run — every steps-first one and every
-protocol one but the 8B `das.json` — and compares each file it writes with a
-hash committed in `golden/outputs.json`.
+document that the tiny CPU models can run — every one in `documents/v2` — and
+compares each file it writes with a hash committed in `golden/outputs.json`.
 
 What a hash covers is what a result *is*: every value, eligibility, position,
 reason and decoded token of a metric table; every tensor's dtype, shape and
@@ -12,7 +11,7 @@ bytes, and a bundle's identity stamp. What it leaves out is what names the
 document rather than the result: `produced_by` (the document's digest),
 a table's `metric` column (the name the document gave the metric),
 `document.json` and `run.json`. So a document may be rewritten — renamed,
-reshaped, moved to another format — and still be held to the same numbers.
+reshaped — and still be held to the same numbers.
 
 The file is written by `python tests/test_golden.py`, and only ever from a
 commit whose numbers are the ones meant: regenerating it from the code under
@@ -40,12 +39,9 @@ from causalab_mini.plan.spec import Model
 REPO = pathlib.Path(__file__).resolve().parents[1]
 GOLDEN = REPO / "tests" / "golden" / "outputs.json"
 DATA_ROOT = REPO / "documents" / "data"
-#: The documents the suite can run: `das.json` names an 8B checkpoint, and
-#: `real/` pins real ones (compiled, never run, by `test_real_runs.py`).
-DOCUMENTS = sorted(
-    [f"documents/{path.name}" for path in (REPO / "documents").glob("*.json") if path.name != "das.json"]
-    + [f"documents/v2/{path.name}" for path in (REPO / "documents" / "v2").glob("*.json")]
-)
+#: The documents the suite can run. `real/` pins real checkpoints, which are
+#: compiled, never run, by `test_real_runs.py`.
+DOCUMENTS = sorted(f"documents/v2/{path.name}" for path in (REPO / "documents" / "v2").glob("*.json"))
 #: A table's columns that name the document, not the result.
 NAMING = {"produced_by", "metric"}
 

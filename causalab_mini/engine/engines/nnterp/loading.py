@@ -18,8 +18,8 @@ DTYPES = {"fp32": torch.float32, "bf16": torch.bfloat16}
 
 
 def load(spec: Any, **options: Any) -> StandardizedTransformer:
-    """`spec` is a model block from either authoring format: both carry
-    `key`, `revision` and `dtype`, which is all a loader needs. Everything
+    """`spec` is a document's model block: `key`, `revision` and `dtype`,
+    which is all a loader needs. Everything
     else is nnterp's and passes through — `device_map`, and `dispatch=False`
     for a meta-device shell: the module tree, the config and the tokenizer,
     nothing downloaded but those. Everything the compiler asks is answered

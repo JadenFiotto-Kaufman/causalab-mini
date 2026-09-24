@@ -64,8 +64,8 @@ class Engine:
     def load(cls, spec: Any, **options: Any) -> "Engine":
         """The engine, holding the model the document named.
 
-        `spec` is a model block from either authoring format — both carry
-        `key`, `revision` and `dtype`, and an engine needs nothing else.
+        `spec` is a document's model block — `key`, `revision` and `dtype`,
+        which is all an engine needs.
         `options` are the runtime's own and pass straight through: for nnsight
         that includes `dispatch=False`, a meta-device shell that answers
         everything the compiler asks — tokenizer, layer count, widths, where

@@ -1,13 +1,11 @@
-"""The steps-first document format.
+"""The document format.
 
 A document's `steps` are what runs, in order; a step's name is how
 everything after it reaches what it produced (`patched.logits`, `iia`,
 `fit.rot`); `saves` names the references that go to disk. These tests hold
 the format to what it says: that every reference resolves where it is
 written or is refused with the fix, that each step compiles to one step of
-the plan, that what reaches the plan is what the document wrote — and that
-the protocol's format and this one, sharing every helper below their front
-ends, give the same numbers.
+the plan, and that what reaches the plan is what the document wrote.
 """
 
 import copy
@@ -231,36 +229,13 @@ def test_a_forwards_logits_are_saved_and_not_taken(patching):
 
 
 # --------------------------------------------------------------------- #
-# the two formats meet
-# --------------------------------------------------------------------- #
-
-
-def test_both_formats_compile_to_the_same_run(das, das_raw, data_root, model_engine):
-    """`documents/v2/das.json` and `documents/das_cpu_reduction.json` are the
-    same experiment written two ways. They share every helper below the front
-    end, so they cannot drift into different numbers — and this is what says
-    so."""
-    from_protocol = model_engine.execute(_compile(das_raw, data_root, model_engine))
-    from_spec = model_engine.execute(_compile(das, data_root, model_engine))
-    assert torch.equal(from_protocol.result("iia"), from_spec.result("iia"))
-    assert torch.equal(from_protocol.result("rot"), from_spec.result("rot"))
-
-
-def test_the_patching_document_matches_its_protocol_twin(patching, minimal_raw, data_root, model_engine):
-    from_protocol = model_engine.execute(_compile(minimal_raw, data_root, model_engine))
-    from_spec = model_engine.execute(_compile(patching, data_root, model_engine))
-    for name in ("iia", "logit_diff"):
-        assert torch.equal(from_protocol.result(name), from_spec.result(name)), name
-
-
-# --------------------------------------------------------------------- #
 # what pydantic buys
 # --------------------------------------------------------------------- #
 
 
 def test_an_unknown_key_anywhere_is_refused_with_its_path(patching):
-    """`extra="forbid"` is the catch-all `document.py` needed four silent
-    bugs to learn it wanted, and the error says where."""
+    """`extra="forbid"` refuses an unknown key anywhere, and the error says
+    where."""
     patching["steps"]["counterfactual"]["reads"]["v_cf"]["shuffle"] = {"seed": 1}
     with pytest.raises(ValidationError) as refusal:
         Spec.model_validate(patching)
@@ -301,9 +276,8 @@ def test_a_write_is_two_fields_a_schema_can_enumerate():
     ids=["a whole-model site with a layer", "a per-layer site without one"],
 )
 def test_a_site_is_checked_against_its_component(patching, component, layers, message):
-    """This format asks the same question the protocol's does, of the same
-    table — whether a component is one place or one per layer is `address`'s
-    to answer, and neither format keeps a list of its own."""
+    """Whether a component is one place or one per layer is `address`'s
+    table to answer, and the document keeps no list of its own."""
     site = {"component": component}
     if layers is not None:
         site["layers"] = layers

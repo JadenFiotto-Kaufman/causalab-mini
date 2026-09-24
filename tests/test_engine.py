@@ -13,8 +13,8 @@ import torch
 from causalab_mini.address import Address
 from causalab_mini.engine import Engine, EngineError, NNterpEngine, steps
 from causalab_mini.engine.engines.hooks import HooksEngine
-from causalab_mini.plan import Forward, Plan, build, document
-from causalab_mini.plan.document import ModelSpec
+from causalab_mini.plan import Forward, Plan, build_request
+from causalab_mini.plan.spec import Model
 
 
 class FakeEngine(Engine):
@@ -63,7 +63,7 @@ def test_the_base_engine_has_no_implementation():
     inheriting a session it does not want."""
     bare = Engine()
     with pytest.raises(NotImplementedError):
-        Engine.load(ModelSpec("k", "r", "fp32"))
+        Engine.load(Model(key="k", revision="r", dtype="fp32"))
     with pytest.raises(NotImplementedError):
         bare.execute(Plan())
     with pytest.raises(NotImplementedError):
@@ -97,7 +97,7 @@ def test_the_engine_specific_surface_is_exactly_the_contract():
 
 @pytest.fixture
 def minimal_plan(minimal_raw, data_root, model_engine):
-    return build(document.Document.from_json(minimal_raw), data_root, model_engine)
+    return build_request(minimal_raw, data_root, model_engine)
 
 
 def test_an_engine_that_ships_holds_nothing_but_its_model(model_engine):
@@ -125,12 +125,12 @@ def test_an_engine_with_no_model_and_no_session_runs_the_same_plan(minimal_plan,
     engine = FakeEngine(model_engine.tokenizer)
     executed = engine.execute(minimal_plan)
 
-    assert engine.calls == ["counterfactual", "base"]
+    assert engine.calls == ["pairs", "pairs"]
     assert sorted(executed.all_results()) == ["iia", "logit_diff"]
     assert executed.result("iia").shape == (4,)
 
     written = executed.write(tmp_path)
-    assert sorted(path.name for path in written) == ["iia.json", "logit_diff.json"]
+    assert sorted(path.name for path in written) == ["document.json", "iia.json", "logit_diff.json"]
 
 
 # --------------------------------------------------------------------- #
@@ -145,20 +145,18 @@ def test_a_meta_shell_compiles_the_same_plan(engine_class, minimal_raw, data_roo
     nnsight's own spelling, answers all four in well under a second, so a
     document can be validated and explained on a machine that will never run
     it — and, for nnterp, the same shell is what runs on NDIF."""
-    spec = document.Document.from_json(minimal_raw).model
+    spec = Model.model_validate(minimal_raw["model"])
     shell = engine_class.load(spec, dispatch=False)
     full = engine_class.load(spec, device_map="cpu")
 
     assert shell.num_layers == full.num_layers
     assert shell.width(shell.locate("block_output", 0)) == full.width(full.locate("block_output", 0))
-    assert build(document.Document.from_json(minimal_raw), data_root, shell) == build(
-        document.Document.from_json(minimal_raw), data_root, full
-    )
+    assert build_request(minimal_raw, data_root, shell) == build_request(minimal_raw, data_root, full)
 
 
 def test_a_meta_shell_still_locates_an_interior(minimal_raw):
     """Where the query is, is nnterp's row — no weight is needed to say so."""
-    shell = NNterpEngine.load(document.Document.from_json(minimal_raw).model, dispatch=False)
+    shell = NNterpEngine.load(Model.model_validate(minimal_raw["model"]), dispatch=False)
     located = shell.locate("attention_query", 0)
     assert (located.accessor, located.inside, located.rank) == ("attention_queries", True, (0, 13))
 
@@ -166,9 +164,9 @@ def test_a_meta_shell_still_locates_an_interior(minimal_raw):
 def test_a_hooks_shell_refuses_to_run_because_it_has_nowhere_to(minimal_raw, data_root):
     """nnsight's shell can run remotely; a hooks shell has no server, so the
     engine — not the base contract — is the one that refuses."""
-    shell = HooksEngine.load(document.Document.from_json(minimal_raw).model, dispatch=False)
+    shell = HooksEngine.load(Model.model_validate(minimal_raw["model"]), dispatch=False)
     with pytest.raises(EngineError, match="dispatch=False"):
-        shell.execute(build(document.Document.from_json(minimal_raw), data_root, shell))
+        shell.execute(build_request(minimal_raw, data_root, shell))
 
 
 def test_a_nested_plan_gets_its_own_values_but_the_same_featurizers():

@@ -9,7 +9,7 @@ import torch
 from conftest import of_kind
 
 from causalab_mini import cli, ops, plan
-from causalab_mini.plan import document
+from causalab_mini.plan.spec import Spec
 from causalab_mini.engine import NNterpEngine, steps
 from causalab_mini.engine.engines.nnterp import engine as nnterp
 
@@ -26,10 +26,7 @@ def minimal_plan(minimal_raw, data_root, model_engine):
 def no_write(raw):
     """The same reads with nothing patched: `logits` in the un-intervened model."""
     raw = copy.deepcopy(raw)
-    del raw["method"]["reads"]["v_cf"], raw["method"]["writes"], raw["method"]["intervened_models"]
-    raw["method"]["reads"]["logits"]["model"] = "original"
-    for entry in raw["method"]["save"]:
-        entry["model"] = "original"
+    del raw["steps"]["patched"]["interventions"]
     return raw
 
 
@@ -37,7 +34,7 @@ def identity_write(raw):
     """The same swap, with the operand read off the base input at the same
     address — so the write puts back exactly what was already there."""
     raw = copy.deepcopy(raw)
-    raw["method"]["reads"]["v_cf"]["input"] = "base"
+    raw["steps"]["counterfactual"]["field"] = "input"
     return raw
 
 
@@ -205,7 +202,7 @@ def test_the_run_writes_the_save_manifest_and_nothing_else(model_engine, tmp_pat
     assert [row["example_id"] for row in rows] == ["0", "1", "2", "3"]
     assert {row["unit"] for row in rows} == {"logit"}
     assert {row["estimand_version"] for row in rows} == {"logit_diff/v1"}
-    assert {row["produced_by"] for row in rows} == {document.Document.from_json(json.loads((data_root.parent / "minimal_cpu.json").read_text())).digest}
+    assert {row["produced_by"] for row in rows} == {Spec.model_validate(minimal_plan.source).digest}
     assert [row["value"] for row in rows] == results.result("logit_diff").tolist()
 
 
@@ -213,7 +210,7 @@ def test_the_cli_runs_the_document_end_to_end(tmp_path, data_root, capsys):
     exit_code = cli.main(
         [
             "run",
-            str(data_root.parent / "minimal_cpu.json"),
+            str(data_root.parent / "v2" / "patching.json"),
             "--data-root",
             str(data_root),
             "--out",

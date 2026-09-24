@@ -1,46 +1,4 @@
 {
- "documents/attention_query_cpu.json": {
-  "logit_diff.json": "5f4123feabc6c22ab0ec1911512b08f94333b88275afd60211099f981d1da7f8"
- },
- "documents/das_cpu_reduction.json": {
-  "ce.json": "ba3e6d3e4df6d980b49e0d7523977b38248efc5442246fed8cfc2604652f3f13",
-  "iia.json": "0a8973f8eb4d2bf6f8593973187ce79475a77e05349c89599590c4ff707b0595",
-  "rot.safetensors": "4d7457cd385a17f6c4c6c19f72ada43aa861c4a5dbc9b4f3ae0cf84da0d0a498"
- },
- "documents/gpt2_cpu.json": {
-  "logit_diff.json": "164ec209c8647c318ae32ea12519dca9d10637cd09de2883aa8e2ec69cc8b796"
- },
- "documents/hydra_effect_cpu.json": {
-  "de0_clean.json": "b4f4f9eaba0ef8d224b5629eb789d5f373409f83848ea01580da77a7220368d8",
-  "de1_abl.json": "0958c66e0aa9bc932b294eb3ceb1eac2c4b1c6aae16b1f9c3999c249b1793ebc",
-  "de1_clean.json": "ac7b9c037fbddbb447975e96aa8c1f601485081e0a2c1c8209b011e4b879f2ab",
-  "te_abl.json": "e72171052b3595debdd9fcc0b22b04a5b95da0e4eb6bcb500bbad1bfbe946852",
-  "te_clean.json": "c8ece7905d7f9dc2712d2424c649f2aaec629f03218808047a42205096c31a53"
- },
- "documents/minimal_cpu.json": {
-  "iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
-  "logit_diff.json": "776ed6df273b1684bbc711e3b584b6b57f4676c2730ecc5679395205f20d8abb"
- },
- "documents/multi_position_patch_cpu.json": {
-  "iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
-  "logit_diff.json": "4d6a866ab08fac7e0c3610d99b688f81d1cd7646fbfc288947e1ff896a0d9053"
- },
- "documents/pos_sweep_cpu.json": {
-  "pos=-1/iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
-  "pos=-1/logit_diff.json": "776ed6df273b1684bbc711e3b584b6b57f4676c2730ecc5679395205f20d8abb",
-  "pos=-2/iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
-  "pos=-2/logit_diff.json": "7d7c899f92f0d79003112b851abe281603d3456ec8401e1cac8fe5d99202cbf1",
-  "pos=-3/iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
-  "pos=-3/logit_diff.json": "5bd013135f095a1e73a18393bf4fb6908d362ae7f78050e9fa4c74bebd2dc413"
- },
- "documents/random_subspace_cpu.json": {
-  "seed=0/iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
-  "seed=0/logit_diff.json": "a0d06bfb48567761550078b633448f1f10e135444f71713bb38e4eb73db2af61",
-  "seed=1/iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
-  "seed=1/logit_diff.json": "82fd12f0d2c2154e7b1e5f682e614e8c9add289c555a8668d861224ad1269cac",
-  "seed=2/iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
-  "seed=2/logit_diff.json": "785fddf4dfd6d55f844cd32f1258d569e312964becf72808c685fbefb619d3ec"
- },
  "documents/v2/attention_knockout.json": {
   "heads=0/iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
   "heads=0/logit_diff.json": "c280ba16d88c592b0026837963f9a8f1ee76540dbf5246892c772e60e3982667",

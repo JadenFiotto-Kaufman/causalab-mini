@@ -14,10 +14,12 @@ import torch
 from conftest import of_kind
 
 from causalab_mini import plan
-from causalab_mini.plan import document, sweep
+from causalab_mini.plan import sweep
+from causalab_mini.plan.spec import Spec
+from pydantic import ValidationError
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-DOCUMENT = REPO / "documents" / "pos_sweep_cpu.json"
+DOCUMENT = REPO / "documents" / "v2" / "pos_sweep.json"
 
 
 @pytest.fixture
@@ -38,10 +40,10 @@ def swept_plan(swept_raw, data_root, model_engine):
 def test_a_swept_document_is_n_documents(swept_raw):
     points = sweep.points(swept_raw)
     assert [label for label, _ in points] == ["pos=-1", "pos=-2", "pos=-3"]
-    assert [one["method"]["writes"]["patch"]["pos"] for _, one in points] == [-1, -2, -3]
+    assert [one["steps"]["patched"]["interventions"]["writes"]["patch"]["pos"] for _, one in points] == [-1, -2, -3]
     # Every point is an ordinary document in every other way.
     for _, one in points:
-        assert one["method"]["reads"] == swept_raw["method"]["reads"]
+        assert one["steps"]["counterfactual"] == swept_raw["steps"]["counterfactual"]
 
 
 def test_an_unswept_document_is_one_unlabelled_point(minimal_raw):
@@ -51,13 +53,13 @@ def test_an_unswept_document_is_one_unlabelled_point(minimal_raw):
 def test_each_point_has_its_own_digest(swept_raw):
     """A point is its own experiment, so `produced_by` distinguishes them —
     the three files are not three copies of one result."""
-    digests = {document.Document.from_json(one).digest for _, one in sweep.points(swept_raw)}
+    digests = {Spec.model_validate(one).digest for _, one in sweep.points(swept_raw)}
     assert len(digests) == 3
 
 
 def test_a_document_still_holding_a_wrapper_is_refused(swept_raw):
-    with pytest.raises(document.DocumentError, match="build_request"):
-        document.Document.from_json(swept_raw)
+    with pytest.raises(ValidationError, match="build_request"):
+        Spec.model_validate(swept_raw)
 
 
 @pytest.mark.parametrize(
@@ -65,13 +67,13 @@ def test_a_document_still_holding_a_wrapper_is_refused(swept_raw):
     [
         (
             lambda raw: (
-                raw["method"]["writes"]["patch"].update(pos=-1),
+                raw["steps"]["patched"]["interventions"]["writes"]["patch"].update(pos=-1),
                 raw["model"].update(dtype={"sweep": ["fp32", "bf16"]}),
             ),
             "may not change the model",
         ),
-        (lambda raw: raw["method"]["writes"]["patch"].update(pos={"sweep": {"range": [0, 3.5]}}), "in integers"),
-        (lambda raw: raw["method"]["writes"]["patch"].update(pos={"sweep": []}), "sweep of nothing"),
+        (lambda raw: raw["steps"]["patched"]["interventions"]["writes"]["patch"].update(pos={"sweep": {"range": [0, 3.5]}}), "in integers"),
+        (lambda raw: raw["steps"]["patched"]["interventions"]["writes"]["patch"].update(pos={"sweep": []}), "sweep of nothing"),
     ],
     ids=["swept model", "a range of non-integers", "empty"],
 )
@@ -111,7 +113,7 @@ def test_the_points_differ_in_the_swept_field_and_nothing_else(swept_plan, model
     # is what resolving a position against the padding the tokenizer
     # actually produced is for.
     positions = [
-        steps.located(model_engine, of_kind(point, plan.Forward)[1])[1]["patch"]["rows"]
+        steps.located(model_engine, of_kind(point, plan.Forward)[1])[1]["patched.patch"]["rows"]
         for point in swept_plan.steps.values()
     ]
     assert positions == [((10,),) * 4, ((9,),) * 4, ((8,),) * 4]
@@ -179,7 +181,7 @@ def test_each_point_writes_its_own_files_in_its_own_directory(swept_plan, model_
         "run.json",
     ]
     point = json.loads((tmp_path / "pos=-2" / "document.json").read_text())
-    assert point["method"]["writes"]["patch"]["pos"] == -2
+    assert point["steps"]["patched"]["interventions"]["writes"]["patch"]["pos"] == -2
     rows = json.loads((tmp_path / "pos=-1" / "iia.json").read_text())
     assert [row["example_id"] for row in rows] == ["0", "1", "2", "3"]
 
@@ -187,13 +189,13 @@ def test_each_point_writes_its_own_files_in_its_own_directory(swept_plan, model_
 def test_two_swept_fields_are_their_cross_product(swept_raw):
     """Points in the order the fields appear, labelled by both coordinates —
     the shape of the one shipped causalab pipeline (k x seed)."""
-    swept_raw["method"]["reads"]["v_cf"]["pos"] = {"sweep": [-1, -2]}
+    swept_raw["steps"]["counterfactual"]["reads"]["v_cf"]["pos"] = {"sweep": [-1, -2]}
     points = sweep.points(swept_raw)
     assert [label for label, _ in points] == [
         "pos=-1,pos=-1", "pos=-1,pos=-2", "pos=-1,pos=-3",
         "pos=-2,pos=-1", "pos=-2,pos=-2", "pos=-2,pos=-3",
     ]
-    read, write = points[1][1]["method"]["reads"]["v_cf"]["pos"], points[1][1]["method"]["writes"]["patch"]["pos"]
+    read, write = points[1][1]["steps"]["counterfactual"]["reads"]["v_cf"]["pos"], points[1][1]["steps"]["patched"]["interventions"]["writes"]["patch"]["pos"]
     assert (read, write) == (-1, -2)
 
 
@@ -203,16 +205,15 @@ def test_two_swept_fields_are_their_cross_product(swept_raw):
 
 
 def test_a_range_is_pythons(swept_raw):
-    swept_raw["method"]["writes"]["patch"]["pos"] = {"sweep": {"range": [-3, 0]}}
+    swept_raw["steps"]["patched"]["interventions"]["writes"]["patch"]["pos"] = {"sweep": {"range": [-3, 0]}}
     assert [label for label, _ in sweep.points(swept_raw)] == ["pos=-3", "pos=-2", "pos=-1"]
-    swept_raw["method"]["writes"]["patch"]["pos"] = {"sweep": {"range": [0, 10, 4]}}
-    assert [one["method"]["writes"]["patch"]["pos"] for _, one in sweep.points(swept_raw)] == [0, 4, 8]
+    swept_raw["steps"]["patched"]["interventions"]["writes"]["patch"]["pos"] = {"sweep": {"range": [0, 10, 4]}}
+    assert [one["steps"]["patched"]["interventions"]["writes"]["patch"]["pos"] for _, one in sweep.points(swept_raw)] == [0, 4, 8]
 
 
 def test_a_range_inside_a_list_sweeps_a_one_layer_band(swept_raw):
     """`layers` is a band, a list — so the wrapper goes where the integer is."""
-    swept_raw["method"]["writes"]["patch"]["pos"] = -1
-    site = next(iter(swept_raw["method"]["sites"].values())) if "sites" in swept_raw["method"] else None
+    swept_raw["steps"]["patched"]["interventions"]["writes"]["patch"]["pos"] = -1
     swept_raw["probe"] = {"layers": [{"sweep": {"range": [0, 3]}}]}
     found = sweep.points(swept_raw)
     assert [label for label, _ in found] == ["layers=0", "layers=1", "layers=2"]
@@ -225,24 +226,24 @@ def test_fields_on_one_named_axis_move_together(swept_raw):
     points, six of them reading one place and writing another. Named, they
     are one coordinate."""
     both = {"sweep": [-1, -2, -3], "as": "pos"}
-    swept_raw["method"]["reads"]["v_cf"]["pos"] = dict(both)
-    swept_raw["method"]["writes"]["patch"]["pos"] = dict(both)
+    swept_raw["steps"]["counterfactual"]["reads"]["v_cf"]["pos"] = dict(both)
+    swept_raw["steps"]["patched"]["interventions"]["writes"]["patch"]["pos"] = dict(both)
     found = sweep.points(swept_raw)
 
     assert [label for label, _ in found] == ["pos=-1", "pos=-2", "pos=-3"]
     for _, one in found:
-        assert one["method"]["reads"]["v_cf"]["pos"] == one["method"]["writes"]["patch"]["pos"]
+        assert one["steps"]["counterfactual"]["reads"]["v_cf"]["pos"] == one["steps"]["patched"]["interventions"]["writes"]["patch"]["pos"]
 
     # a named axis still crosses with an unnamed one, and may hold different values per field
-    swept_raw["method"]["reads"]["v_cf"]["pos"] = {"sweep": [5, 6, 7], "as": "pos"}
+    swept_raw["steps"]["counterfactual"]["reads"]["v_cf"]["pos"] = {"sweep": [5, 6, 7], "as": "pos"}
     swept_raw["probe"] = {"k": {"sweep": [1, 2]}}
     found = sweep.points(swept_raw)
     assert len(found) == 6 and found[0][0] == "pos=5,k=1"
-    assert (found[5][1]["method"]["reads"]["v_cf"]["pos"], found[5][1]["method"]["writes"]["patch"]["pos"]) == (7, -3)
+    assert (found[5][1]["steps"]["counterfactual"]["reads"]["v_cf"]["pos"], found[5][1]["steps"]["patched"]["interventions"]["writes"]["patch"]["pos"]) == (7, -3)
 
 
 def test_a_named_axis_needs_a_value_per_field_per_point(swept_raw):
-    swept_raw["method"]["reads"]["v_cf"]["pos"] = {"sweep": [-1, -2], "as": "pos"}
-    swept_raw["method"]["writes"]["patch"]["pos"] = {"sweep": [-1, -2, -3], "as": "pos"}
+    swept_raw["steps"]["counterfactual"]["reads"]["v_cf"]["pos"] = {"sweep": [-1, -2], "as": "pos"}
+    swept_raw["steps"]["patched"]["interventions"]["writes"]["patch"]["pos"] = {"sweep": [-1, -2, -3], "as": "pos"}
     with pytest.raises(sweep.SweepError, match="axis 'pos' has 2 values"):
         sweep.points(swept_raw)

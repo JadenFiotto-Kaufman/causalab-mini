@@ -16,11 +16,10 @@ from conftest import of_kind
 
 from causalab_mini import ops, plan
 from causalab_mini.address import Address
-from causalab_mini.plan import document
 from causalab_mini.engine import NNterpEngine, steps
 from causalab_mini.engine.engines.nnterp import engine as nnterp
 
-DOCUMENT = pathlib.Path(__file__).resolve().parents[1] / "documents" / "attention_query_cpu.json"
+DOCUMENT = pathlib.Path(__file__).resolve().parents[1] / "documents" / "v2" / "attention_query.json"
 
 
 @pytest.fixture
@@ -34,10 +33,7 @@ def _build(raw, data_root, engine):
 
 def _no_write(raw):
     raw = copy.deepcopy(raw)
-    del raw["method"]["reads"]["v_cf"], raw["method"]["writes"], raw["method"]["intervened_models"]
-    raw["method"]["reads"]["logits"]["model"] = "original"
-    for entry in raw["method"]["save"]:
-        entry["model"] = "original"
+    del raw["steps"]["patched"]["interventions"]
     return raw
 
 
@@ -45,7 +41,7 @@ def _identity_write(raw):
     """The operand read off the base input at the same address, so the write
     puts back exactly what was already there."""
     raw = copy.deepcopy(raw)
-    raw["method"]["reads"]["v_cf"]["input"] = "base"
+    raw["steps"]["counterfactual"]["field"] = "input"
     return raw
 
 
@@ -231,10 +227,8 @@ def test_the_interior_is_ordered_before_its_own_blocks_output(interior_raw, data
     read before layer 0's output. nnsight enforces it — get this wrong and the
     run raises rather than returning a wrong number."""
     raw = copy.deepcopy(interior_raw)
-    raw["method"]["sites"]["block"] = {"component": "block_output", "layers": [0]}
-    raw["method"]["reads"]["after"] = {
-        "site": "block", "pos": -1, "model": "patched", "input": "base",
-    }
+    raw["sites"]["block"] = {"component": "block_output", "layers": [0]}
+    raw["steps"]["patched"]["reads"]["after"] = {"site": "block", "pos": -1}
     built = _build(raw, data_root, model_engine)
 
     assert [tap.address.component for tap in of_kind(built, plan.Forward)[1].taps] == [

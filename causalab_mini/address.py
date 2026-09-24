@@ -357,8 +357,8 @@ def layered(component: str, layer: int | None) -> str | None:
     """Why this component may not be addressed at this layer, or `None`.
 
     A whole-model place takes none and a per-layer one takes exactly one,
-    and which a component is, is this table's to say — so both authoring
-    formats ask here rather than each keeping a list. A name only nnterp
+    and which a component is, is this table's to say — so the document asks
+    here rather than keeping a list. A name only nnterp
     knows is per layer unless nnterp says otherwise, which `locate` finds
     out; here it is not refused for a layer either way.
     """

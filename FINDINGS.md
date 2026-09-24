@@ -14,6 +14,11 @@ and a training loop inside the session — added **no** new module path, side,
 tuple index or operation name; §1.13–§1.15 are the three things it did add, and
 none of them is an address.
 
+The protocol-format reader (`plan/document.py`) and the nine documents in its
+format are gone; the numbered history below still names them, and each
+has a steps-first twin in `documents/v2/` pinned to the same numbers
+(`minimal_cpu.json` is `patching.json`, `das_cpu_reduction.json` is `das.json`).
+
 Measured against nnterp at `334e4ef` (dist `1.3.1.dev64+g0e4b401af`), nnsight
 `0.8.1.dev125+ga8ee93782` and transformers 5.17.0, on
 `hf-internal-testing/tiny-random-LlamaForCausalLM` @ `9fb19125` and

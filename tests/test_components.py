@@ -19,7 +19,7 @@ import pathlib
 import nnsight
 import pytest
 import torch
-from conftest import same_numbers
+from conftest import model_block, same_numbers
 
 from causalab_mini import ops, plan
 from causalab_mini.address import Address, _COMPONENTS
@@ -27,10 +27,9 @@ from causalab_mini.engine.engines.hooks import engine as hooks
 from causalab_mini.engine import NNterpEngine
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.engine.engines.nnterp import engine as nnterp
-from causalab_mini.plan import document
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-GPT2 = REPO / "documents" / "gpt2_cpu.json"
+GPT2 = REPO / "documents" / "v2" / "gpt2_reach.json"
 
 #: The four places inside the attention's call into its implementation,
 #: covered by `test_interior.py` and below; every other component here.
@@ -41,7 +40,7 @@ LAYERED = [name for name in BOUNDARIES if _COMPONENTS[name].per_layer]
 
 @pytest.fixture(scope="session")
 def gpt2_engine():
-    return NNterpEngine.load(document.Document.load(GPT2).model, device_map="cpu")
+    return NNterpEngine.load(model_block(GPT2), device_map="cpu")
 
 
 @pytest.fixture(scope="session")
@@ -49,20 +48,20 @@ def eager_engine():
     """The same tiny Llama running eager attention — the only implementation
     under which the attention pattern is a tensor at all."""
     return NNterpEngine.load(
-        document.Document.load(REPO / "documents" / "minimal_cpu.json").model,
+        model_block(REPO / "documents" / "v2" / "patching.json"),
         device_map="cpu", attn_implementation="eager",
     )
 
 
 @pytest.fixture(scope="session")
 def eager_gpt2_engine():
-    return NNterpEngine.load(document.Document.load(GPT2).model, device_map="cpu", attn_implementation="eager")
+    return NNterpEngine.load(model_block(GPT2), device_map="cpu", attn_implementation="eager")
 
 
 @pytest.fixture(scope="session")
 def hooks_engine():
     return HooksEngine.load(
-        document.Document.load(REPO / "documents" / "minimal_cpu.json").model,
+        model_block(REPO / "documents" / "v2" / "patching.json"),
         device_map="cpu",
     )
 
@@ -72,16 +71,16 @@ def hooks_engines(hooks_engine):
     """The same engine over both families, for the translation table."""
     return {
         "llama": hooks_engine,
-        "gpt2": HooksEngine.load(document.Document.load(GPT2).model, device_map="cpu"),
+        "gpt2": HooksEngine.load(model_block(GPT2), device_map="cpu"),
     }
 
 
 def _at(raw, component, layer):
     """The minimal document with its written site moved to another component."""
     raw = copy.deepcopy(raw)
-    raw["method"]["sites"]["target"] = {"component": component}
+    raw["sites"]["target"] = {"component": component}
     if layer is not None:
-        raw["method"]["sites"]["target"]["layers"] = [layer]
+        raw["sites"]["target"]["layers"] = [layer]
     return raw
 
 
@@ -311,15 +310,11 @@ def test_a_swap_at_every_component_lands_and_moves_the_logits(
     swapped = model_engine.execute(plan.build_request(raw, data_root, model_engine))
 
     clean = copy.deepcopy(raw)
-    del clean["method"]["reads"]["v_cf"], clean["method"]["writes"]
-    del clean["method"]["intervened_models"]
-    clean["method"]["reads"]["logits"]["model"] = "original"
-    for entry in clean["method"]["save"]:
-        entry["model"] = "original"
+    del clean["steps"]["patched"]["interventions"]
     plain = model_engine.execute(plan.build_request(clean, data_root, model_engine))
 
     identity = copy.deepcopy(raw)
-    identity["method"]["reads"]["v_cf"]["input"] = "base"
+    identity["steps"]["counterfactual"]["field"] = "input"
     same = model_engine.execute(plan.build_request(identity, data_root, model_engine))
 
     assert torch.equal(same.result("logit_diff"), plain.result("logit_diff")), component
@@ -339,11 +334,7 @@ def test_an_interchange_at_the_embeddings_of_a_shared_last_token_is_a_no_op(
     swapped = model_engine.execute(plan.build_request(raw, data_root, model_engine))
 
     clean = copy.deepcopy(raw)
-    del clean["method"]["reads"]["v_cf"], clean["method"]["writes"]
-    del clean["method"]["intervened_models"]
-    clean["method"]["reads"]["logits"]["model"] = "original"
-    for entry in clean["method"]["save"]:
-        entry["model"] = "original"
+    del clean["steps"]["patched"]["interventions"]
     plain = model_engine.execute(plan.build_request(clean, data_root, model_engine))
 
     assert torch.equal(swapped.result("logit_diff"), plain.result("logit_diff"))
