@@ -1886,3 +1886,100 @@ fix working: `pca_harvest.json` reads `{"all": true}` and its basis no
 longer has the BOS embedding among the vectors it is the principal
 directions of. **A standardized name that resolves differently per family is
 worse than no name**, because nothing downstream can tell.
+
+
+## 27. Rewriting the document format under a byte pin: what it took, and what it found
+
+The plan-shaped format (roles, interventions holding reads, writes, models
+and metrics, steps of kind observe/fit/weights) was replaced by the
+steps-first one, where a step is a forward, a generate, a metric, a reduce
+or a fit and its name is how later steps reach what it produced — and the
+plan and the executor were made to mirror it: a plan's steps are those same
+kinds, and the walk runs one step at a time. The bar was that the corpus
+keep its numbers, and it was held by measurement at every commit rather than
+argued.
+
+### 27.1 The pin, and what held
+
+`tests/test_golden.py` hashes every file the 30 runnable documents write —
+132 files, taken on master before anything moved: each table's values,
+eligibility, positions, reasons and tokens, each tensor's dtype, shape and
+bytes, each bundle's stamp. It leaves out only what names the document
+(`produced_by`, a table's `metric` column, `document.json`, `run.json`).
+It held through the change of executor first, with both old formats
+compiled to the new steps. While the old plan-shaped format still existed,
+a converter rewrote each of its 27 documents and a comparison with names
+taken out showed **27/27 compile to the same plan** — the same model calls
+in the same order, ids, masks, taps, selections, operands (compared as the
+read that produced them), metrics, reductions, fits update by update,
+featurizers, weights and files — and **22/22 write the pinned bytes**. The
+hand-written corpus that replaced them is held to the same pin, and still
+is.
+
+### 27.2 The executor did not need a pass
+
+The old executor ran an `Observe` — a group of forwards and the metrics of
+their reads — as its unit, and the values a write's operand named lived and
+died inside one. Making a step the unit needed three things and nothing
+more. Values live in the walk's state for the whole `steps` list, so an
+operand is the name of any earlier value. Batching windows each step on its
+own and slices an operand by the layout it was read with — the mechanism
+that already carried a published output across steps — so a write meets the
+operand of its own row whichever step read it; `test_batching` pins it with
+one row at a time. And inside a fit's update the state keeps each value's
+graph until the optimizer step, so a body may even train through a mean it
+takes of its own reads, which grouping by pass would have had to refuse.
+Provenance became each step's own: a forward reports where it acted when it
+has a position the document leaves open, and a metric of such a read
+carries its eligible rows and that record. No old `Observe` mixed a dynamic
+forward with a static one where it reached a table, so every table kept its
+bytes. The engine grew one member, `generate`, beside `forward`: a decode is
+a different call with a different result.
+
+### 27.3 Forward order is kept as written, and one question is left open
+
+Steps run in the order the document writes them (a reference can only name
+an earlier step, so that order is always a valid schedule), and the
+rewritten corpus writes them in the order the old compiler's schedule chose.
+Whether reordering two independent forwards inside a fit changes the order
+autograd accumulates a gradient in — and so the last bit of a trained
+rotation — was **not measured**; keeping the order made it moot for the pin.
+
+### 27.4 The old format fitted against the wrong rows, silently
+
+An unreduced output published by an earlier step and taken as an operand
+inside a fit was sliced by window — rows 0.. of the minibatch — while the
+minibatch is a shuffled draw of the rows. Probed on a commit that still had
+the format: a fit whose write swaps each row's own activation back in (an
+identity, so each update must score exactly the un-intervened row it drew),
+seed 1, one row per update:
+
+```
+update draws row 0: self-swap ld +0.015346   clean ld of that row +0.015346
+update draws row 1: self-swap ld -0.006656   clean ld of that row +0.000548
+```
+
+The second update met row 0's activation. Nothing in the corpus reached it.
+In the steps-first format a fit's body may not take an unreduced read from
+outside itself — refused by name, "whose rows the fit shuffles" — and a mean,
+which has no rows, is still allowed.
+
+### 27.5 A fit's body is its own scope
+
+The old walk seeded each pass's values with what earlier steps published,
+and a read that shared a published name would have been replaced by the
+published tensor; the old format refused the collision with a rule of its
+own. Now every update and every evaluation of a fit runs in a scope that
+starts as a copy of what came before and is thrown away after, so a body
+reuses the root's step names — DAS's `counterfactual` and `patched` are both
+— and nothing it produces can be mistaken for what the root produced.
+
+### 27.6 The schema never admitted `-1`
+
+Every document writes `"pos": -1`, the one sugar for `{"index": -1}`, and the
+model accepts it through a `BeforeValidator` — which the JSON Schema did not
+say, in either format. Found by validating every sweep point of the corpus
+(207) against the printed schema with `jsonschema`; fixed by declaring the
+validator's input type, `json_schema_input_type=int | Where`, after which all
+207 validate. The schema is only worth what it accepts, and nothing had
+checked it against a document.

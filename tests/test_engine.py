@@ -104,12 +104,11 @@ def test_an_engine_that_ships_holds_nothing_but_its_model(model_engine):
     """A traced block ships every name it loads, and the engine is one of
     those names — so whatever the engine holds rides along with it.
 
-    Measured on the `remote="local"` path with the tiny Llama: the whole
-    session payload is 115,746 bytes, the engine class alone is 77,736 (our
-    package ships by value once registered), the instance is 86,227, and the
-    model it holds is 7,079 of that. So the object costs about 1.4 KB over
-    passing the class and the model separately — which is why `execute` may
-    pass `self` rather than `type(self)`.
+    Its class ships as a reference: nothing of this package travels by
+    value, and the server imports its own copy (FINDINGS §24). What the
+    instance adds is what it holds, and the model it holds is itself a
+    reference to the module the server has loaded — which is why `execute`
+    may pass `self` rather than `type(self)`.
 
     That stays true only while the engine holds the model and nothing else.
     An engine that also held a tokenizer, a dataset or a document would ship

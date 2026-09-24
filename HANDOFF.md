@@ -36,9 +36,9 @@ It **imports nothing from causalab**. Only the JSON documents were copied.
 
 ## 2. State as of this handoff
 
-`master`, clean tree, pushed to GitHub (private). **486 tests passing**
+`master`, clean tree, pushed to GitHub (private). **558 tests passing**
 (`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~30 s), `uvx pyright` at 0
-errors. **7,356 lines** across 31 files in `causalab_mini/`.
+errors. **8,007 lines** across 31 files in `causalab_mini/`.
 
 The package is five sub-packages and a short spine, each named for what it is
 allowed to know:
@@ -71,8 +71,8 @@ change to `steps.py`, `ops/`, `plan/` or `address.py`. What it had to supply by
 hand — and what turned out to be free — is FINDINGS §6. It is not wired into
 the CLI: `--engine` is a flag nobody has needed yet.
 
-Documents: **nine** in `documents/` (the protocol format), **21** in
-`documents/v2/` (the plan-shaped one) and **five** in `documents/real/`,
+Documents: **nine** in `documents/` (the protocol format), **22** in
+`documents/v2/` (the steps-first one) and **five** in `documents/real/`,
 which pin real checkpoints and are compiled but not run by the suite. The
 nine, ported from causalab's own corpus:
 `multi_position_patch_cpu.json` (three disjoint absolute writes in one
@@ -96,11 +96,13 @@ These are load-bearing. Several tests enforce them.
    per-read path. `remote=True` on that session is the *only* difference
    between local and remote — there is no second code path.
 3. **There are two authoring formats and one compiler.** `document.py`
-   reads the protocol's JSON; `spec.py` reads a plan-shaped one whose
-   `steps` are the plan's steps and whose saves sit on the step that
-   produces them. Both reduce to `_Experiment` and share every helper below
-   it, so they cannot drift into producing different plans —
-   `tests/test_spec.py` asserts the same numbers from both.
+   reads the protocol's JSON; `spec.py` reads the steps-first one, whose
+   `steps` are what runs — forwards, generates, metrics, reduces, fits —
+   and whose step names are how later steps and `saves` reach what each
+   produced. Both hand every model call to `build._forward` in one shape
+   and share every helper below it, so they cannot drift into producing
+   different plans — `tests/test_format.py` asserts the same numbers from
+   both.
 4. **A plan is pure data; an engine turns it into tensors.** A *fresh* plan
    holds strings, ints, tuples and dicts only — its `results` dicts are empty
    until it runs, and they are the only mutable thing in the tree. A plan has
@@ -130,11 +132,14 @@ These are load-bearing. Several tests enforce them.
    *attribute name*, and read-only. Reaching there is the engine's
    (`engine/engines/nnterp/engine.py`'s `read`/`write`). `ops/` knows
    nothing about models at all.
-7. **An engine is eight members and no more**: `load`, then `tokenizer`,
+7. **An engine is nine members and no more**: `load`, then `tokenizer`,
    `num_layers`, `locate`, `width` and `heads` — what the compiler asks of a
-   runtime — then `execute` and `forward`, what the run asks. (`heads` joined
-   when a site could name them: like `width`, it is a question about the
-   checkpoint that only its holder can answer.)
+   runtime — then `execute`, `forward` and `generate`, what the run asks.
+   (`heads` joined when a site could name them: like `width`, it is a
+   question about the checkpoint that only its holder can answer.
+   `generate` is beside `forward` because a decode is a different call with
+   a different result: it takes the step's generate arguments and returns
+   the ids.)
    Everything else lives in `engine/steps.py` and is shared.
    `tests/test_engine.py` pins this: it asserts the override set is exactly
    the contract, and runs a real compiled plan on an engine that has no model
@@ -219,7 +224,7 @@ token is a token the model produced). A bare `-1` is sugar for
   compiles to one ordinary read per decode step carrying a `stack` name, and
   the run puts them back together and cuts them — so neither engine needed a
   line. A write may only name a step the decode has reached.
-- **Chat turns are segments, and the data says so.** A role whose field
+- **Chat turns are segments, and the data says so.** A forward whose field
   holds a list of `{"role", "content"}` messages is rendered through the
   checkpoint's own chat template at compile time, and the character span of
   each turn's content travels in the plan beside the anchors. A position
@@ -247,13 +252,17 @@ What §4 used to describe as decided-but-unbuilt is in. How it landed, and
 where it differs from the plan written here before it was built:
 
 - **`Plan` is a step and plans nest.** `Plan.steps` is an ordered
-  `{name: Step}` dict; the leaves are `Featurizers`, `Observe`, `Fit`,
-  `Weights`. A document compiles to a root plan with two to four steps.
+  `{name: Step}` dict; the leaves are the kinds of thing a document runs —
+  `Forward`, `Generate`, `Metric`, `Reduce`, `Fit` — plus `Featurizers`
+  (declaring a parameter set is what builds it) and `Weights` (what a fit
+  trained, when saved). A steps-first document compiles one for one: its
+  steps are the plan's, under their own names. A `Fit` holds a plan of its
+  body's steps per minibatch, and one over the held-out rows.
 - **A plan carries its own results**, at the node that produced them.
-  `root.step("fit", Fit).epochs[0][0].results["ce"]` is the metric of one
+  `root.step("fit", Fit).epochs[0][0].result("ce")` is the metric of one
   training update. `Plan.result(name)` is the flat lookup; it descends through
-  steps but **stops before a fit's internal passes**, or every fitted document
-  would have six ambiguous `iia`s.
+  steps but **stops before a fit's updates**, or every fitted document would
+  have six ambiguous `iia`s.
 - **`nnsight.save(plan)` at the top of the session is how results come home**,
   exactly as predicted. Verified with a probe before anything was built: a
   frozen dataclass with nested children and mutable `results` dicts round-trips
@@ -266,9 +275,14 @@ where it differs from the plan written here before it was built:
   engine (torch hooks, vLLM) is possible and `plan/` stays free of torch and
   nnsight. `Engine` itself has **no implementation** — an engine that opens
   nothing should not inherit a session.
-- **There is no run state object.** `values` — the activations a write's
-  operand names — are born and die inside one `Observe`, so the only thing
-  crossing steps is the live featurizer dict.
+- **One state per `steps` list, and a step is the unit.** The walk is "for
+  each step, run it": what a step produces — a read by its op's name, a
+  decode's ids, a metric, a reduction — goes into `State.values`, so a
+  write's operand is simply the name of an earlier value, and each step's
+  windows of rows slice it by its own layout. A nested plan gets a copy; a
+  fit's update gets a copy that keeps each value's graph until the
+  optimizer step, and everything else is published detached. A step reports
+  its own provenance, when it has a position the document leaves open.
 - **No featurizer-isolation flag.** Each point rebuilds its own parameters
   before using them and execution is sequential, so nothing was needed yet.
 

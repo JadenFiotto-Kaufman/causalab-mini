@@ -418,9 +418,9 @@ def children(step: Step) -> tuple[tuple[str, Step], ...]:
 def results_of(step: Step, path: str = "") -> dict[str, dict[str, Any]]:
     """Everything a run produced, as `{step path: {name: value}}` — plain
     strings and tensors, with none of this package's classes in it. That is
-    what may cross back from a server: the plan went out by value, so the
-    server can *use* its classes but cannot pickle an instance of one home.
-    The client still has the plan; only what filled it in has to travel."""
+    what crosses back from a server, by design rather than by limit: the
+    server has these classes (they resolve by import, FINDINGS §24), but the
+    client still holds the plan, so only what filled it in has to travel."""
     found = {path: dict(step.results)} if step.results else {}
     for name, child in children(step):
         found.update(results_of(child, f"{path}/{name}" if path else name))
