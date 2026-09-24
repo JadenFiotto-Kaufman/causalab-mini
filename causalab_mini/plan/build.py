@@ -1100,7 +1100,11 @@ def _forward(
             )
 
     taps = []
-    # forward order within a step; the prompt frame (None) before any step
+    # Forward order: the prompt frame (None) first, then the decode steps in
+    # order with `"all"` before them, and within each by the address's rank.
+    # nnsight requires it, and the run relies on it too: a read cut from the
+    # decode comes as its steps' parts in step order, and a read at every
+    # layer as its layers' parts in layer order, with no sort of their own.
     def order(place: tuple[Address, Any]) -> tuple[int, int, tuple[int, int]]:
         address, step = place
         return (0 if step is None else 1, -1 if step == "all" else (step if step is not None else -1), address.key)

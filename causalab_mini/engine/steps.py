@@ -241,13 +241,10 @@ def _stack_layers(step: Forward, made: dict[str, Any], record: Record) -> None:
     """A read at every layer, as the one value it is: its per-layer reads
     stacked in layer order, the layer axis first. Every layer read the same
     positions, so one record says where."""
-    layers: dict[str, list[tuple[int, str]]] = {}
-    for tap in step.taps:
-        for op in tap.reads:
-            if op.layered:
-                layers.setdefault(op.layered, []).append((tap.address.layer or 0, op.name))
-    for stacked, parts in layers.items():
-        names = [one for _, one in sorted(parts)]
+    reads = [op for tap in step.taps for op in tap.reads if op.layered]
+    for stacked in dict.fromkeys(op.layered for op in reads):
+        # taps come in forward order (`build._forward`), so its layers in layer order
+        names = [op.name for op in reads if op.layered == stacked]
         made[stacked] = torch.stack([made.pop(one) for one in names])
         record[stacked] = record[names[0]]
         for one in names:
@@ -426,12 +423,10 @@ def _continuation(engine: Any, forward: Forward, values: dict[str, Any], generat
     def generated(op: Any) -> bool:
         return op.at.where is not None and op.at.where.frame == "generated"
 
-    # a read cut out of the continuation is its decode steps' reads, in step
-    # order; every other op in the frame is one
-    stacks: dict[str, list[Any]] = {}
-    for _, op in sorted(((tap.step, op) for tap in forward.taps for op in tap.reads if generated(op)), key=_by_step):
-        stacks.setdefault(op.stack or op.name, []).append(op)
-    ops = {name: parts[0] for name, parts in stacks.items()}
+    # a read cut out of the continuation is its decode steps' reads, which
+    # share one spec and come in step order (`build._forward`); every other
+    # op in the frame is one
+    ops: dict[str, Any] = {op.stack or op.name: op for tap in forward.taps for op in tap.reads if generated(op)}
     ops |= {op.name: op for tap in forward.taps for op in tap.writes if generated(op)}
     if not ops:
         return {}
@@ -440,9 +435,10 @@ def _continuation(engine: Any, forward: Forward, values: dict[str, Any], generat
     for name, op in ops.items():
         where = op.at.where
         windows, reasons = locate.locate(frame, where, op.at.anchors)
-        if name in stacks and op.stack:
+        if name != op.name:
             # (rows, steps, width): each step read the one position it processed
-            whole = torch.stack([values.pop(one.name) for one in stacks[name]], dim=1).squeeze(2)
+            parts = [one.name for tap in forward.taps for one in tap.reads if one.stack == name]
+            whole = torch.stack([values.pop(one) for one in parts], dim=1).squeeze(2)
             values[name] = intervene.gather(whole, Selection(positions=windows, flat=where.ragged), seq_axis=1)
         found[name] = _record(frame, windows, reasons)
     return found
@@ -453,12 +449,6 @@ def _record(frame: Frame, windows: Positions, reasons: tuple[str, ...]) -> dict[
     it is, and what it decoded to in `frame`."""
     tokens = tuple(locate.tokens_of(frame, one, row) for row, one in enumerate(windows))
     return {"rows": windows, "reason": reasons, "tokens": tokens}
-
-
-def _by_step(one: tuple[Any, Any]) -> int:
-    """A stack's parts in decode order. A tap at every step (`"all"`) is not
-    one of them, and sorts first."""
-    return one[0] if isinstance(one[0], int) else -1
 
 
 def _fits_every_row(kind: str, op: Any, windows: Positions, reasons: tuple[str, ...]) -> None:
