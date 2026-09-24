@@ -151,7 +151,7 @@ def run(engine: Any, step: Step, state: State, name: str = "") -> None:
     elif isinstance(step, Forward):
         call(engine, name, step, state)
     elif isinstance(step, Metric):
-        metric(name, step, state)
+        metric(engine, name, step, state)
     elif isinstance(step, Reduce):
         reduce(name, step, state)
     elif isinstance(step, Fit):
@@ -256,7 +256,7 @@ def _stack_layers(step: Forward, made: dict[str, Any], record: Record) -> None:
             del record[one]
 
 
-def metric(name: str, step: Metric, state: State) -> None:
+def metric(engine: Any, name: str, step: Metric, state: State) -> None:
     """One score per scored row of its reads.
 
     A metric's rows are the intersection of two halves: the column half,
@@ -284,15 +284,30 @@ def metric(name: str, step: Metric, state: State) -> None:
     value = state.values[step.of]
     # a read at several layers is scored layer by layer, a row of scores each
     scores = [
-        metrics.compute(step.kind, _kept(one, step.flat, keep, state.records[step.of]["rows"]), others, ids)
+        metrics.compute(step.kind, _kept(one, step.flat, keep, state.records[step.of]["rows"]), others, ids, step.params)
         for one in (value if step.layers else [value])
     ]
-    state.publish(name, torch.stack(scores) if step.layers else scores[0])
-    step.results[name] = state.values[name].detach().cpu()
+    if metrics.SIGNATURES[step.kind].tokens:
+        # a list per row, each token decoded here, where the tokenizer is
+        scores = [_decoded(engine.tokenizer, *one) for one in scores]
+        state.publish(name, scores if step.layers else scores[0])
+        step.results[name] = state.values[name]
+    else:
+        state.publish(name, torch.stack(scores) if step.layers else scores[0])
+        step.results[name] = state.values[name].detach().cpu()
     reported = [one for one in reads if one in state.reported]
     if reported:
         step.results["eligible"] = {name: eligible}
         step.results["positions"] = {one: state.records[one] for one in reported}
+
+
+def _decoded(tokenizer: Any, ids: Any, numbers: Any) -> list[list[list[Any]]]:
+    """Per row, each `(token id, number)` as `[token, number]`, the token
+    decoded — plain strings and floats, which is what comes home."""
+    return [
+        [[tokenizer.decode([token]), number] for token, number in zip(row_ids, row_numbers)]
+        for row_ids, row_numbers in zip(ids.tolist(), numbers.tolist())
+    ]
 
 
 def _ids(step: Metric, keep: list[int], rows: int) -> tuple[Any, ...]:

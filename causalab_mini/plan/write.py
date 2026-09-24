@@ -112,8 +112,9 @@ def _file(step: Step, save: SaveFile, out: Path) -> Path:
 def _rows(
     save: SaveFile, scores: Any, eligible: tuple[bool, ...], where: dict[str, Any], layer: dict[str, int], labels: dict[str, str]
 ) -> list[dict[str, Any]]:
-    """One table row per example: its number when it was scored, and where."""
-    numbers = iter(scores.tolist())
+    """One table row per example: its value when it was scored — one number,
+    or a list for a kind whose value per row is one — and where."""
+    numbers = iter(scores.tolist() if hasattr(scores, "tolist") else scores)
     rows = []
     for index, (example_id, included) in enumerate(zip(save.example_ids, eligible)):
         number = next(numbers) if included else None
@@ -124,7 +125,7 @@ def _rows(
                 **layer,
                 # JSON has no NaN or Infinity: `json.dumps` would emit a bare
                 # `NaN`, which Python reads back and a strict parser refuses.
-                "value": float(number) if number is not None and math.isfinite(number) else None,
+                "value": _value(number),
                 "eligible": included,
                 # where the number was read, why it was nowhere, and what
                 # the window it came from actually says — the three the run
@@ -136,3 +137,13 @@ def _rows(
             }
         )
     return rows
+
+
+def _value(number: Any) -> Any:
+    """A value as the table holds it: a finite number, None for what JSON
+    cannot say — no NaN, no Infinity — and a list as its items are."""
+    if isinstance(number, list):
+        return [_value(one) for one in number]
+    if isinstance(number, str) or number is None:
+        return number
+    return float(number) if math.isfinite(number) else None

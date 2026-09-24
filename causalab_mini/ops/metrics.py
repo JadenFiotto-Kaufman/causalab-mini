@@ -87,14 +87,29 @@ def js(logits: Any, against: Any) -> Any:
         return 0.5 * ((p.exp() * (p - m)).sum(dim=-1) + (q.exp() * (q - m)).sum(dim=-1))
 
 
+def top_k(logits: Any, k: int) -> tuple[Any, Any]:
+    """The k most likely tokens per row, and the probability of each:
+    `(ids, probabilities)`, each `(rows, k)`, most likely first. The run
+    decodes the ids — it has the tokenizer — into each row's value, a list
+    of `[token, probability]`."""
+    with exact(logits):
+        probabilities, ids = logits.float().softmax(dim=-1).topk(k, dim=-1)
+    return ids, probabilities
+
+
 @dataclass(frozen=True)
 class Signature:
     """What a kind takes beside `of`, as the document fields that name it:
     further reads, each `<step>.<read>` of the same rows, then data columns,
-    each `<dataset>.<column>` — in the order its function takes them."""
+    each `<dataset>.<column>` — in the order its function takes them — and
+    the numbers it is given by keyword. `tokens` is a kind whose value per
+    row is a list, of `(token id, number)` pairs its function returns as
+    two tensors, which the run decodes."""
 
     reads: tuple[str, ...] = ()
     columns: tuple[str, ...] = ()
+    params: tuple[str, ...] = ()
+    tokens: bool = False
 
 
 SIGNATURES: dict[str, Signature] = {
@@ -106,6 +121,7 @@ SIGNATURES: dict[str, Signature] = {
     "soft_accuracy": Signature(columns=("expected",)),
     "kl": Signature(reads=("against",)),
     "js": Signature(reads=("against",)),
+    "top_k": Signature(params=("k",), tokens=True),
 }
 
 KINDS: dict[str, Callable[..., Any]] = {
@@ -117,6 +133,7 @@ KINDS: dict[str, Callable[..., Any]] = {
     "soft_accuracy": soft_accuracy,
     "kl": kl,
     "js": js,
+    "top_k": top_k,
 }
 
 UNITS: dict[str, tuple[str, str]] = {
@@ -128,11 +145,14 @@ UNITS: dict[str, tuple[str, str]] = {
     "soft_accuracy": ("probability", "soft_accuracy/v1"),
     "kl": ("nat", "kl/v1"),
     "js": ("nat", "js/v1"),
+    "top_k": ("[token, probability] list", "top_k/v1"),
 }
 
 
-def compute(kind: str, logits: Any, reads: tuple[Any, ...], ids: tuple[TokenIds, ...]) -> Any:
+def compute(
+    kind: str, logits: Any, reads: tuple[Any, ...], ids: tuple[TokenIds, ...], params: dict[str, Any]
+) -> Any:
     """`reads` and `ids` are the kind's further reads and its columns, each in
-    its signature's order: `kl` takes (against,) and no ids, `logit_diff` no
-    reads and (a, b)."""
-    return KINDS[kind](logits, *reads, *ids)
+    its signature's order, and `params` its numbers: `kl` takes (against,)
+    and no ids, `logit_diff` no reads and (a, b), `top_k` its `k`."""
+    return KINDS[kind](logits, *reads, *ids, **params)

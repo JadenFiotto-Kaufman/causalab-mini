@@ -1,0 +1,28 @@
+{
+  "header": {
+    "description": "What the model says, read out rather than scored: at the last token of each prompt, the three tokens it finds most likely, decoded, each with its probability — a list per row, which its table writes as the row's value. Beside it, the probability of the expected answer spelled bare, as the first word of a text is, rather than after a space."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "data": {"prompts": {"path": "weekdays/train"}},
+  "steps": {
+    "clean": {
+      "kind": "forward",
+      "data": "prompts",
+      "field": "input",
+      "reads": {"logits": {"site": {"component": "logits"}, "pos": -1}}
+    },
+    "top3": {"kind": "metric", "metric": "top_k", "of": "clean.logits", "k": 3},
+    "p_answer": {
+      "kind": "metric",
+      "metric": "soft_accuracy",
+      "of": "clean.logits",
+      "expected": "prompts.base_answer",
+      "token_form": "bare"
+    },
+    "saves": ["top3", "p_answer"]
+  }
+}

@@ -416,7 +416,9 @@ class _Metric(Node):
     kind: Literal["metric"]
     #: The read it scores, `<step>.<read>`, at one position per row.
     of: str
-    token_form: Literal["space_prefixed"] = "space_prefixed"
+    #: How each column's value is spelled as a token: after a space, bare,
+    #: or the vocabulary id itself.
+    token_form: Literal["space_prefixed", "bare", "id"] = "space_prefixed"
 
     @property
     def inputs(self) -> tuple[str, ...]:
@@ -473,6 +475,14 @@ class SoftAccuracy(_Metric):
     expected: str
 
 
+class TopK(_Metric):
+    """The `k` most likely tokens per row, decoded, each with its
+    probability: a list per row, not one number."""
+
+    metric: Literal["top_k"]
+    k: int = Field(default=5, gt=0)
+
+
 class KL(_Metric):
     """KL(of ‖ against), in nats: the divergence of the distribution `of`
     predicts from the one `against` does, weighted by `of`'s."""
@@ -491,7 +501,7 @@ class JS(_Metric):
 
 
 Metric = Annotated[
-    Union[Match, LogitDiff, CrossEntropy, TokenLogit, TokenProb, SoftAccuracy, KL, JS],
+    Union[Match, LogitDiff, CrossEntropy, TokenLogit, TokenProb, SoftAccuracy, TopK, KL, JS],
     Field(discriminator="metric"),
 ]
 
@@ -1181,7 +1191,11 @@ def _fit(spec: Spec, where: str, name: str, fit: Fit, body: dict[str, Ref]) -> N
         f"{where}: {clash} is both a step of its body and a featurizer it trains, and "
         f"`{name}.{clash[0] if clash else ''}` can name only one of them",
     )
-    metrics = {ref for ref, (kind, _, _) in body.items() if kind == "metric"}
+    # what a fit minimizes and watches is a mean, so a metric of one number a row
+    metrics = {
+        ref for ref, (kind, node, _) in body.items()
+        if kind == "metric" and not METRIC_SIGNATURES[getattr(node, "metric")].tokens
+    }
     gates = {one for one in fit.train if spec.featurizers[one].kind == "gate"}
     _refuse(
         set(fit.anneal) <= gates,

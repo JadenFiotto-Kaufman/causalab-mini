@@ -295,6 +295,8 @@ class Metric(Step):
     #: The further reads its kind takes, by name, in its signature's order:
     #: each over the same rows as `of`, one position a row.
     reads: tuple[str, ...] = ()
+    #: The numbers its kind is given by keyword — `top_k`'s `k`.
+    params: dict[str, Any] = field(default_factory=dict)
     ids: tuple[TokenIds, ...]  # one vocabulary id per scored row, per operand
     #: The rows this metric is computed for, when that is not all of them: a
     #: row whose answer column is null is an excluded measurement. Decided on

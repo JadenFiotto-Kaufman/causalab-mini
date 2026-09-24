@@ -156,6 +156,10 @@
   "seed=2/iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
   "seed=2/logit_diff.json": "785fddf4dfd6d55f844cd32f1258d569e312964becf72808c685fbefb619d3ec"
  },
+ "documents/v2/readout.json": {
+  "p_answer.json": "15e607d4c93f521e921f76a3bba74446af4ce7e3e63a1b6f29f6c7bb405b8bd6",
+  "top3.json": "194d6acd59b8a0b3ee5d0808de29383ebe46e826c6e770d9728be7f1b12d3657"
+ },
  "documents/v2/sae_feature_ablation.json": {
   "features=0/latents.safetensors": "27ccb02bde933b332463787b91bfaf89dbb5edcbd9d9e54287b5b40d30f61c8a",
   "features=0/p_answer.json": "4ca0786f7f4f7f1211a1afe8c7d0b1c55df3f122bb6fc4720d5023eb971231ef",

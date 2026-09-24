@@ -699,9 +699,11 @@ Three kinds, and no others:
 - `unit` and `estimand_version` are derived, never authored, and are written on
   every output row.
 - Mini has more kinds than these three — `token_logit`, `token_prob`,
-  `soft_accuracy`, and `kl` and `js`, which score `of` against a second read,
-  `against` — each a row of `ops/metrics.SIGNATURES` naming which of its
-  fields are reads and which are columns.
+  `soft_accuracy`, `kl` and `js`, which score `of` against a second read,
+  `against`, and `top_k`, whose value per row is a list of tokens with their
+  probabilities — each a row of `ops/metrics.SIGNATURES` naming which of its
+  fields are reads, which are columns and which are numbers. `token_form`
+  takes `bare` and `id` beside `space_prefixed`.
 - Eligibility: a row whose answer column is `null`/absent/empty is an *excluded
   measurement*, not a zero. Neither table has such rows, so the machinery is
   needed only if the design wants it.

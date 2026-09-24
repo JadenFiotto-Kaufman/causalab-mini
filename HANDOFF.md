@@ -36,9 +36,9 @@ It **imports nothing from causalab**. Only the JSON documents were copied.
 
 ## 2. State as of this handoff
 
-`master`, clean tree, pushed to GitHub (private). **539 tests passing**
+`master`, clean tree, pushed to GitHub (private). **554 tests passing**
 (`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~30 s), `uvx pyright` at 0
-errors. **6,927 lines** across 30 files in `causalab_mini/`.
+errors. **7,139 lines** across 30 files in `causalab_mini/`.
 
 The package is five sub-packages and a short spine, each named for what it is
 allowed to know:
@@ -224,7 +224,13 @@ token is a token the model produced). A bare `-1` is sugar for
   step, one position a row, logits — the compiler checks the reads are over
   the same rows and compiles the columns to token ids, and the run hands the
   function the reads and the ids in the row's order. A new kind is a
-  function and a row.
+  function and a row. A row may also name numbers the kind takes (`top_k`'s
+  `k`) and say its value per row is a list of tokens with numbers, which
+  the run decodes and the table writes as the row's `value`.
+- **A column is spelled as a token one of three ways** (`token_form`):
+  `space_prefixed`, as the answer stands in running text; `bare`, as the
+  first word of a text; or `id`, the vocabulary id itself.
+  `data/tokens.token_id` is the one resolver.
 - **The continuation frame is cut per row at its first stop token.** A read
   whose cut only the finished text can settle (`{"index": -1}`, a scope)
   compiles to one ordinary read per decode step carrying a `stack` name, and

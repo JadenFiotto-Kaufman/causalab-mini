@@ -26,6 +26,7 @@ from ..data import rows as rows_module, tokens
 from ..ops import featurizer as featurizer_module
 from ..ops import intervene as intervene_module
 from ..ops import locate as locate_module
+from ..ops import metrics as metrics_module
 from . import sweep
 from ..shapes import Selection, TokenRows, Where
 from .plan import (
@@ -554,6 +555,7 @@ def _metric(
         kind=kind,
         of=of,
         reads=tuple(spec.inputs),
+        params={one: getattr(spec, one) for one in metrics_module.SIGNATURES[kind].params},
         ids=_ids(spec, rows, keep, tokenizer),
         rows=None if all(keep) else tuple(index for index, one in enumerate(keep) if one),
         flat=op.flat,
