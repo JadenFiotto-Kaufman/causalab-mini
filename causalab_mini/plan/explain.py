@@ -57,7 +57,8 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
     elif isinstance(step, Fit):
         out.append(
             f"{pad}{name}: Fit  {len(step.epochs)} epochs x {len(step.epochs[0])} update  "
-            f"lr={step.lr} objective={step.objective} params={step.params}  "
+            f"{step.optimizer}({', '.join(f'{k}={v}' for k, v in step.optimizer_args.items())}) "
+            f"objective={step.objective} params={step.params}  "
             f"early_stop={step.early_stop!r} patience={step.patience}"
             f"{f' anneal={step.anneal}' if step.anneal else ''}{tail}"
         )

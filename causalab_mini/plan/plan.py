@@ -336,8 +336,11 @@ class Fit(Step):
     evaluation: "Plan"
     objective: tuple[tuple[float, str], ...]
     params: tuple[str, ...]
-    lr: float
-    weight_decay: float
+    #: One of `torch.optim`'s, by the document's name for it, and what it is
+    #: constructed with beside the parameters: `lr`, `weight_decay`, and
+    #: `betas` or `momentum` where the document gives one.
+    optimizer: str
+    optimizer_args: dict[str, Any]
     early_stop: str
     patience: int
     mode: str

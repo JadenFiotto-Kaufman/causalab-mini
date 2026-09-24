@@ -9,6 +9,7 @@ import json
 
 import pytest
 import safetensors
+from pydantic import ValidationError
 import torch
 from conftest import of_kind, tensors
 
@@ -322,3 +323,46 @@ def test_a_fit_leaves_no_gradient_on_the_model(model_engine, das_plan):
 
     hooks = HooksEngine.load(Spec.model_validate(das_plan.source).model, device_map="cpu")
     assert all(not p.requires_grad for p in hooks.model.parameters()) and not hooks.model.training
+
+
+@pytest.mark.parametrize(
+    "optimizer",
+    [
+        {"name": "adamw", "lr": 0.01},
+        {"name": "adam", "lr": 0.01, "betas": [0.8, 0.99]},
+        {"name": "sgd", "lr": 0.5, "momentum": 0.9},
+        {"name": "rmsprop", "lr": 0.01, "momentum": 0.5},
+    ],
+    ids=lambda one: one["name"],
+)
+def test_each_optimizer_trains_the_rotation(optimizer, das_raw, data_root, model_engine):
+    """The document names one of `torch.optim`'s; the run constructs it with
+    the fit's numbers and the one it takes beside them, and the loss moves."""
+    das_raw["steps"]["fit"].update(optimizer=optimizer, epochs=2, early_stop={"metric": "iia", "mode": "max", "patience": 5})
+    losses = model_engine.execute(plan.build_request(das_raw, data_root, model_engine)).result("train")["loss"]
+    assert len(losses) == 2 and losses[1] != losses[0]
+
+
+@pytest.mark.parametrize(
+    "optimizer, message",
+    [
+        ({"name": "lbfgs", "lr": 0.1}, "'adamw', 'adam', 'sgd' or 'rmsprop'"),
+        ({"name": "sgd", "lr": 0.1, "betas": [0.9, 0.99]}, "'sgd' takes no `betas`"),
+        ({"name": "adam", "lr": 0.1, "momentum": 0.9}, "'adam' takes no `momentum`"),
+    ],
+    ids=["unknown", "betas on sgd", "momentum on adam"],
+)
+def test_an_optimizer_is_one_the_run_knows_with_its_own_numbers(optimizer, message, das_raw):
+    das_raw["steps"]["fit"]["optimizer"] = optimizer
+    with pytest.raises(ValidationError, match=message):
+        Spec.model_validate(das_raw)
+
+
+def test_the_documents_optimizers_are_the_ones_the_run_constructs():
+    from typing import get_args
+
+    from causalab_mini.engine import steps
+    from causalab_mini.plan.spec import Optimizer
+
+    assert set(get_args(Optimizer.model_fields["name"].annotation)) == set(steps.OPTIMIZERS)
+    assert all(hasattr(torch.optim, one) for one in steps.OPTIMIZERS.values())

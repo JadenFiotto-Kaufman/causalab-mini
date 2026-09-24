@@ -499,6 +499,10 @@ def _writes_land(forward: Forward, record: Record) -> None:
                     )
 
 
+#: A document's name for an optimizer, and `torch.optim`'s.
+OPTIMIZERS = {"adamw": "AdamW", "adam": "Adam", "sgd": "SGD", "rmsprop": "RMSprop"}
+
+
 def fit(engine: Any, step: Fit, state: State) -> None:
     """The same steps, once per minibatch, with an optimizer between.
 
@@ -510,10 +514,8 @@ def fit(engine: Any, step: Fit, state: State) -> None:
     model is frozen and nothing else in the run carries a gradient.
     """
     featurizers = state.featurizers
-    optimizer = torch.optim.AdamW(
-        [featurizers[name].weight for name in step.params],
-        lr=step.lr,
-        weight_decay=step.weight_decay,
+    optimizer = getattr(torch.optim, OPTIMIZERS[step.optimizer])(
+        [featurizers[name].weight for name in step.params], **step.optimizer_args
     )
     # A gate's mask is a term the objective may name (`<name>.mask`, its mean
     # is the L1 penalty) and a column of the eval record (the fraction kept).

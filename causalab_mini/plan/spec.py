@@ -486,9 +486,28 @@ class Reduce(Node):
 
 
 class Optimizer(Node):
-    name: Literal["adamw"] = "adamw"
+    """One of `torch.optim`'s, by a document's name for it, with the fit's
+    step size and decay — and the one number each takes beside them:
+    `betas` for the Adams, `momentum` for SGD and RMSprop."""
+
+    name: Literal["adamw", "adam", "sgd", "rmsprop"] = "adamw"
     lr: float
     weight_decay: float = 0.0
+    betas: tuple[float, float] | None = None
+    momentum: float | None = None
+
+    @model_validator(mode="after")
+    def _its_own_numbers(self) -> "Optimizer":
+        adam = self.name in ("adamw", "adam")
+        _refuse(self.betas is None or adam, f"{self.name!r} takes no `betas`; the Adams do")
+        _refuse(self.momentum is None or not adam, f"{self.name!r} takes no `momentum`; SGD and RMSprop do")
+        return self
+
+    @property
+    def arguments(self) -> dict[str, Any]:
+        """What the optimizer is constructed with, beside the parameters."""
+        given = {"betas": self.betas, "momentum": self.momentum}
+        return {"lr": self.lr, "weight_decay": self.weight_decay} | {k: v for k, v in given.items() if v is not None}
 
 
 class EarlyStop(Node):
