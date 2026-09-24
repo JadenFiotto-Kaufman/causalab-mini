@@ -1,6 +1,6 @@
 {
   "header": {
-    "description": "The first half of a PCA control: harvest the residual stream at EVERY token of the training prompts \u2014 a ragged read, ~40 vectors from 4 rows \u2014 and reduce it to its top-4 principal directions, an orthonormal (16, 4) basis, written as a bundle a later document loads as a `pca` featurizer. Nothing is trained; the basis is what the data says. (One position per row would be 4 vectors, and four vectors have no rank-4 PCA; the compiler says so.)"
+    "description": "The first half of a PCA control: harvest the residual stream at EVERY token of the training prompts \u2014 a ragged read, ~36 vectors from 4 rows, the tokenizer's own BOS not among them because it is not a token of the prompt \u2014 and reduce it to its top-4 principal directions, an orthonormal (16, 4) basis, written as a bundle a later document loads as a `pca` featurizer. Nothing is trained; the basis is what the data says. (One position per row would be 4 vectors, and four vectors have no rank-4 PCA; the compiler says so.)"
   },
   "model": {
     "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
@@ -36,6 +36,7 @@
   "steps": {
     "harvest": {
       "kind": "observe",
+      "interventions": "harvest",
       "rows": {
         "base": "weekdays/train"
       },

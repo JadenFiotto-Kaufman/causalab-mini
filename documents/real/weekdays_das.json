@@ -99,6 +99,7 @@
   "steps": {
     "fit": {
       "kind": "fit",
+      "interventions": "das",
       "rows": {
         "base": "weekdays_full/data#train",
         "counterfactual": "weekdays_full/data#train"
@@ -133,13 +134,14 @@
         "saves": [
           {
             "value": "iia",
-            "file_path": "iia.json"
+            "file_path": "held_out_iia.json"
           }
         ]
       }
     },
     "score": {
       "kind": "observe",
+      "interventions": "das",
       "rows": {
         "base": "weekdays_full/data#test",
         "counterfactual": "weekdays_full/data#test"

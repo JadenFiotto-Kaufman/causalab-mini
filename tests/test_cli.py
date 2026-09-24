@@ -48,18 +48,39 @@ def test_model_answers_without_weights(capsys):
     out = _json(capsys, ["model", TINY, "--revision", REVISION])
     assert out["num_layers"] == 2
     assert out["padding_side"] == "left"
-    assert out["components"]["block_output"] == {"resolves": True, "width": 16, "op": None}
-    assert out["components"]["lm_head"]["width"] == 32000
-    assert out["components"]["attention_query"]["op"] == "attention_interface_1"
+    # one band per run of layers that answer alike, so a model whose layers
+    # are all the same says so in one entry
+    assert out["components"]["block_output"] == [
+        {"layers": "0-1", "resolves": True, "width": 16, "op": None}
+    ]
+    assert out["components"]["lm_head"] == [
+        {"layers": None, "resolves": True, "width": 32000, "op": None}
+    ]
+    assert out["components"]["attention_query"][0]["op"] == "attention_interface_1"
+
+
+def test_model_takes_the_model_blocks_own_fields(capsys):
+    """Two components exist only under eager attention, and a document says
+    which implementation it runs in its `model` block — so this verb takes
+    the same field, validated by the same model."""
+    plain = _json(capsys, ["model", TINY, "--revision", REVISION])
+    assert plain["attn_implementation"] == "sdpa"
+    assert plain["components"]["attention_probs"][0]["resolves"] is False
+    assert "eager" in plain["components"]["attention_probs"][0]["why"]
+
+    eager = _json(capsys, ["model", TINY, "--revision", REVISION, "--attn-implementation", "eager"])
+    assert eager["attn_implementation"] == "eager"
+    assert eager["components"]["attention_probs"][0]["resolves"] is True
 
 
 def test_model_reports_what_an_engine_refuses(capsys):
     """The hooks engine cannot reach an interior, and `model --engine hooks`
     says so per component rather than failing whole."""
     out = _json(capsys, ["model", TINY, "--revision", REVISION, "--engine", "hooks"])
-    assert out["components"]["block_output"]["resolves"] is True
-    assert out["components"]["attention_query"]["resolves"] is False
-    assert "interior" in out["components"]["attention_query"]["why"]
+    assert out["components"]["block_output"][0]["resolves"] is True
+    assert out["components"]["attention_query"][0]["resolves"] is False
+    assert "interior" in out["components"]["attention_query"][0]["why"]
+    assert out["components"]["logits"][0]["resolves"] is True, "it reaches this one now"
 
 
 def test_tokens_catches_the_multi_token_answer(capsys):
@@ -84,12 +105,33 @@ def test_validate_reads_both_formats(capsys):
 
 
 def test_validate_refuses_with_a_path(tmp_path, capsys):
+    """A refusal is a message, not a traceback: the entry point catches this
+    package's own error types, prints what they say, and exits 1."""
     broken = json.loads(pathlib.Path(DAS).read_text())
     broken["interventions"]["das"]["reads"]["v_cf"]["shuffle"] = {"seed": 1}
     path = tmp_path / "broken.json"
     path.write_text(json.dumps(broken))
+
+    assert cli.main(["validate", str(path), "--data-root", DATA]) == 1
+    said = capsys.readouterr()
+    assert "interventions.das.reads.v_cf.shuffle" in said.err
+    assert "Traceback" not in said.err and said.out == ""
+
     with pytest.raises(Exception, match="interventions.das.reads.v_cf.shuffle"):
-        cli.main(["validate", str(path)])
+        cli.main(["--traceback", "validate", str(path), "--data-root", DATA])
+
+
+def test_validate_compiles_so_a_misspelled_component_fails_there(tmp_path, capsys):
+    """It answers the same question `explain` does, against the same meta
+    shell — so a name that only a model can refuse is refused here too,
+    rather than validating and failing at the next verb."""
+    broken = json.loads(pathlib.Path(DAS).read_text())
+    broken["sites"]["target"]["component"] = "block_ouput"
+    path = tmp_path / "typo.json"
+    path.write_text(json.dumps(broken))
+
+    assert cli.main(["validate", str(path), "--data-root", DATA]) == 1
+    assert "block_ouput" in capsys.readouterr().err
 
 
 def test_explain_prints_the_compiled_plan_without_weights(capsys):
@@ -97,7 +139,9 @@ def test_explain_prints_the_compiled_plan_without_weights(capsys):
     assert out["steps"] == ["featurizers", "fit", "score", "weights"]
     text = out["text"]
     assert "rot: subspace k=8 d=16" in text  # d derived, never authored
-    assert "pos=(10, 10)" in text and "pos=(8, 8)" in text  # one -1, two widths
+    # the spec, not the rows: every pass of this document reads at the last
+    # token, and the integer that is differs between passes of different width
+    assert "pos={index:-1}" in text and "pos=(" not in text
     assert "saves=['held_out_iia.json']" in text
 
 

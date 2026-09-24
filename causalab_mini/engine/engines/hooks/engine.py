@@ -37,7 +37,7 @@ class HooksEngine(Engine):
         # through a weightless shell of the same checkpoint — which child
         # module each component is on this family, and every width.
         self._tokenizer = tokenizer
-        self._names = standardized(model)
+        self._names = standardized(model, shell)
         self._shell = shell
 
     @classmethod
@@ -184,7 +184,14 @@ def resolve(address: Address, names: Any) -> Any:
     """The raw module an address names, against the standardized tree. The
     path is in nnterp's spellings, and inside a block two of them are
     renames (`self_attn`, `mlp`) that the raw tree does not have: those go
-    through the per-layer lists `standardized()` built."""
+    through the per-layer lists `standardized()` built.
+
+    The empty path is the model itself — nnterp writes a whole-model place
+    that way (`logits` is the model's own output), and a layer's own
+    boundary the same way relative to the layer.
+    """
+    if not address.path:
+        return names.model
     segments = address.path.split(".")
     if segments[0] != "layers":
         return address.resolve(names)
@@ -262,7 +269,7 @@ def _apply(
             tap.address.seq_axis,
         )
         if read.view == "logits":
-            gathered = names.lm_head(names.ln_final(gathered))
+            gathered = intervene.softcap(names.lm_head(names.ln_final(gathered)), names.softcap)
         with intervene.exact(gathered):
             values[read.name] = featurizers[read.featurizer].featurize(gathered)[0].clone()
     return activation
@@ -279,18 +286,35 @@ def intervene_at(
     read in a model sees that model's writes; the nnterp engine implements the
     same rule by ordering two statements.
 
-    Like there, the output may be a bare tensor or a tuple whose first element
-    is the hidden state, and which one it is is decided from the value — a
-    bare tensor at both taps on both families under transformers 5.17, but
-    which one it is is a property of the version and not of the document.
+    Where the tensor is inside the module's output is nnterp's row to say —
+    a bare tensor, the first element of a tuple, or a field of the output
+    object — and it says it as a `Selection` with `get`/`put`. This engine
+    asks for the row's, which is how it reaches `logits` (the model's own
+    output, whose `logits` field is the tensor) with no rule of its own:
+    unwrapping a tuple's first element is `FirstIfTuple`, one of them.
     """
 
     def hook(module: Any, args: Any, output: Any) -> Any:
         if not intervene.applies(tap.step, clock["step"]):
             return None
-        address = tap.address
-        # nnterp's accessors unwrap a tuple's first element; the same rule here
-        activation = _apply(tap, output[0] if isinstance(output, tuple) else output, values, featurizers, names, clock["step"])
-        return (activation, *output[1:]) if isinstance(output, tuple) else activation
+        select = selection(tap.address, names)
+        activation = _apply(
+            tap, output if select is None else select.get(output),
+            values, featurizers, names, clock["step"],
+        )
+        return activation if select is None else select.put(output, activation)
 
     return hook
+
+
+def selection(address: Address, names: Any) -> Any:
+    """Where the tensor is inside the value at this place, as nnterp's row
+    says it. `None` is the value untouched.
+
+    The row is asked for by the accessor name the plan already carries, off
+    the same weightless shell this engine asks for a module's spelling and
+    for every width — so there is no second table here and no third spelling
+    of "the first element of a tuple"."""
+    if address.accessor is None:
+        return None
+    return names.shell.internals[address.accessor].address.select

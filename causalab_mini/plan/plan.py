@@ -61,6 +61,12 @@ class ReadOp:
     #: through the model's final norm and head — the logit lens: what the
     #: model would say if this layer were its last.
     view: str = "raw"
+    #: When this read is one decode step of a continuation-frame read, the
+    #: name the whole stack is selected into. An engine sees an ordinary
+    #: read at one step and needs to know nothing; `engine/steps.py` puts
+    #: the steps back together and cuts them against the continuation,
+    #: which does not exist until the decode has run.
+    stack: str = ""
 
 
 @dataclass(frozen=True)
@@ -82,11 +88,16 @@ class WriteOp:
 
 @dataclass(frozen=True)
 class Tap:
-    """One place in one forward: an address, and — when the forward decodes —
-    which step. `None` is the prompt frame: the prefill, with positions
+    """One place in one forward: an address, and — when the forward decodes
+    — which step. `None` is the prompt frame: the prefill, with positions
     resolved against the prompt. An integer is that decode step, at the one
-    position it processes. `"all"` is every step, and only a write may say
-    it: steering is a write at every step."""
+    position it processes. `"all"` is every step: steering is a write at
+    every step.
+
+    The step is *derived* from the position's frame, never authored. A read
+    whose cut only the finished continuation can settle becomes one of these
+    per step, each carrying the same spec and a `stack` name, and the run
+    puts them back together."""
 
     address: Address
     writes: tuple[WriteOp, ...]
@@ -106,28 +117,47 @@ class Forward:
     #: bound holds, and the generated ids come back as a value named
     #: `<forward>.generated`.
     decode: int = 0
+    #: What row 0's ids say, according to the tokenizer that encoded them.
+    #: The run decodes the same row with its own and compares before it
+    #: looks for any text in it. One row is a sample, not a proof.
+    sample: str = ""
+    #: Per row, the character span of each run the *frame* located in this
+    #: prompt — a chat turn, by its own role. Empty for a prompt that is a
+    #: plain string, which is most of them. They are the client's because
+    #: only the client knows the conversation the template rendered; they
+    #: are in the frame's own coordinates, so the run attaches them and
+    #: `locate` reads them exactly as it reads `eos` in the continuation.
+    segments: tuple[dict[str, tuple[int, int]], ...] = ()
 
 
 def window(forward: Forward, start: int, stop: int) -> Forward:
     """Rows `start:stop` of a forward: the same taps over fewer rows. Every
     per-row thing a forward holds is a tuple with one entry per row — its
-    token ids, its mask, each op's positions — so a window is a slice of
-    each, and an engine cannot tell it from a forward compiled that small.
-    Positions are absolute indices into the batch's padded width, which the
-    client fixed once for all rows, so they survive the slice unchanged."""
+    token ids, its mask, each op's anchors and, once a run has resolved
+    them, its positions — so a window is a slice of each, and an engine
+    cannot tell it from a forward compiled that small. Positions are
+    absolute indices into the batch's padded width, which the client fixed
+    once for all rows, so they survive the slice unchanged."""
     return replace(
         forward,
         input_ids=forward.input_ids[start:stop],
         attention_mask=forward.attention_mask[start:stop],
+        # the sample is row 0's, so only the window holding row 0 carries one
+        sample=forward.sample if start == 0 else "",
+        segments=forward.segments[start:stop],
         taps=tuple(
             replace(
                 tap,
-                writes=tuple(replace(op, at=replace(op.at, positions=op.at.positions[start:stop])) for op in tap.writes),
-                reads=tuple(replace(op, at=replace(op.at, positions=op.at.positions[start:stop])) for op in tap.reads),
+                writes=tuple(replace(op, at=_rows(op.at, start, stop)) for op in tap.writes),
+                reads=tuple(replace(op, at=_rows(op.at, start, stop)) for op in tap.reads),
             )
             for tap in forward.taps
         ),
     )
+
+
+def _rows(at: Selection, start: int, stop: int) -> Selection:
+    return replace(at, positions=at.positions[start:stop], anchors=at.anchors[start:stop])
 
 
 @dataclass(frozen=True)
@@ -186,8 +216,14 @@ class SaveFile:
     value: str  # the result this file holds, by name, from this plan's subtree
     example_ids: ExampleIds = ()
     #: Per example id, whether the metric was computed for it. Empty: all.
-    #: The result holds one value per *eligible* row, in order.
+    #: The result holds one value per *eligible* row, in order. This is the
+    #: *column* half, decided from the data; a run that anchored a position
+    #: to text reports the intersection with what it could place, and the
+    #: table prefers that.
     eligible: tuple[bool, ...] = ()
+    #: The read a metric scored, so the table can say which token each row's
+    #: number came from. Empty for a save that is not a metric.
+    of: str = ""
     unit: str = ""
     estimand_version: str = ""
     produced_by: str = ""

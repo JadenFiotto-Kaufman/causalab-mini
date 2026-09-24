@@ -25,6 +25,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .. import address
+from ..shapes import Where
+
 Json = dict[str, Any]
 
 PROTOCOL_VERSION = "3"
@@ -49,8 +52,13 @@ COMPONENTS = (
     "block_output",
     "ln_final",
     "lm_head",
+    "logits",
 )
-LAYERLESS = ("input_ids", "embeddings", "ln_final", "lm_head")
+LAYERLESS = ("input_ids", "embeddings", "ln_final", "lm_head", "logits")
+#: The places whose last axis is the vocabulary, so a token-space metric can
+#: be scored on one. `logits` is what the model predicts from and `lm_head`
+#: what its head produced; they differ wherever the family caps.
+TOKEN_SPACE = ("lm_head", "logits")
 MECHANISMS = ("swap",)
 TOKEN_FORMS = ("space_prefixed",)
 INPUTS = ("base", "counterfactual")
@@ -66,13 +74,8 @@ IDENTITY = "identity"
 # A metric kind's operands, in the order metrics.compute() takes them. The
 # values are *column names*: the answer is per row, so the document names a
 # column and the table carries the string.
-METRIC_COLUMNS = {
-    "match": ("expected",),
-    "logit_diff": ("a", "b"),
-    "cross_entropy": ("target",),
-    "token_logit": ("token",),
-    "token_prob": ("token",),
-}
+from ..ops.metrics import COLUMNS as METRIC_COLUMNS  # noqa: E402
+from . import sweep  # noqa: E402
 
 # Sections that exist in the protocol and that this slice does not implement.
 # Named here so the refusal can say which one.
@@ -115,16 +118,20 @@ def _featurizer(raw: Json, where: str) -> str:
     return name
 
 
-def _pos(spec: Any, where: str) -> int:
+def _pos(spec: Any, where: str) -> Where:
     """The only position form this slice runs: `pos: -1`, sugar for
-    {"index": -1} — one token per row, counted from the end of the sequence."""
+    {"index": -1} — one token per row, counted from the end of the sequence.
+
+    The plan-shaped format (`spec.py`) is where the rest of the vocabulary
+    lives; this one carries the protocol's own documents, and every one of
+    them names an index."""
     if isinstance(spec, dict) and set(spec) == {"index"}:
         spec = spec["index"]
     if isinstance(spec, bool) or not isinstance(spec, int):
         raise DocumentError(
             f"{where}: only an integer position (or {{'index': i}}) is implemented"
         )
-    return spec
+    return Where(index=spec)
 
 
 @dataclass(frozen=True)
@@ -179,13 +186,8 @@ class SiteSpec:
             f"component {self.component!r} is not implemented "
             f"(this slice has {COMPONENTS})",
         )
-        if self.component in LAYERLESS:
-            _check(self.layer is None, f"{self.component} takes no layers")
-        else:
-            _check(
-                isinstance(self.layer, int),
-                f"{self.component} is addressed at one layer",
-            )
+        wrong = address.layered(self.component, self.layer)
+        _check(wrong is None, wrong or "")
 
     @classmethod
     def from_json(cls, name: str, raw: Json) -> "SiteSpec":
@@ -250,7 +252,7 @@ class FeaturizerSpec:
 @dataclass(frozen=True)
 class ReadSpec:
     site: str
-    pos: int
+    pos: Where
     model: str  # "original" or an intervened model name
     input: str  # "base" | "counterfactual"
     featurizer: str = IDENTITY
@@ -277,7 +279,7 @@ class ReadSpec:
 @dataclass(frozen=True)
 class WriteSpec:
     site: str
-    pos: int
+    pos: Where
     mechanism: str  # "swap"
     operand: str  # a read name
     featurizer: str = IDENTITY
@@ -564,7 +566,7 @@ class Document:
         )
 
         _check(
-            not _swept(raw),
+            not sweep.wrappers(raw),
             "this document has a {'sweep': …} wrapper in it. A sweep is lowered "
             "before a document is built — use plan.build_request, which compiles "
             "one plan per point",
@@ -635,16 +637,6 @@ class Document:
         )
 
 
-def _swept(node: Any) -> bool:
-    """Whether a sweep wrapper is anywhere in the raw document. A `Document`
-    is one point, so one reaching here has not been lowered."""
-    if isinstance(node, dict):
-        return ("sweep" in node and set(node) <= {"sweep", "as"}) or any(_swept(value) for value in node.values())
-    if isinstance(node, list):
-        return any(_swept(value) for value in node)
-    return False
-
-
 def digest(raw: Json) -> str:
     """Identity of the experiment. `header.title`/`description` are authoring
     metadata and do not enter it (NOTES.md §2.2)."""
@@ -711,12 +703,12 @@ def _cross_check(
     for name, metric in metrics.items():
         _check(metric.of in reads, f"metric {name!r}: 'of' must name a read")
         _check(
-            sites[reads[metric.of].site].component == "lm_head",
-            f"metric {name!r}: a token-space kind binds to an lm_head read",
+            sites[reads[metric.of].site].component in TOKEN_SPACE,
+            f"metric {name!r}: a token-space kind binds to a read of {list(TOKEN_SPACE)}",
         )
         _check(
             reads[metric.of].featurizer == IDENTITY,
-            f"metric {name!r}: a token-space kind binds to a *plain* lm_head read, "
+            f"metric {name!r}: a token-space kind binds to a *plain* token-space read, "
             "with no featurizer",
         )
 

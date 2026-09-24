@@ -97,18 +97,25 @@ def test_the_root_is_a_plan_with_three_child_plans(swept_plan, minimal_raw, data
     assert swept_plan.saves == () and swept_plan.results == {}
 
 
-def test_the_points_differ_in_the_swept_field_and_nothing_else(swept_plan):
-    positions = [
-        point.step("observe", plan.Observe).forwards[1].taps[0].writes[0].at.positions
+def test_the_points_differ_in_the_swept_field_and_nothing_else(swept_plan, model_engine):
+    from causalab_mini.engine import steps
+
+    written = [
+        point.step("observe", plan.Observe).forwards[1].taps[0].writes[0].at.where
         for point in swept_plan.steps.values()
     ]
+    assert [one.index for one in written] == [-1, -2, -3]
     # Four rows, one position each. The rows are left-padded to a common
-    # width of 11 here, so -1/-2/-3 are the absolute indices 10/9/8 — which is
-    # the point of resolving a position on the client, against the padding the
-    # tokenizer actually produced.
+    # width of 11 here, so -1/-2/-3 are the absolute indices 10/9/8 — which
+    # is what resolving a position against the padding the tokenizer
+    # actually produced is for.
+    positions = [
+        steps.located(model_engine, point.step("observe", plan.Observe).forwards[1])[1]["patch"]["rows"]
+        for point in swept_plan.steps.values()
+    ]
     assert positions == [((10,),) * 4, ((9,),) * 4, ((8,),) * 4]
     reads = {
-        point.step("observe", plan.Observe).forwards[0].taps[0].reads[0].at.positions
+        point.step("observe", plan.Observe).forwards[0].taps[0].reads[0].at.where
         for point in swept_plan.steps.values()
     }
     assert len(reads) == 1

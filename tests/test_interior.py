@@ -17,7 +17,7 @@ from causalab_mini import ops, plan
 from causalab_mini.address import Address, AddressError
 from causalab_mini.engine.engines.nnterp.engine import find_op
 from causalab_mini.plan import document
-from causalab_mini.engine import NNterpEngine
+from causalab_mini.engine import NNterpEngine, steps
 from causalab_mini.engine.engines.nnterp import engine as nnterp
 
 DOCUMENT = pathlib.Path(__file__).resolve().parents[1] / "documents" / "attention_query_cpu.json"
@@ -61,7 +61,7 @@ def test_the_interior_is_addressed_by_the_interface_call(model_engine):
     assert located.op == "attention_interface_1"
     assert located.seq_axis == 2
     # It is still pure data, and it is still what the document said.
-    assert located == Address("attention_query", 0, "attention_interface_1")
+    assert located == Address("attention_query", 0, "attention_interface_1", rank=(0, 11))
 
 
 def test_a_binding_and_a_call_share_one_namespace_so_the_name_alone_is_ambiguous(model):
@@ -102,7 +102,7 @@ def test_the_query_is_head_shaped_and_already_rotated(model_engine, model, data_
     """Two claims about the tensor: the sequence is axis 2 because the heads are
     axis 1, and it is past RoPE — so it is not the projection's output."""
     built = _build(interior_raw, data_root, model_engine)
-    source_forward = built.step("observe", plan.Observe).forwards[0]
+    source_forward, _ = steps.located(model_engine, built.step("observe", plan.Observe).forwards[0])
     tap = source_forward.taps[0]
 
     with model.trace(nnterp.batch(source_forward)):
@@ -140,7 +140,10 @@ def test_the_interior_is_reached_under_the_checkpoints_own_attention(model):
 
 def test_a_swap_at_the_interior_lands_bit_for_bit(model_engine, model, data_root, interior_raw):
     built = _build(interior_raw, data_root, model_engine)
-    source_forward, patched_forward = built.step("observe", plan.Observe).forwards
+    source_forward, patched_forward = (
+        steps.located(model_engine, one)[0]
+        for one in built.step("observe", plan.Observe).forwards
+    )
     read = source_forward.taps[0].reads[0]
     tap = patched_forward.taps[0]
     write = tap.writes[0]
@@ -187,7 +190,10 @@ def test_a_write_at_the_interior_moves_the_logits(model_engine, model, data_root
 
 def test_only_the_declared_position_of_the_query_changes(model_engine, model, data_root, interior_raw):
     built = _build(interior_raw, data_root, model_engine)
-    source_forward, patched_forward = built.step("observe", plan.Observe).forwards
+    source_forward, patched_forward = (
+        steps.located(model_engine, one)[0]
+        for one in built.step("observe", plan.Observe).forwards
+    )
     tap = patched_forward.taps[0]
     write = tap.writes[0]
     first_token = ((0,), (2,), (0,), (2,))  # the content start of each row, left-padded

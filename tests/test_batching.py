@@ -44,7 +44,13 @@ def _same_everywhere(whole, windowed):
 
 
 def _agree(a, b):
-    """A smaller batch is a different GEMM, so the last bit may move."""
+    """A smaller batch is a different GEMM, so the last bit may move. A
+    result that is not a tensor — where the run read, which rows it could
+    score — is plain data and must be equal, window for window: that is the
+    claim that a window of rows resolves its own positions and concatenates
+    back in row order."""
+    if not torch.is_tensor(a) or not torch.is_tensor(b):
+        return a == b
     return a.shape == b.shape and torch.allclose(a.float(), b.float(), rtol=0, atol=1e-6)
 
 
@@ -150,9 +156,9 @@ def test_a_per_row_output_reaches_the_window_of_its_own_rows(data_root, model_en
     }
     score = raw["steps"].pop("score")
     raw["steps"] = {
-        "harvest": {"kind": "observe", "intervention": "harvest", "rows": score["rows"],
+        "harvest": {"kind": "observe", "interventions": "harvest", "rows": score["rows"],
                     "outputs": {"kept": {"read": "v_cf"}}},
-        "score": {**score, "intervention": "apply"},
+        "score": {**score, "interventions": "apply"},
     }
     direct = model_engine.execute(plan.build_request(_point("patching.json"), data_root, model_engine))
     chained = model_engine.execute(plan.build_request(raw, data_root, model_engine), batch_size=1)

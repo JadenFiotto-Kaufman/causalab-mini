@@ -113,3 +113,49 @@ def test_the_real_documents_are_valid_and_compile_without_weights(data_root):
     for path in found:
         for _, point in sweep.points(json.loads(path.read_text())):
             Spec.model_validate(point)
+
+
+def test_a_remote_run_records_the_servers_versions_and_not_only_its_own():
+    """`run.json`'s `versions` are this process's, and on a remote run the
+    code that decides what a block does is the server's — so the record was
+    an assumption about a machine it had never asked. It asks now, through
+    nnsight's per-host `/env` cache, and keeps both under keys that say
+    whose they are."""
+    from nnsight import ndif
+
+    from causalab_mini.engine import provenance
+
+    host = "http://localhost:59999"
+    ndif.set_remote_env(
+        {"python_version": "3.12.7 (main, Oct 2026)", "packages": {"torch": "2.9.0", "nnsight": "0.7.0"}},
+        host,
+    )
+    try:
+        served = provenance.record(object(), host)["server"]
+        assert served["asked"] == host and served["python"] == "3.12.7"
+        assert served["versions"]["torch"] == "2.9.0"
+        assert served["versions"]["nnterp"] == "not installed", "the server's, not ours"
+        assert provenance.record(object(), host)["versions"]["nnterp"] != "not installed"
+    finally:
+        ndif.clear_remote_env(host)
+
+
+def test_a_run_with_no_server_records_none():
+    """A local run's record is unchanged, and `remote="local"` has no server
+    to ask — it is this process pretending to be one."""
+    from causalab_mini.engine import provenance
+
+    assert "server" not in provenance.record(object(), False)
+    assert "server" not in provenance.record(object(), "local")
+
+
+def test_a_server_that_will_not_say_is_recorded_as_not_having_said():
+    """Evidence either way, and not a reason to refuse a run."""
+    from nnsight import ndif
+
+    from causalab_mini.engine import provenance
+
+    ndif.clear_remote_env("http://localhost:59998")
+    served = provenance.record(object(), "http://localhost:59998")["server"]
+    assert served["asked"] == "http://localhost:59998" and "said" in served
+    assert "versions" not in served

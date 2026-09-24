@@ -21,15 +21,20 @@ def test_an_address_is_the_documents_words_and_pickles_as_such():
     assert Address("block_mid", 1, module="post_attention_layernorm").path == "layers.1.post_attention_layernorm"
 
 
-def test_addresses_sort_into_forward_order():
+def test_addresses_sort_into_forward_order(model_engine):
     """Depth first, then position inside the block, then everything after the
-    stack. An interior is not a module boundary, so it needs the middle rank."""
+    stack. An interior is not a module boundary, so it needs the middle rank.
+
+    The rank is nnterp's — `internals.rank`, stamped by `locate` — because a
+    family may build its block differently and mini keeping a second
+    numbering beside nnterp's is how the two drift. Only the interiors, which
+    nnterp does not address, are ranked by mini's own row."""
     stack = [
-        Address("lm_head"),
-        Address("block_output", 1),
-        Address("block_output", 0),
-        Address("attention_query", 1, "attention_interface_1"),
-        Address("attention_query", 0, "attention_interface_1"),
+        model_engine.locate("lm_head"),
+        model_engine.locate("block_output", 1),
+        model_engine.locate("block_output", 0),
+        model_engine.locate("attention_query", 1),
+        model_engine.locate("attention_query", 0),
     ]
     assert [(one.component, one.layer) for one in sorted(stack, key=lambda one: one.key)] == [
         ("attention_query", 0),
@@ -45,6 +50,18 @@ def test_a_module_boundary_cannot_carry_an_operation():
         Address("block_output", 0, "attention_interface_1")
 
 
-def test_a_component_with_no_address_is_refused_here():
+def test_a_component_neither_table_has_is_refused_by_name(model_engine):
     with pytest.raises(AddressError, match="no address here"):
-        Address("attention_pattern", 0)
+        model_engine.locate("attention_pattern", 0)
+
+
+def test_a_component_only_nnterp_knows_is_addressable(model_engine):
+    """nnterp's accessors are an extension point — `RenameConfig(addresses=
+    {...})` — and a document should be able to name what a user added there.
+    Mini claims nothing else about such a place: no width, so a featurizer
+    there is refused rather than sized wrongly."""
+    located = model_engine.locate("attentions_input", 0)
+    assert located.accessor == "attentions_input" and located.rank is not None
+    assert located.width_attribute is None
+    with pytest.raises(AddressError, match="not a fact about the model"):
+        model_engine.width(located)

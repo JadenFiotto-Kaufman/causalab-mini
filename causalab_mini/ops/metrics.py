@@ -61,6 +61,17 @@ KINDS: dict[str, Callable[..., Any]] = {
     "token_prob": token_prob,
 }
 
+#: Which of a metric kind's own document fields name data columns, in the
+#: order `compute` takes them. One table, because a front end that disagreed
+#: with `compute` would score the wrong column.
+COLUMNS: dict[str, tuple[str, ...]] = {
+    "match": ("expected",),
+    "logit_diff": ("a", "b"),
+    "cross_entropy": ("target",),
+    "token_logit": ("token",),
+    "token_prob": ("token",),
+}
+
 UNITS: dict[str, tuple[str, str]] = {
     "match": ("fraction", "match/v1"),
     "logit_diff": ("logit", "logit_diff/v1"),

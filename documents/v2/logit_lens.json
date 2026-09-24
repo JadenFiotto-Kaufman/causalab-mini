@@ -54,6 +54,7 @@
   "steps": {
     "lens": {
       "kind": "observe",
+      "interventions": "lens",
       "rows": {
         "base": "weekdays/train"
       },

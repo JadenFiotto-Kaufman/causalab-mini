@@ -22,12 +22,12 @@ from typing import Any
 import torch
 
 from ..address import Address
-from ..data import encoding, rows as rows_module
+from ..data import rows as rows_module, tokens
 from ..ops import featurizer as featurizer_module
 from ..ops import intervene as intervene_module
 from ..ops import metrics as metrics_module
 from . import sweep
-from ..shapes import Positions, Selection
+from ..shapes import Selection, TokenRows, Where
 from .document import Document, SaveSpec
 from .plan import (
     FeaturizerOp,
@@ -79,9 +79,18 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
         if take is not None and max(take) >= count:
             raise PlanError(f"site {name!r}: {what} {max(take)} of a {count}-{what} tensor")
         features[name] = (count, None if take is None else tuple(take))
-    fits = [one for one in spec.steps.values() if type(one).__name__ == "Fit"]
+    stacking = {
+        read.site
+        for one in spec.interventions.values()
+        for read in one.reads.values()
+        if _stacks(read.pos)
+    }
+    # `widths` below is the featurizers'; this is the sites' own, and only
+    # for the ones a continuation read buffers at
+    stack_widths = {name: engine.width(addresses[name]) for name in sorted(stacking)}
+    fit_steps = [one for _, one, _ in spec.runs() if type(one).__name__ == "Fit"]
     featurizers = tuple(
-        _spec_featurizer(name, one, spec, addresses, engine, fits)
+        _spec_featurizer(name, one, spec, addresses, engine, fit_steps)
         for name, one in spec.featurizers.items()
     )
     widths = {one.name: one.d for one in featurizers}
@@ -113,11 +122,13 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
     #: needs the same rows and the same window. The compiler knows all of it;
     #: the block would only find out from a shape error.
     output_rows: dict[str, int | None] = {}
-    output_widths: dict[str, tuple[tuple[int, ...], Any]] = {}  # per-row widths, how reduced
-    for name, step in spec.steps.items():
+    output_widths: dict[str, tuple[int | None, Any]] = {}  # the read's width, how reduced
+    def compile_one(name: str, step: Any) -> Step:
+        """One step with at most one intervention, compiled. `name` is its
+        path, which is what its refusals print."""
         kind = type(step).__name__
         experiment = (
-            replace(_Experiment.of_spec(spec, spec.intervention_of(step)), features=features)
+            replace(_Experiment.of_spec(spec, spec.intervention_of(step)), features=features, widths=stack_widths)
             if kind in ("Observe", "Fit")
             else None
         )
@@ -132,15 +143,15 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
                             f"{write.operand.ref!r}, which has {have} rows, over {count} "
                             "rows; reduce the output or run over the same rows"
                         )
-                    per_row, reduced = output_widths[write.operand.ref]
+                    per_row, reduced = output_widths[write.operand.ref]  # per_row: None is ragged
                     if reduced == "pca":
                         raise PlanError(
                             f"step {name!r}: write {write_name!r} names {write.operand.ref!r}, a "
                             "pca basis, as its operand; a basis is loaded as a featurizer, "
                             "not written at a site"
                         )
-                    ragged_source = len(set(per_row)) > 1
-                    want = encoding.width_of(write.pos)  # None: the write is ragged
+                    ragged_source = per_row is None
+                    want = write.pos.width  # None: the write is ragged
                     # What an output may land in. A mean over a ragged read is
                     # one vector and broadcasts anywhere; a mean over a
                     # rectangle keeps its window and must match; an unreduced
@@ -149,9 +160,9 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
                     if reduced and ragged_source:
                         fits = True
                     elif reduced:
-                        fits = (want == per_row[0]) or (want is None and per_row[0] == 1)
+                        fits = (want == per_row) or (want is None and per_row == 1)
                     elif not ragged_source:
-                        fits = want == per_row[0]
+                        fits = want == per_row
                     else:
                         fits = False
                     if not fits:
@@ -159,7 +170,8 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
                             f"step {name!r}: write {write_name!r} covers "
                             f"{want if want is not None else 'a varying number of'} "
                             f"position(s) but {write.operand.ref!r} was read over "
-                            f"{sorted(set(per_row))}{'' if reduced else ', unreduced'}; "
+                            f"{[per_row] if per_row is not None else 'a varying number of'}"
+                            f"{'' if reduced else ', unreduced'}; "
                             "the windows must match, or reduce the output"
                         )
         if kind == "Observe":
@@ -170,16 +182,18 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
                 for out_name, out in step.outputs.items()
             )
             observe = _pass(experiment, rows, addresses, engine.tokenizer)
-            read_positions = {
-                read.name: read.at.positions
+            read_widths = {
+                read.name: read.at.where.width if read.at.where is not None else None
                 for forward in observe.forwards for tap in forward.taps for read in tap.reads
             }
             for out in outputs:
-                if out.reduce == "pca":
+                width = read_widths[out.read]
+                if out.reduce == "pca" and width is not None:
                     # k directions need more than k vectors: the rows are
                     # centered first, which costs one rank. Known here, from
-                    # the positions, before any forward.
-                    vectors = sum(len(window) for window in read_positions[out.read])
+                    # the form and the row count, before any forward — a
+                    # text-anchored read has neither until it runs.
+                    vectors = width * len(rows["base"])
                     assert out.k is not None
                     if out.k > vectors - 1:
                         raise PlanError(
@@ -189,24 +203,39 @@ def build_spec(spec: Any, data_root: str | Path, engine: Any) -> Plan:
                         )
                 output_rows[out.name] = None if out.reduce == "mean" else len(rows["base"])
                 output_widths[out.name] = (
-                    tuple(len(window) for window in read_positions[out.read]),
+                    width,
                     out.reduce if out.reduce == "pca" else out.reduce == "mean",
                 )
-            steps[name] = replace(
+            return replace(
                 observe,
                 outputs=outputs,
                 saves=_spec_saves(step.saves, spec, rows["base"], widths, outputs={o.name for o in outputs}),
             )
         elif kind == "Fit":
             assert experiment is not None
-            steps[name] = _spec_fit(step, spec, experiment, table, addresses, engine, widths)
+            return _spec_fit(step, spec, experiment, table, addresses, engine, widths)
         elif kind == "Weights":
-            steps[name] = Weights(
+            return Weights(
                 names=tuple(step.names),
                 saves=_spec_saves(step.saves, spec, [], widths, sites=_sites_of(spec)),
             )
         else:  # pragma: no cover — the discriminated union has no other arm
             raise PlanError(f"step {name!r}: {kind} is not a step this compiler knows")
+
+    for name, step in spec.steps.items():
+        if isinstance(getattr(step, "interventions", None), list):
+            # A list is lowered, not executed specially: one nested plan per
+            # intervention, each holding this step as a one-intervention
+            # document would compile it — so each gets its own directory
+            # and its own results path, `<step>/<intervention>/<step>`.
+            steps[name] = Plan(
+                steps={
+                    child: Plan(steps={name: compile_one(f"{name}/{child}", one)})
+                    for child, one in spec.lower(name, step).items()
+                }
+            )
+        else:
+            steps[name] = compile_one(name, step)
     return Plan(steps=steps, source=spec.model_dump(mode="json"))
 
 
@@ -423,7 +452,11 @@ def _spec_saves(
                 SaveFile(
                     file_path=save.file_path,
                     value=save.value,
-                    identity=_identity(spec, save.value, sites[save.value], widths[save.value]),
+                    produced_by=spec.digest,
+                    identity={
+                        "produced_by": spec.digest,
+                        **_identity(spec, save.value, sites[save.value], widths[save.value]),
+                    },
                 )
             )
             continue
@@ -438,8 +471,10 @@ def _spec_saves(
                 value=save.value,
                 example_ids=rows_module.example_ids(base_rows),
                 eligible=_eligible(base_rows, metric),
+                of=metric.of,
                 unit=metrics_module.UNITS[metric.kind][0],
                 estimand_version=metrics_module.UNITS[metric.kind][1],
+                produced_by=spec.digest,
             )
         )
     return tuple(built)
@@ -463,6 +498,10 @@ class _Experiment:
     decode: int = 0
     #: site -> `(groups, take)`: which part of the feature axis the site is.
     features: dict[str, Any] = field(default_factory=dict)
+    #: site -> how wide the tensor there is, for the sites a continuation
+    #: read stacks at. Only those: `engine.width` is a question about the
+    #: checkpoint and there is no reason to ask it where nothing buffers.
+    widths: dict[str, int] = field(default_factory=dict)
 
     @classmethod
     def of_document(cls, document: Document) -> "_Experiment":
@@ -479,31 +518,11 @@ class _Experiment:
         return cls(
             fields={role: one.field for role, one in spec.roles.items()},
             reads=dict(intervention.reads),
-            writes={
-                # a write's operand is a name whichever way it was written: a
-                # read of this pass, or an output published before it
-                name: _WriteSpec(
-                    site=w.site, pos=w.pos, mechanism=w.mechanism,
-                    operand=w.operand_name, featurizer=w.featurizer, params=dict(w.params),
-                    features=None if w.features is None else tuple(w.features),
-                )
-                for name, w in intervention.writes.items()
-            },
+            writes=dict(intervention.writes),
             models=dict(intervention.models),
             metrics=dict(intervention.metrics),
             decode=intervention.decode,
         )
-
-
-@dataclass(frozen=True)
-class _WriteSpec:
-    site: str
-    pos: Any
-    mechanism: str
-    operand: str | float | None
-    featurizer: str
-    params: dict[str, float]
-    features: tuple[int, ...] | None = None
 
 
 def build_request(raw: dict[str, Any], data_root: str | Path, engine: Any) -> Plan:
@@ -612,23 +631,39 @@ def _pass(
     """One execution of the document's forwards over one set of rows. A
     training update, an eval pass and the scored run are all this step, over
     different rows."""
-    batches = {
-        role: encoding.encode(
-            tokenizer,
-            [rows_module.field_text(row, experiment.fields[role]) for row in table],
-        )
-        for role, table in rows.items()
-    }
+    batches = {role: _batch(tokenizer, role, experiment, table) for role, table in rows.items()}
     forwards = tuple(
         _forward(name, role, experiment, batches[role], addresses, rows[role])
         for name, role in _schedule(experiment)
     )
-    _check_ragged(forwards, experiment)
+    _check_patterns(forwards)
     base_rows = rows["base"]  # base is the schema of the pair: metrics read its columns
     metrics = tuple(
         _metric(name, spec, base_rows, tokenizer) for name, spec in experiment.metrics.items()
     )
     return Observe(forwards=forwards, metrics=metrics)
+
+
+def _batch(
+    tokenizer: Any, role: str, experiment: _Experiment, table: list[rows_module.Row]
+) -> tuple[TokenRows, TokenRows, str, tuple[dict[str, tuple[int, int]], ...]]:
+    """One role's padded batch, and the runs the frame located in it.
+
+    A role's field may hold a string or a conversation, and which it is, is
+    the row's to say — so a chat prompt costs the document nothing and the
+    dataset one column. What the template rendered has the family's opening
+    token in it already, which is why it is encoded without another.
+    """
+    field = experiment.fields[role]
+    values = [rows_module.field_value(row, field) for row in table]
+    texts = [
+        tokens.rendered(tokenizer, value, f"role {role!r} field {field!r}, row {row}")
+        for row, value in enumerate(values)
+    ]
+    chat = any(not isinstance(value, str) for value in values)
+    ids, mask, sample = tokens.encode(tokenizer, texts, add_special=not chat)
+    spans = tokens.turns(tokenizer, ids, mask, values) if chat else ()
+    return ids, mask, sample, spans
 
 
 def _metric(name: str, spec: Any, base_rows: list[rows_module.Row], tokenizer: Any) -> MetricOp:
@@ -662,7 +697,7 @@ def _eligible(base_rows: list[rows_module.Row], metric: Any) -> tuple[bool, ...]
 def _ids(spec: Any, base_rows: list[rows_module.Row], keep: tuple[bool, ...], tokenizer: Any) -> tuple[Any, ...]:
     return tuple(
         tuple(
-            encoding.token_id(tokenizer, value, spec.token_form)
+            tokens.token_id(tokenizer, value, spec.token_form)
             for value, kept in zip(rows_module.column(base_rows, column), keep)
             if kept and value is not None
         )
@@ -742,6 +777,7 @@ def _save(
         value=entry.value,
         example_ids=rows_module.example_ids(base_rows),
         eligible=_eligible(base_rows, document.metrics[entry.value]),
+        of=document.metrics[entry.value].of,
         unit=metrics_module.UNITS[kind][0],
         estimand_version=metrics_module.UNITS[kind][1],
         produced_by=document.digest,
@@ -801,45 +837,22 @@ def _fit(
     )
 
 
-def _check_ragged(forwards: tuple[Forward, ...], experiment: _Experiment) -> None:
-    """The ragged write policy, and it is `refuse`.
+def _check_patterns(forwards: tuple[Forward, ...]) -> None:
+    """The one layout question that is about masks rather than positions, and
+    is therefore still the client's: an attention pattern swapped in from
+    another prompt has to line up key for key.
 
-    A read may have an empty window on a row — the column's text was not in
-    that prompt — and that row is simply an excluded measurement. A *write*
-    may not: writing nothing somewhere is not an intervention, and the row
-    would score as if it were. And a ragged write's operand must have, row
-    by row, exactly the width the write covers; the protocol's other
-    landing policies are not implemented. All of it is knowable here, before
-    any forward, because the positions are.
+    The two refusals that used to sit beside this — a write with nothing to
+    write on a row, and a ragged write whose operand is a different width —
+    are about *where* a position lands, so they moved to where positions are
+    resolved (`engine/steps.py`).
     """
-    reads = {
-        read.name: read.at.positions for forward in forwards for tap in forward.taps for read in tap.reads
-    }
     read_in = {read.name: forward for forward in forwards for tap in forward.taps for read in tap.reads}
     for forward in forwards:
         for tap in forward.taps:
             for write in tap.writes:
                 if tap.address.key_axis and isinstance(write.operand, str):
                     _check_keys(write, forward, read_in.get(write.operand))
-                empty = [row for row, window in enumerate(write.at.positions) if not window]
-                if empty:
-                    raise PlanError(
-                        f"write {write.name!r} has nothing to write on row(s) {empty}: its "
-                        "position's text is not in those prompts. A read may skip a row; a "
-                        "write may not"
-                    )
-                if isinstance(write.operand, str) and write.operand in reads:
-                    have = [len(window) for window in reads[write.operand]]
-                    want = [len(window) for window in write.at.positions]
-                    mismatched = [row for row, (a, b) in enumerate(zip(have, want)) if a != b]
-                    if mismatched:
-                        raise PlanError(
-                            f"write {write.name!r} covers {want} positions per row but its "
-                            f"operand {write.operand!r} was read over {have}; rows "
-                            f"{mismatched} differ. Landing a window of one width in another "
-                            "is a policy this slice does not implement — the protocol's "
-                            "`exact_length_buckets` and `padded_masked` — so it refuses"
-                        )
 
 
 def _check_keys(write: Any, forward: Forward, source: Forward | None) -> None:
@@ -853,17 +866,20 @@ def _check_keys(write: Any, forward: Forward, source: Forward | None) -> None:
     token would land on a pad, or on a different word, with every shape
     correct. Both masks are in hand before any forward, so this is refused
     here rather than discovered — or not discovered — later.
+
+    The arithmetic is `data/tokens.same_layout`; the refusal is this
+    document's, and stays here.
     """
     if source is None:
         raise PlanError(
             f"write {write.name!r}: an attention pattern from an earlier step cannot be checked "
             "against these prompts' layout; swap one read in the same pass"
         )
-    if source.attention_mask == forward.attention_mask:
+    rows = tokens.same_layout(source.attention_mask, forward.attention_mask)
+    if rows is None:
         return
     ours = [sum(row) for row in forward.attention_mask]
     theirs = [sum(row) for row in source.attention_mask]
-    rows = [row for row, (a, b) in enumerate(zip(ours, theirs)) if a != b]
     raise PlanError(
         f"write {write.name!r} swaps in the attention pattern {write.operand!r}, read from "
         f"prompts laid out differently: " + (
@@ -878,6 +894,14 @@ def _take(rows: dict[str, list[rows_module.Row]], picked: list[int]) -> dict[str
     paired by index and a shuffle that broke the pairing would silently fit a
     rotation against mismatched counterfactuals."""
     return {role: [table[index] for index in picked] for role, table in rows.items()}
+
+
+def _operand(write: Any) -> str | float | None:
+    """A write's operand as the compiler carries it: a name for a read of
+    this pass or for an output published before it, the number itself for a
+    literal. The plan-shaped format spells a reference as an object and the
+    protocol's as a bare name, and this is the one place that differs."""
+    return getattr(write, "operand_name", None) or write.operand
 
 
 def _schedule(experiment: _Experiment) -> list[tuple[str, str]]:
@@ -896,7 +920,7 @@ def _schedule(experiment: _Experiment) -> list[tuple[str, str]]:
     for name, spec in experiment.models.items():
         units.setdefault((name, spec.input), set())
         for write in spec.writes:
-            operand = experiment.writes[write].operand
+            operand = _operand(experiment.writes[write])
             if isinstance(operand, str):  # a literal or nothing orders no forward
                 units[(name, spec.input)].add(operand)
 
@@ -919,61 +943,135 @@ def _schedule(experiment: _Experiment) -> list[tuple[str, str]]:
     return ordered
 
 
-def _selection(positions: Positions, features: Any) -> Selection:
-    """Where an op is. Whether it gathers flat is decided here, over every
-    row of the pass, so a window of those rows cannot decide differently."""
+def _selection(pos: Where, anchors: tuple[str, ...], features: Any) -> Selection:
+    """Where an op is: the spec, the per-row text it anchors to, and which
+    part of the feature axis. Whether it gathers flat is decided *by the
+    form*, over every row of the pass, so a window of those rows cannot
+    decide differently.
+
+    A continuation-frame tap never gathers flat: a decode step processes one
+    position whatever the spec names, and the cut over the steps happens
+    afterwards, in `engine/steps.py`.
+    """
     groups, take = features or (None, None)
-    return Selection(positions, groups, take, flat=intervene_module.is_ragged(positions))
+    return Selection(
+        groups=groups,
+        take=take,
+        flat=pos.frame == "prompt" and pos.ragged,
+        where=pos,
+        anchors=anchors,
+    )
+
+
+#: How much a continuation-frame read may buffer before it is refused, in
+#: bytes. A read that cannot say which step it wants until the decode has
+#: finished keeps every step: `rows x decode x width` numbers. That is
+#: nothing at `decode = 8` and a gigabyte at `decode = 256` over a wide
+#: site, so there is a line — and all three numbers are known here, before
+#: a model is loaded, so it is drawn here rather than after the memory has
+#: been held.
+STACK_LIMIT = 256 * 1024 * 1024
+
+
+def _stacks(pos: Where) -> bool:
+    """Whether a read has to see the whole continuation before it can say
+    which of it it wants. `{"index": 2}` is step 2 and the tap fires there;
+    every other cut of the continuation — the last real token, the stop
+    token, where the model said the row's answer — is of text that does not
+    exist until the decode has run, so the read fires at every step and is
+    selected out of the stack afterwards."""
+    return pos.frame == "generated" and not (pos.index is not None and pos.index >= 0)
+
+
+def _fits(name: str, site: str, experiment: _Experiment, rows: int) -> None:
+    """What a stacked read will hold, before anything holds it."""
+    groups, take = experiment.features.get(site) or (None, None)
+    wide = experiment.widths.get(site, 0)
+    if take is not None and groups:
+        wide = len(take) * (wide // groups)
+    held = experiment.decode * rows * wide * 4
+    if held > STACK_LIMIT:
+        raise PlanError(
+            f"read {name!r} keeps every decode step to cut against the continuation: "
+            f"{experiment.decode} steps x {rows} rows x {wide} wide is {held / 2**20:.0f} MiB, "
+            f"over the {STACK_LIMIT / 2**20:.0f} MiB a read may hold. The count is this pass's "
+            "rows, whatever --batch-size the run uses: name the step ({'frame': 'generated', "
+            "'index': k}), decode fewer tokens, or score fewer rows in one pass"
+        )
 
 
 def _forward(
     name: str,
     role: str,
     experiment: _Experiment,
-    batch: encoding.Batch,
+    batch: tuple[TokenRows, TokenRows, str, tuple[dict[str, tuple[int, int]], ...]],
     addresses: dict[str, Address],
     rows: list[rows_module.Row],
 ) -> Forward:
-    """One model pass: its taps, grouped by address and put in forward order."""
+    """One model pass: its taps, grouped by address and put in forward order.
 
-    def resolve(pos: Any) -> Positions:
-        texts = None
-        if isinstance(pos, dict) and set(pos) == {"column"}:
-            texts = [rows_module.field_text(row, pos["column"]) for row in rows]
-        return encoding.positions(batch, pos, texts)
+    Nothing here resolves a position. What it does compile is the *anchor*: a
+    text-anchored spec names a variable, and which text that is on this row
+    is a fact about the dataset, which only the client has.
+    """
+
+    def anchors(pos: Where) -> tuple[str, ...]:
+        if pos.scope is None or pos.scope.variable is None:
+            return ()
+        field = experiment.fields[role]
+        return tuple(rows_module.variable_text(row, field, pos.scope.variable) for row in rows)
 
     # a tap is one place: an address, and — when the forward decodes — a step
     writes: dict[tuple[Address, Any], list[WriteOp]] = {}
     if name in experiment.models:
         for write_name in experiment.models[name].writes:
             spec = experiment.writes[write_name]
-            writes.setdefault((addresses[spec.site], encoding.step_of(spec.pos)), []).append(
+            # which decode step the tap acts at: none in the prompt frame,
+            # every one of them for a steering write, else the step it names
+            step = None if spec.pos.frame == "prompt" else ("all" if spec.pos.all else spec.pos.index)
+            writes.setdefault((addresses[spec.site], step), []).append(
                 WriteOp(
                     name=write_name,
-                    at=_selection(resolve(spec.pos), experiment.features.get(spec.site)),
-                    operand=spec.operand,
+                    at=_selection(spec.pos, anchors(spec.pos), experiment.features.get(spec.site)),
+                    operand=_operand(spec),
                     mechanism=spec.mechanism,
                     featurizer=spec.featurizer,
                     params=dict(getattr(spec, "params", {})),
-                    features=getattr(spec, "features", None),
+                    features=None if getattr(spec, "features", None) is None else tuple(spec.features),
                 )
             )
     reads: dict[tuple[Address, Any], list[ReadOp]] = {}
     for read_name, spec in experiment.reads.items():
         if (spec.model, spec.input) != (name, role):
             continue
-        reads.setdefault((addresses[spec.site], encoding.step_of(spec.pos)), []).append(
-            ReadOp(
-                name=read_name,
-                at=_selection(resolve(spec.pos), experiment.features.get(spec.site)),
-                featurizer=spec.featurizer,
-                view=getattr(spec, "view", "raw"),
+        at = _selection(spec.pos, anchors(spec.pos), experiment.features.get(spec.site))
+        if not _stacks(spec.pos):
+            step = None if spec.pos.frame == "prompt" else ("all" if spec.pos.all else spec.pos.index)
+            reads.setdefault((addresses[spec.site], step), []).append(
+                ReadOp(
+                    name=read_name,
+                    at=at,
+                    featurizer=spec.featurizer,
+                    view=getattr(spec, "view", "raw"),
+                )
             )
-        )
+            continue
+        # one ordinary read per decode step, which the run stacks and cuts
+        _fits(read_name, spec.site, experiment, len(batch[0]))
+        for step in range(experiment.decode):
+            reads.setdefault((addresses[spec.site], step), []).append(
+                ReadOp(
+                    name=f"{read_name}@{step}",
+                    at=at,
+                    featurizer=spec.featurizer,
+                    view=getattr(spec, "view", "raw"),
+                    stack=read_name,
+                )
+            )
 
     taps = []
     # forward order within a step; the prompt frame (None) before any step
-    def order(place: tuple[Address, Any]) -> tuple[int, int, tuple[int, int, int]]:
+    def order(place: tuple[Address, Any]) -> tuple[int, int, tuple[int, int]]:
         address, step = place
         return (0 if step is None else 1, -1 if step == "all" else (step if step is not None else -1), address.key)
 
@@ -991,8 +1089,10 @@ def _forward(
     return Forward(
         name=name,
         input=role,
-        input_ids=batch.input_ids,
-        attention_mask=batch.attention_mask,
+        input_ids=batch[0],
+        attention_mask=batch[1],
+        sample=batch[2],
+        segments=batch[3],
         taps=tuple(taps),
         decode=experiment.decode,
     )

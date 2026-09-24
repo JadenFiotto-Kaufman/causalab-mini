@@ -1,11 +1,19 @@
 """The continuation frame: a forward that decodes, and taps at its steps.
 
 `decode: N` on an intervention makes every forward a prefill plus N greedy
-steps. A position may then be `{"step": k}` — the one position step k
-processes — and a write may be `{"step": "all"}`, every step, which is what
-steering is. Prompt-frame taps apply at the prefill and reach the
-continuation only through the cache. The generated ids come home as
-`<model>.generated`.
+steps, and `{"frame": "generated", …}` is a position along what it said.
+
+Two halves, and the difference between them is what the *run* has to have
+seen. `{"index": k}` with k >= 0 is a step the decode reaches, so a tap
+fires there and a write may say it — steering is `{"all": true}`, every
+step. Everything else — the last real token, the row's stop token, where
+the model said the row's own text — is a cut of a continuation that does
+not exist until the decode has finished, so the read fires at every step
+and `engine/steps.py` cuts the stack afterwards. A write may not name one
+of those at all, and says so.
+
+Prompt-frame taps apply at the prefill and reach the continuation only
+through the cache. The generated ids come home as `<model>.generated`.
 """
 
 import json
@@ -32,7 +40,15 @@ def probe_raw():
 
 def _unswept(raw, step=1):
     raw = json.loads(json.dumps(raw))
-    raw["interventions"]["generate"]["reads"]["logits"]["pos"] = {"step": step}
+    raw["interventions"]["generate"]["reads"]["logits"]["pos"] = {
+        "frame": "generated", "index": step
+    }
+    return raw
+
+
+def _at(raw, pos):
+    raw = json.loads(json.dumps(raw))
+    raw["interventions"]["generate"]["reads"]["logits"]["pos"] = pos
     return raw
 
 
@@ -78,7 +94,7 @@ def test_a_prefill_write_reaches_the_continuation_through_the_cache(probe_raw, d
 
 def test_sweeping_the_step_is_one_point_per_decode_step(probe_raw, data_root, model_engine):
     built = plan.build_request(probe_raw, data_root, model_engine)
-    assert list(built.steps) == ["step=0", "step=1", "step=2"]
+    assert list(built.steps) == ["index=0", "index=1", "index=2"]
     executed = model_engine.execute(built)
     curve = [executed.step(p, plan.Plan).step("score", plan.Observe).results["p_answer"] for p in built.steps]
     assert len({tuple(c.tolist()) for c in curve}) == 3, "three steps, three readings"
@@ -97,12 +113,13 @@ def test_the_two_engines_generate_the_same_tokens(probe_raw, data_root, model_en
 
 
 def test_steering_is_a_write_at_every_step(probe_raw, data_root, model_engine):
-    """`{"step": "all"}` with add_scaled: the counterfactual's last-token
+    """`{"frame": "generated", "all": true}` with add_scaled: the last-token
     residual, scaled, added at every decode step at the last position."""
     raw = _unswept(probe_raw, step=2)
     one = raw["interventions"]["generate"]
-    one["writes"]["patch"] = {"site": "target", "pos": {"step": "all"}, "mechanism": "add_scaled",
-                              "operand": "v_cf", "params": {"scale": 4.0}}
+    one["writes"]["patch"] = {"site": "target", "pos": {"frame": "generated", "all": True},
+                              "mechanism": "add_scaled", "operand": "v_cf",
+                              "params": {"scale": 4.0}}
     built = plan.build_request(raw, data_root, model_engine)
     tap = built.step("score", plan.Observe).forwards[1].taps[0]
     assert tap.step == "all" and tap.writes[0].mechanism == "add_scaled"
@@ -110,18 +127,149 @@ def test_steering_is_a_write_at_every_step(probe_raw, data_root, model_engine):
     assert tuple(steered.shape) == (4, 3)
 
 
+GENERATED = {"frame": "generated"}
+
+
 @pytest.mark.parametrize(
     "edit, message",
     [
-        (lambda one: one["reads"]["logits"].update(pos={"step": 3}), "step 3 of a 3-token decode"),
-        (lambda one: one.update(decode=0), "a step position needs `decode` > 0"),
-        (lambda one: one["reads"]["logits"].update(pos={"step": "all"}), "'all' is for writes"),
-        (lambda one: one["reads"]["logits"].update(pos={"step": -1}), "non-negative integer"),
+        (lambda one: one["reads"]["logits"].update(pos={**GENERATED, "index": 3}),
+         "step 3 of a 3-token decode"),
+        (lambda one: one.update(decode=0), "a generated position needs `decode` > 0"),
+        (lambda one: one["writes"]["patch"].update(pos={**GENERATED, "index": -1}),
+         "a write in the continuation frame is at a step the decode has reached"),
+        (lambda one: one["writes"]["patch"].update(pos={**GENERATED, "all": True,
+                                                        "scope": {"segment": "eos"}}),
+         "takes no scope"),
+        (lambda one: one["writes"]["patch"].update(pos={**GENERATED, "index": 9}),
+         "step 9 of a 3-token decode"),
     ],
-    ids=["past the budget", "no decode", "a read at all steps", "a negative step"],
+    ids=["past the budget", "no decode", "a write at the last token",
+         "a write at the stop token", "a write past the budget"],
 )
-def test_what_a_step_may_not_be(probe_raw, edit, message):
+def test_what_a_continuation_position_may_not_be(probe_raw, edit, message):
+    """A read may name any cut of the continuation, because the run has the
+    whole of it by the time it chooses. A write happens during the decode,
+    so it may only name a step the decode has reached."""
     raw = _unswept(probe_raw, step=1)
     edit(raw["interventions"]["generate"])
     with pytest.raises(ValidationError, match=message):
         Spec.model_validate(raw)
+
+
+# --------------------------------------------------------------------- #
+# the cuts only the finished continuation can settle
+# --------------------------------------------------------------------- #
+
+
+def test_the_last_generated_token_is_read_out_of_every_step(probe_raw, data_root, model_engine):
+    """`{"index": -1}` cannot name a decode step in advance, so the read fires
+    at every one of them and the run cuts the stack against the continuation
+    it produced. Here nothing stops, so the last token is the last step — and
+    the number is the one that step's own read gets."""
+    dynamic = plan.build_request(_at(probe_raw, {**GENERATED, "index": -1}), data_root, model_engine)
+    taps = dynamic.step("score", plan.Observe).forwards[1].taps
+    stacked = [op for tap in taps for op in tap.reads if op.stack]
+    assert [(op.name, op.stack) for op in stacked] == [(f"logits@{k}", "logits") for k in range(3)]
+
+    last = model_engine.execute(dynamic).step("score", plan.Observe)
+    static = model_engine.execute(
+        plan.build_request(_unswept(probe_raw, step=2), data_root, model_engine)
+    ).step("score", plan.Observe)
+    assert torch.equal(last.results["p_answer"], static.results["p_answer"])
+    assert last.results["positions"]["logits"]["rows"] == ((2,),) * 4
+
+
+def test_a_read_over_a_stack_is_refused_when_it_would_hold_too_much(
+    probe_raw, data_root, model_engine, monkeypatch
+):
+    """The one cost of buffering every step, stated: `rows x decode x width`
+    numbers. It is nothing here and a gigabyte on a long decode over a wide
+    site, so there is a line — and the three numbers are the compiler's, so
+    it is drawn before a model is loaded rather than after the memory has
+    been held."""
+    import sys
+
+    # `plan.build` is the compiler *function* — the package re-exports it over
+    # the module's own name, which is the trap test_structure.py names as
+    # `write_module`. So the module is fetched by its import path.
+    monkeypatch.setattr(sys.modules["causalab_mini.plan.build"], "STACK_LIMIT", 1024)
+    with pytest.raises(plan.PlanError, match="keeps every decode step"):
+        plan.build_request(_at(probe_raw, {**GENERATED, "index": -1}), data_root, model_engine)
+
+
+# --------------------------------------------------------------------- #
+# what the model said, and whether it stopped
+# --------------------------------------------------------------------- #
+
+
+ANSWER = REPO / "documents" / "v2" / "generated_answer.json"
+
+
+def test_whether_the_model_said_it_is_a_result_and_not_an_exception(data_root, model_engine):
+    """`documents/v2/generated_answer.json`. Two of these four rows' `said`
+    text is in what the model generated and two are not, and the spec is the
+    same for all four — so which rows can be scored is the run's answer, per
+    row, with the reason beside it."""
+    raw = json.loads(ANSWER.read_text())
+    executed = model_engine.execute(plan.build_request(raw, data_root, model_engine))
+    score = executed.step("score", plan.Observe)
+
+    assert score.results["eligible"]["p_answer"] == (True, True, False, False)
+    said = score.results["positions"]["at_said"]
+    assert said["reason"] == ("", "", "alignment_missing", "alignment_missing")
+    assert said["tokens"] == ("' substr'", "' energ'", "", "")
+    # and the step it landed on is the row's own, not a number counted once
+    assert said["rows"] == ((1,), (2,), (), ())
+    assert score.results["p_answer"].shape == (2,)
+
+
+def test_a_row_that_never_stopped_says_so_rather_than_ending_the_run(data_root, model_engine):
+    """`{"scope": {"segment": "eos"}}` is where the row stopped. Mini holds
+    EOS off so the decode runs to its bound and the batch stays rectangular
+    — a deliberate difference — so no row stops here, and every row comes
+    back `alignment_missing` instead of the run failing."""
+    raw = json.loads(ANSWER.read_text())
+    executed = model_engine.execute(plan.build_request(raw, data_root, model_engine))
+    stop = executed.step("score", plan.Observe).results["positions"]["at_stop"]
+    assert stop["rows"] == ((),) * 4
+    assert set(stop["reason"]) == {"alignment_missing"}
+
+
+def test_the_continuation_frame_prints_as_itself(data_root, model_engine):
+    """And a read the run cuts out of the continuation prints as the one
+    read the document wrote, not as the six ops the plan carries."""
+    text = explain(plan.build_request(json.loads(ANSWER.read_text()), data_root, model_engine))
+    assert "read  'at_said' at lm_head over 6 steps" in text
+    assert "pos={generated index:-1 scope:{variable:said}}" in text
+    assert "pos={generated index:-1 scope:{segment:eos}}" in text
+    assert "at_said@" not in text
+
+
+def test_a_tap_in_the_continuation_frame_reports_where_it_was(
+    probe_raw, data_root, model_engine, tmp_path
+):
+    """The prompt frame has nothing true to say about a tap that acted at a
+    decode step, so it says nothing and the continuation says it instead:
+    the step, and the token the model produced there. The table carries it,
+    which is where a reader asks "of what token" about a number."""
+    raw = _at(probe_raw, {**GENERATED, "index": 2})
+    one = raw["interventions"]["generate"]
+    one["writes"]["patch"]["pos"] = {**GENERATED, "all": True}
+    one["writes"]["patch"].update(mechanism="add_scaled", params={"scale": 4.0})
+    executed = model_engine.execute(plan.build_request(raw, data_root, model_engine))
+    where = executed.step("score", plan.Observe).results["positions"]
+
+    assert where["logits"]["rows"] == ((2,),) * 4, "the decode step, not a prompt index"
+    assert where["patch"]["rows"] == ((0, 1, 2),) * 4, "a steering write is every step"
+    assert set(where["logits"]["reason"]) == {""}
+    # the prompt-frame read is still reported against the prompt
+    assert where["v_cf"]["rows"] == ((10,),) * 4 and where["v_cf"]["tokens"] == ("' is'",) * 4
+    # and what the model said at step 2 is what the provenance shows
+    generated = executed.step("score", plan.Observe).results["patched.generated"]
+    said = model_engine.tokenizer.decode([int(generated[0][2])])
+    assert said in where["logits"]["tokens"][0]
+
+    executed.write(tmp_path)
+    row = json.loads((tmp_path / "p_answer.json").read_text())[0]
+    assert row["positions"] == [2] and row["reason"] == ""

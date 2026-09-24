@@ -168,8 +168,8 @@ def test_a_pca_basis_cannot_be_trained_or_written():
         "writes": {"w": {"site": "target", "pos": -1, "mechanism": "swap", "operand": {"ref": "basis"}}},
         "models": {"m": {"input": "base", "writes": ["w"]}},
     }
-    harvest["steps"]["harvest"]["intervention"] = "harvest"  # two interventions now: each step says which
-    harvest["steps"]["ablate"] = {"kind": "observe", "intervention": "ablate", "rows": {"base": "weekdays/train"}}
+    harvest["steps"]["harvest"]["interventions"] = "harvest"  # two interventions now: each step says which
+    harvest["steps"]["ablate"] = {"kind": "observe", "interventions": "ablate", "rows": {"base": "weekdays/train"}}
     with pytest.raises(plan.PlanError, match="a basis is loaded as a featurizer, not written"):
         plan.build_request(harvest, REPO / "documents" / "data", __import__("causalab_mini.engine", fromlist=["NNterpEngine"]).NNterpEngine.load(Spec.model_validate(json.loads(DAS.read_text())).model, dispatch=False))
 

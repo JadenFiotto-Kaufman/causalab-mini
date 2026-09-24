@@ -1,0 +1,34 @@
+[
+ {
+  "example_id": "substr",
+  "input": "If today is Thursday, tomorrow is",
+  "said": "substr",
+  "base_answer": " Friday",
+  "cf_answer": " Sunday",
+  "split": "all"
+ },
+ {
+  "example_id": "energ",
+  "input": "If today is Friday, tomorrow is",
+  "said": "energ",
+  "base_answer": " Saturday",
+  "cf_answer": " Monday",
+  "split": "all"
+ },
+ {
+  "example_id": "Friday",
+  "input": "If today is Saturday, tomorrow is",
+  "said": "Friday",
+  "base_answer": " Sunday",
+  "cf_answer": " Friday",
+  "split": "all"
+ },
+ {
+  "example_id": "Saturday",
+  "input": "If today is Sunday, tomorrow is",
+  "said": "Saturday",
+  "base_answer": " Monday",
+  "cf_answer": " Saturday",
+  "split": "all"
+ }
+]

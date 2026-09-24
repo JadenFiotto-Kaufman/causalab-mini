@@ -85,6 +85,7 @@
   "steps": {
     "fit": {
       "kind": "fit",
+      "interventions": "dbm",
       "rows": {
         "base": "weekdays/data#train",
         "counterfactual": "weekdays/data#train"
@@ -143,6 +144,7 @@
     },
     "score": {
       "kind": "observe",
+      "interventions": "dbm",
       "rows": {
         "base": "weekdays/data#train",
         "counterfactual": "weekdays/data#train"

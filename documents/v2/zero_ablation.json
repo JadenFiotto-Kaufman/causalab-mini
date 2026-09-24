@@ -84,7 +84,7 @@
   "steps": {
     "clean": {
       "kind": "observe",
-      "intervention": "clean",
+      "interventions": "clean",
       "rows": {
         "base": "weekdays/train"
       },
@@ -97,7 +97,7 @@
     },
     "zeroed": {
       "kind": "observe",
-      "intervention": "zeroed",
+      "interventions": "zeroed",
       "rows": {
         "base": "weekdays/train"
       },

@@ -10,15 +10,30 @@ one of two kinds:
   a place (a parallel-residual block has no mid-stream, a mixture of experts no
   single activation), and every width and head count, are nnterp's to know.
   The row here names the accessor and where it sits in the forward pass —
-  the four whole-model components (`embeddings`, `ln_final`, `lm_head`,
+  the five whole-model components (`embeddings`, `ln_final`, `lm_head`,
   `input_ids`) included, so every boundary goes through an accessor and a
   family's `select`/`Lens` applies to all of them.
-* an **interior** — `attention_query`. The tensor never crosses a module
-  boundary, so the address is a module *plus one operation inside its forward*,
-  reached through nnsight's `.source`. The operation is named by the call site
-  it appears on, resolved against the loaded model by `locate`, because an
-  occurrence suffix is a property of the transformers version. nnterp does not
-  address these yet; the rows are still ours.
+* an **interior** — `attention_query`, `attention_key`, `attention_scores`,
+  `attention_z`. The tensor never crosses a module boundary, so the address
+  is a module *plus one operation inside its forward*, reached through
+  nnsight's `.source`. The operation is named by the call site it appears on,
+  resolved against the loaded model by `locate`, because an occurrence suffix
+  is a property of the transformers version. nnterp does not address these
+  four, so the rows are still ours — and so is their rank inside the block,
+  interleaved into nnterp's own numbering. (`attention_probs` used to be one
+  of them and is now nnterp's `attention_probabilities`: one name over five
+  per-family overrides, a sink tag and a validator, where mini had one
+  hardcoded operation name.)
+
+What mini does **not** keep any more: where a place sits in the forward pass,
+and whether it is one per layer. Both are nnterp's — `internals.rank` and
+`per_layer` — and `locate` stamps the first into the address and checks the
+second against this table, so a family override that moves a place cannot
+move one side only.
+
+The table is a floor, not a fence: a component name mini has never heard of
+but `model.internals` has is addressable, because `RenameConfig(addresses=
+{...})` is how a user adds a place and a document should be able to name it.
 
 An `Address` stays pure data — the document's `(component, layer)`, plus what
 `locate` resolved on the checkpoint (an interior's operation name, a boundary's
@@ -27,7 +42,7 @@ module path) — so it pickles, sorts, prints and travels in a plan.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 
@@ -36,20 +51,26 @@ class _Component:
     """Everything about one component that is a fact about models — or, for a
     boundary, the name under which nnterp knows that fact."""
 
-    stage: int  # order within one block, in forward order
     #: A module boundary: the nnterp accessor this component is. The accessor
-    #: knows the module path on this checkpoint, whether the place exists, and
-    #: which side of the module it is.
+    #: knows the module path on this checkpoint, whether the place exists,
+    #: which side of the module it is, **and where it sits in the forward
+    #: pass** — `locate` stamps that rank into the address rather than mini
+    #: keeping a second numbering that a future nnterp override would move
+    #: out from under.
     accessor: str | None = None
+    #: For an interior, which nnterp does not address: its own rank inside
+    #: the block, interleaved into nnterp's numbering (nnterp leaves 10 → 20
+    #: → 25 → 30 free inside the attention). `None` at a boundary, where
+    #: nnterp answers.
+    order: int | None = None
     #: An interior's module: a dotted path against the nnterp handle, in
     #: nnterp's standardized names.
     path: str | None = None
     side: str = "output"  # "output" or "input"
-    #: Where this tap sits relative to the layer stack: 0 before it, 1 inside
-    #: it, 2 after it. The embeddings are the reason this exists — every other
-    #: layerless tap is downstream of every layer, and that one is upstream of
-    #: all of them.
-    band: int = 1
+    #: Whether this place is one per layer. A document gives a layer for one
+    #: and may not for the others; at a boundary `locate` checks the answer
+    #: against nnterp's, so the two cannot drift.
+    per_layer: bool = True
     op: str | None = None  # the call site of the `.source` operation, for an interior
     #: For an interior, which handle of that call carries the tensor: one of
     #: its positional arguments ("inputs") or its return ("output").
@@ -94,7 +115,7 @@ _COMPONENTS = {
         # axis 2, not axis 1.
         path="attentions.{layer}",
         side="input",
-        stage=2,
+        order=11,
         op="attention_interface(",
         arg=1,
         seq_axis=2,
@@ -104,11 +125,12 @@ _COMPONENTS = {
     "attention_key": _Component(
         # The same call as the query, argument 2: the keys *before* GQA's
         # repeat_kv, so this is key-head space and narrower than the query by
-        # the grouping ratio on a model that groups. No width: nnterp
-        # publishes nothing for it, which is what refuses a featurizer here.
+        # the grouping ratio on a model that groups. Its width is the same
+        # per-head one the query has — `qk_head_dim` multiplied out by the
+        # *key* head count, which `heads="kv"` is what says.
         path="attentions.{layer}",
         side="input",
-        stage=2,
+        order=12,
         op="attention_interface(",
         arg=2,
         seq_axis=2,
@@ -123,7 +145,7 @@ _COMPONENTS = {
         # the last axis is the keys, whose length is the padded batch's.
         path="attentions.{layer}",
         side="input",
-        stage=3,
+        order=15,
         op="attention_interface(",
         inner="nn_functional_softmax_0",
         arg=0,
@@ -133,16 +155,14 @@ _COMPONENTS = {
         keys=True,
     ),
     "attention_probs": _Component(
-        # The same softmax's return: the attention pattern, before dropout
-        # (a no-op in eval) and before it meets the values. A write here is
-        # "make this head attend there".
-        path="attentions.{layer}",
-        side="input",
-        stage=4,
-        op="attention_interface(",
-        inner="nn_functional_softmax_0",
-        handle="output",
-        arg=None,
+        # The attention pattern, nnterp's row: the dropout call's output
+        # rather than the softmax's, which is the pattern the values are
+        # actually mixed with on every family (after the cast, and after an
+        # attention sink has been dropped) and the identity in eval mode.
+        # nnterp carries six per-family overrides, a sink tag and a
+        # validator behind that one name; mini carried one hardcoded op.
+        # A write here is "make this head attend there".
+        accessor="attention_probabilities",
         seq_axis=2,
         needs="eager",
         heads="q",
@@ -155,7 +175,7 @@ _COMPONENTS = {
         # reason `handle` exists.
         path="attentions.{layer}",
         side="input",
-        stage=5,
+        order=22,
         op="attention_interface(",
         handle="output",
         arg=0,
@@ -163,38 +183,50 @@ _COMPONENTS = {
         heads="q",
         width="head_dim",
     ),
-    "input_ids": _Component(accessor="embeddings_input", stage=0, band=0, read_only=True),
+    "input_ids": _Component(accessor="embeddings_input", per_layer=False, read_only=True),
     "embeddings": _Component(
         # The embedding table's output, before layer 0: `block_input` at layer 0
         # is the same tensor on a model with nothing between them (GPT-2 adds
         # position embeddings), and this is the one address that names no layer.
-        accessor="embeddings_output", stage=1, band=0, width="hidden_size",
+        accessor="embeddings_output", per_layer=False, width="hidden_size",
     ),
     # --- the block, as nnterp addresses it. Definitions (nnterp's, asserted
     # there on 26 families): block_mid = block_input + attention_output,
     # block_output = block_mid + mlp_output, mlp_input_norm = mlp_input.
-    "block_input": _Component(accessor="layers_input", stage=0, width="hidden_size"),
-    "attention_input_norm": _Component(accessor="attentions_norm_output", stage=1, width="hidden_size"),
+    "block_input": _Component(accessor="layers_input", width="hidden_size"),
+    "attention_input_norm": _Component(accessor="attentions_norm_output", width="hidden_size"),
     "attention_premix": _Component(
         # every head's result side by side: heads * head_dim wide, which is
         # not hidden_size on Qwen3 or Gemma
-        accessor="attentions_premix", stage=6, width="head_dim", heads="q",
+        accessor="attentions_premix", width="head_dim", heads="q",
     ),
-    "attention_output": _Component(accessor="attentions_output", stage=7, width="hidden_size"),
-    "block_mid": _Component(accessor="layers_mid", stage=8, width="hidden_size"),
-    "mlp_input_norm": _Component(accessor="mlps_norm_output", stage=9, width="hidden_size"),
-    "mlp_input": _Component(accessor="mlps_input", stage=10, width="hidden_size"),
-    "mlp_activation": _Component(accessor="mlps_activation", stage=11, width="intermediate_size"),
+    "attention_output": _Component(accessor="attentions_output", width="hidden_size"),
+    "block_mid": _Component(accessor="layers_mid", width="hidden_size"),
+    "mlp_input_norm": _Component(accessor="mlps_norm_output", width="hidden_size"),
+    "mlp_input": _Component(accessor="mlps_input", width="hidden_size"),
+    "mlp_activation": _Component(accessor="mlps_activation", width="intermediate_size"),
     "mlp_neuron_output": _Component(
         # act(gate)·up on a gated MLP, the activation itself on GPT-2, which
         # has no gate — the same place, a different tensor
-        accessor="mlps_neurons", stage=12, width="intermediate_size",
+        accessor="mlps_neurons", width="intermediate_size",
     ),
-    "mlp_output": _Component(accessor="mlps_output", stage=13, width="hidden_size"),
-    "block_output": _Component(accessor="layers_output", stage=14, width="hidden_size"),
-    "ln_final": _Component(accessor="ln_final_output", stage=0, band=2, width="hidden_size"),
-    "lm_head": _Component(accessor="lm_head_output", stage=1, band=2, width="vocab_size"),
+    "mlp_output": _Component(accessor="mlps_output", width="hidden_size"),
+    "block_output": _Component(accessor="layers_output", width="hidden_size"),
+    "ln_final": _Component(accessor="ln_final_output", per_layer=False, width="hidden_size"),
+    "lm_head": _Component(accessor="lm_head_output", per_layer=False, width="vocab_size"),
+    # The model's own output, which is not always the head's: Gemma-2 caps it
+    # with `final_logit_softcapping`, so a metric scored on `lm_head` there is
+    # scored on numbers the model does not predict from. nnterp carries the
+    # two as separate rows and this is the second one.
+    "logits": _Component(accessor="logits", per_layer=False, width="vocab_size"),
 }
+
+
+#: The row a component only nnterp knows gets: the place is an accessor of
+#: that name, read at its output, and nothing else is claimed about it. A
+#: featurizer there is refused (no width), it is not per head, and it is a
+#: module boundary — which is what `RenameConfig(addresses={...})` adds.
+_PASS_THROUGH = _Component()
 
 
 class AddressError(ValueError):
@@ -217,16 +249,29 @@ class Address:
     module: str | None = None
     #: For the same boundaries: which side of that module, as nnterp knows it.
     io: str | None = None
+    #: Where this place is in the model's forward pass, `(layer, order)` —
+    #: nnterp's `internals.rank` at a boundary, mini's own numbering for the
+    #: interiors, interleaved into it. Filled by `locate`, because it is a
+    #: fact about the checkpoint's family: nnterp overrides the order per
+    #: family where a block is built differently.
+    rank: tuple[int, int] | None = None
+    #: Whether the place nnterp resolved is an operation inside a forward
+    #: rather than a module boundary. nnterp's attention-pattern row is one,
+    #: and an engine that only sees module boundaries has to know.
+    inside: bool = False
 
     def __post_init__(self) -> None:
-        if self.component not in _COMPONENTS:
+        if self.component not in _COMPONENTS and self.accessor is None:
             raise AddressError(f"component {self.component!r} has no address here")
         if self.op is not None and self._entry.op is None:
             raise AddressError(f"component {self.component!r} is a module boundary, not an operation")
 
     @property
     def _entry(self) -> _Component:
-        return _COMPONENTS[self.component]
+        """This component's row, or the default one for a name that is
+        nnterp's alone — a user's `RenameConfig(addresses=…)` accessor,
+        which a document may name and which mini knows nothing else about."""
+        return _COMPONENTS.get(self.component, _PASS_THROUGH)
 
     @property
     def where(self) -> tuple[str, int | None, str | None]:
@@ -235,8 +280,10 @@ class Address:
 
     @property
     def accessor(self) -> str | None:
-        """The nnterp accessor this component is, at a boundary nnterp addresses."""
-        return self._entry.accessor
+        """The nnterp accessor this component is, at a boundary nnterp
+        addresses — or the component's own name, for one only nnterp knows."""
+        entry = _COMPONENTS.get(self.component)
+        return entry.accessor if entry is not None else self.component
 
     @property
     def call_site(self) -> str | None:
@@ -264,7 +311,7 @@ class Address:
                 f"component {self.component!r}: its module is a fact about the checkpoint; "
                 "build the address with engine.locate(...)"
             )
-        if entry.band != 1:
+        if not self.per_layer:
             return self.module
         return f"layers.{self.layer}" + (f".{self.module}" if self.module else "")
 
@@ -274,10 +321,17 @@ class Address:
         return self.io or self._entry.side
 
     @property
+    def per_layer(self) -> bool:
+        """Whether this place is one per layer. `locate` checks mini's answer
+        against nnterp's, so a row that moved cannot go unnoticed."""
+        return self._entry.per_layer
+
+    @property
     def interior(self) -> bool:
         """Whether this address is inside a forward rather than at a module
-        boundary. The two are reached differently by every engine."""
-        return self._entry.op is not None
+        boundary. The two are reached differently by every engine, and it is
+        true of an accessor whose own row names an operation."""
+        return self._entry.op is not None or self.inside
 
     @property
     def arg(self) -> int | None:
@@ -318,13 +372,23 @@ class Address:
         return self._entry.seq_axis
 
     @property
-    def key(self) -> tuple[int, int, int]:
+    def key(self) -> tuple[int, int]:
         """Sort key putting addresses in forward order: the embeddings, then
         the layer stack by depth and by where inside the block, then the final
         norm and the head. nnsight requires the order: reading layer 8 after
         layer 2 raises, and a write has to go in above the read that observes
-        it."""
-        return (self._entry.band, self.layer or 0, self._entry.stage)
+        it.
+
+        It is `internals.rank`'s answer, stamped by `locate` — nnterp moves a
+        place's order per family (DBRX puts the attention's norm above the
+        mixer) and mini keeping its own numbering beside it is how the two
+        drift apart without anything saying so."""
+        if self.rank is None:
+            raise AddressError(
+                f"component {self.component!r}: where it sits in the forward pass is a "
+                "fact about the family; build the address with engine.locate(...)"
+            )
+        return self.rank
 
     @property
     def read_only(self) -> bool:
@@ -354,9 +418,25 @@ class Address:
 def locate(model: Any, component: str, layer: int | None) -> Address:
     """The address of `(component, layer)` on a loaded nnterp model, or a
     refusal: a boundary nnterp has no accessor for on this family, or the
-    pattern under an attention implementation that never forms it. What
-    nnterp resolved — the child's spelling on this checkpoint — is written
-    into the address, so the plan says where and any engine can walk there."""
+    pattern under an attention implementation that never forms it.
+
+    What nnterp resolved is written into the address — the child's spelling
+    on this checkpoint, which side of it, and **where it sits in the forward
+    pass** — so the plan says where, any engine can walk there, and mini
+    keeps no second numbering to drift.
+
+    A name mini's table does not have but `model.internals` does is accepted:
+    `RenameConfig(addresses={...})` is nnterp's extension point, and a
+    document should be able to name what a user added. Mini claims nothing
+    else about such a place — no width, so a featurizer there is refused.
+    """
+    known = component in _COMPONENTS
+    if not known and component not in getattr(model, "internals", {}):
+        raise AddressError(
+            f"component {component!r} has no address here, and this model's internals "
+            f"have no accessor of that name either. Mini's are {sorted(_COMPONENTS)}; "
+            "add one to a model with RenameConfig(addresses={...})"
+        )
     address = Address(component, layer)
     have = getattr(model.config, "_attn_implementation", None)
     if address.needs is not None and have != address.needs:
@@ -366,12 +446,27 @@ def locate(model: Any, component: str, layer: int | None) -> Address:
             "in the document's model block"
         )
     if address.accessor is None:
-        return address
+        # an interior: nnterp does not address it, so the rank is mini's own
+        # row, interleaved into nnterp's numbering for the block
+        assert address._entry.order is not None
+        return replace(address, rank=(layer or 0, address._entry.order))
     accessor = model.internals[address.accessor]
+    if known and accessor.per_layer != address.per_layer:
+        raise AddressError(
+            f"component {component!r}: nnterp says per_layer={accessor.per_layer} and this "
+            f"table says {address.per_layer}. One of them moved; the table is mini's to fix"
+        )
     reason = accessor.unavailable_on(layer if accessor.per_layer else None)
     if reason is not None:  # a place this family, or this layer, lacks — nnterp says why
         raise AddressError(f"component {component!r}: {reason}")
-    return Address(component, layer, module=accessor.address.module, io=accessor.io_type.value)
+    return Address(
+        component,
+        layer,
+        module=accessor.address.module,
+        io=accessor.io_type.value,
+        rank=model.internals.rank(address.accessor, layer if accessor.per_layer else None),
+        inside=bool(accessor.address.op),
+    )
 
 
 def head_count(model: Any, address: Address) -> int:
@@ -399,6 +494,25 @@ def width(model: Any, address: Address) -> int:
     return int(value)
 
 
+def layered(component: str, layer: int | None) -> str | None:
+    """Why this component may not be addressed at this layer, or `None`.
+
+    A whole-model place takes none and a per-layer one takes exactly one,
+    and which a component is, is this table's to say — so both authoring
+    formats ask here rather than each keeping a list. A name only nnterp
+    knows is per layer unless nnterp says otherwise, which `locate` finds
+    out; here it is not refused for a layer either way.
+    """
+    entry = _COMPONENTS.get(component)
+    if entry is None:
+        return None
+    if not entry.per_layer and layer is not None:
+        return f"{component} takes no layers"
+    if entry.per_layer and not isinstance(layer, int):
+        return f"{component} is addressed at one layer"
+    return None
+
+
 def describe() -> dict[str, dict[str, Any]]:
     """The component vocabulary, as data an agent can read: for each name,
     where it is and what kind of place that is. This is the table, not a
@@ -407,9 +521,12 @@ def describe() -> dict[str, dict[str, Any]]:
         name: {
             "accessor": entry.accessor,
             "path": entry.path,
-            "side": entry.side,
+            # an interior's, and only an interior's: at a boundary the side
+            # is nnterp's to say and `locate` stamps it, so a table written
+            # without a model has no honest answer
+            "side": entry.side if entry.op is not None else None,
             "interior": entry.op is not None,
-            "layered": entry.band == 1,
+            "layered": entry.per_layer,
             "seq_axis": entry.seq_axis,
             "width": entry.width,
             "read_only": entry.read_only,

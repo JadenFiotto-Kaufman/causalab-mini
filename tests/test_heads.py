@@ -242,7 +242,15 @@ def test_the_pattern_is_at_the_same_address_on_gpt2(data_root):
     spec = document.Document.load(REPO / "documents" / "gpt2_cpu.json").model
     engine = NNterpEngine.load(spec, device_map="cpu", attn_implementation="eager")
     located = engine.locate("attention_probs", 0)
-    assert (located.op, located.inner) == ("attention_interface_1", "nn_functional_softmax_0")
+    # nnterp's row, which is one name over five per-family overrides, a sink
+    # tag and a validator — where mini had one hardcoded operation
+    assert located.accessor == "attention_probabilities"
+    assert located.interior, "it is an operation inside the attention, not a module boundary"
+    llama = NNterpEngine.load(
+        document.Document.load(REPO / "documents" / "minimal_cpu.json").model,
+        device_map="cpu", attn_implementation="eager",
+    )
+    assert located.where == llama.locate("attention_probs", 0).where
 
 
 # --------------------------------------------------------------------- #
@@ -365,8 +373,8 @@ def test_a_pattern_published_by_an_earlier_step_cannot_be_checked(data_root, eag
     raw["interventions"]["harvest"] = {"reads": {"their_pattern": one["reads"].pop("their_pattern")}}
     one["writes"]["look_there"]["operand"] = {"ref": "kept"}
     score = raw["steps"].pop("score")
-    raw["steps"] = {"harvest": {"kind": "observe", "intervention": "harvest", "rows": score["rows"],
+    raw["steps"] = {"harvest": {"kind": "observe", "interventions": "harvest", "rows": score["rows"],
                                 "outputs": {"kept": {"read": "their_pattern"}}},
-                    "score": {**score, "intervention": "pattern_patching"}}
+                    "score": {**score, "interventions": "pattern_patching"}}
     with pytest.raises(plan.PlanError, match="swap one read in the same pass"):
         plan.build_request(raw, data_root, eager_engine)

@@ -12,7 +12,8 @@ The contract in two halves. What the **compiler** asks, because a plan is
 compiled against a particular model and none of it may be decided later:
 
     load(spec, **opts)   the model, however the runtime loads one
-    tokenizer            resolves prompts and answer columns
+    tokenizer            resolves prompts and answer columns — and, in the
+                         run, where along them a position lands
     num_layers           bounds the layer band a site may name
     locate(component, layer) -> Address      resolve a site, now, on the client
     width(address) -> int                    how wide the tensor there is
@@ -23,11 +24,15 @@ and what the **run** asks:
     forward(forward, values, featurizers)    one forward, tapped
 
 That is all. The walk over steps, the fit loop, the metrics and the write
-algebra are shared, so a second engine is these seven members and no more.
+algebra are shared, so a second engine is these eight members and no more.
 
 One rule for an engine that traces: a block may load the engine and the plan,
-never the document, the tokenizer or the dataset — nnsight ships every name a
-block loads as a whole pickled object. `tests/test_structure.py` checks it.
+never the document, the dataset or a bare tokenizer — nnsight ships every name
+a block loads as a whole pickled object. The run *does* need a tokenizer, to
+resolve a position against the text the model will see, and it reaches one
+through `engine.tokenizer` -> `model.tokenizer`: a persistent object, written
+as an id and resolved on a server to the served checkpoint's own.
+`tests/test_structure.py` checks it.
 """
 
 from __future__ import annotations

@@ -47,9 +47,21 @@ def digest(rows: list[Row]) -> str:
 
 
 def field_text(row: Row, field: str) -> str:
+    """`field_value`, refused unless it is a string."""
+    value = field_value(row, field)
+    if not isinstance(value, str):
+        raise DataError(f"field {field!r}: expected a string, got {type(value).__name__}")
+    return value
+
+
+def field_value(row: Row, field: str) -> Any:
     """`input` -> the column; `counterfactual_inputs[0]` -> one entry of a
     list-valued column; `counterfactual_inputs_variables[0].entity` -> a key
-    of a dict inside one. Dots walk into dicts, brackets into lists."""
+    of a dict inside one. Dots walk into dicts, brackets into lists.
+
+    Whatever is there, not necessarily a string: a role whose field is a
+    *list of messages* is a conversation, and what a row holds is how a
+    document says so."""
     value: Any = row
     for step in field.split("."):
         match = _STEP.match(step)
@@ -61,9 +73,35 @@ def field_text(row: Row, field: str) -> str:
         value = value[key]
         for index in indices:
             value = value[int(index)]
-    if not isinstance(value, str):
-        raise DataError(f"field {field!r}: expected a string, got {type(value).__name__}")
     return value
+
+
+def variable_text(row: Row, field: str, name: str) -> str:
+    """This row's own value for a variable name, for the role whose text is
+    `field`.
+
+    The protocol's rule, kept: the `<column>_variables` sibling of the role's
+    own field first — `counterfactual_inputs[0]` and `entity` give
+    `counterfactual_inputs_variables[0].entity` — and a top-level column of
+    that name otherwise. That is what lets one position spec mean "this row's
+    entity" in both prompts of a pair while each role resolves its own text.
+
+    A name that is neither is a misspelling and is refused here, on the
+    client, naming both places it looked.
+    """
+    head, *rest = field.split(".")
+    match = _STEP.match(head)
+    if match is None:
+        raise DataError(f"field {field!r}: `column`, `column[i]` and `a.b` are the forms")
+    sibling = ".".join([f"{match.group(1)}_variables{match.group(2)}", *rest, name])
+    for path in (sibling, name):
+        try:
+            return field_text(row, path)
+        except (DataError, IndexError, KeyError):
+            continue
+    raise DataError(
+        f"variable {name!r}: this row has neither {sibling!r} nor a column {name!r}"
+    )
 
 
 def column(rows: list[Row], name: str) -> list[str | None]:

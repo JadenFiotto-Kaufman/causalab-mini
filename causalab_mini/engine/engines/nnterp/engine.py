@@ -186,9 +186,17 @@ def apply_taps(
                 # its module on it. Note the GEMM has M = rows·w rather than
                 # rows·seq, which rounds differently from the model's own
                 # logits by an ulp or so (FINDINGS §10).
-                gathered = model.lm_head(model.ln_final(gathered))
+                gathered = intervene.softcap(
+                    model.lm_head(model.ln_final(gathered)), softcapping(model)
+                )
             with intervene.exact(gathered):
                 values[read_op.name] = featurizers[read_op.featurizer].featurize(gathered)[0].clone()
+
+
+def softcapping(model: Any) -> float | None:
+    """The bound this family puts on its logits, or None. Gemma-2 is the one
+    that has it; `model.logits` is capped and `lm_head_output` is not."""
+    return getattr(model.config, "final_logit_softcapping", None)
 
 
 def find_op(source: Any, call_site: str) -> str:

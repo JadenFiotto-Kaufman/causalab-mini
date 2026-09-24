@@ -198,10 +198,16 @@ def is_ragged(positions: Positions) -> bool:
 
 def _flat(positions: Positions, device: Any) -> tuple[Any, Any]:
     """Every (row, position) pair in row order, for a ragged window. An
-    empty window — an excluded row — contributes nothing."""
+    empty window — an excluded row — contributes nothing, and a window that
+    is empty on *every* row is an empty gather rather than an error: the
+    dtype is stated because an empty Python list would be floats, which is
+    not a thing a tensor can be indexed by."""
     rows = [row for row, window in enumerate(positions) for _ in window]
     index = [position for window in positions for position in window]
-    return torch.as_tensor(rows, device=device), torch.as_tensor(index, device=device)
+    return (
+        torch.as_tensor(rows, dtype=torch.long, device=device),
+        torch.as_tensor(index, dtype=torch.long, device=device),
+    )
 
 
 def _selection(at: Selection | Positions) -> Selection:
@@ -242,7 +248,9 @@ def _window(tensor: Any, at: Selection, seq_axis: int) -> Any:
         rows, index = _flat(positions, tensor.device)
         return moved[rows, index]
     rows = torch.arange(tensor.shape[0], device=tensor.device)[:, None]
-    index = torch.as_tensor(positions, device=tensor.device)  # (batch, w)
+    # the dtype is stated for the same reason as in `_flat`: a rectangle of
+    # empty windows is a list of empty lists, and that is a float tensor
+    index = torch.as_tensor(positions, dtype=torch.long, device=tensor.device)  # (batch, w)
     return moved[rows, index]
 
 
@@ -319,6 +327,17 @@ def apply_write(
             f[..., index] = acted.to(f) if hasattr(acted, "to") else acted  # a literal is a number
         written = featurize.inverse(f, err, x)
     return scatter(tensor, at, written, seq_axis)
+
+
+def softcap(f: Any, cap: float | None) -> Any:
+    """`tanh(f / cap) · cap`, or `f` where the family does not cap.
+
+    The logit lens pushes a residual through the final norm and head by hand,
+    and on a family whose logits are capped — Gemma-2's
+    `final_logit_softcapping` — the head's output is not what the model
+    predicts from. This is the last step the model would have taken.
+    """
+    return f if cap is None else torch.tanh(f / cap) * cap
 
 
 def exact(x: Any) -> Any:

@@ -13,6 +13,7 @@ the protocol's format has no name a document can write down.
 
 import json
 import pathlib
+import re
 
 import pytest
 import torch
@@ -28,6 +29,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 V2_DAS = REPO / "documents" / "v2" / "das.json"
 V2_PATCHING = REPO / "documents" / "v2" / "patching.json"
 V2_MEAN = REPO / "documents" / "v2" / "mean_ablation.json"
+V2_TWO = REPO / "documents" / "v2" / "two_observes.json"
 
 
 @pytest.fixture
@@ -250,18 +252,147 @@ def test_a_write_is_two_fields_a_schema_can_enumerate():
 # --------------------------------------------------------------------- #
 
 
-def test_a_step_names_its_intervention_or_there_is_only_one(das_spec_raw, mean_raw):
-    """One intervention: steps need not say. Several: they must, and an
-    unknown name is refused."""
-    assert Spec.model_validate(das_spec_raw).intervention_of(Spec.model_validate(das_spec_raw).steps["score"])
+def test_every_step_names_its_intervention(das_spec_raw, mean_raw):
+    """However many the document declares — one is not a licence to leave it
+    out — and the refusal names the step and what it could have said."""
+    unnamed = json.loads(json.dumps(das_spec_raw))
+    del unnamed["steps"]["score"]["interventions"]
+    with pytest.raises(ValidationError, match=r"step 'score' runs a forward and names no intervention.*\['das'\]"):
+        Spec.model_validate(unnamed)
     unnamed = json.loads(json.dumps(mean_raw))
-    del unnamed["steps"]["clean"]["intervention"]
-    with pytest.raises(ValidationError, match="must name its intervention when the document declares 3"):
+    del unnamed["steps"]["clean"]["interventions"]
+    with pytest.raises(ValidationError, match=r"step 'clean' .*\['ablated', 'clean', 'harvest'\]"):
         Spec.model_validate(unnamed)
     wrong = json.loads(json.dumps(mean_raw))
-    wrong["steps"]["clean"]["intervention"] = "nope"
+    wrong["steps"]["clean"]["interventions"] = "nope"
     with pytest.raises(ValidationError, match="undeclared intervention 'nope'"):
         Spec.model_validate(wrong)
+
+
+def test_an_inline_intervention_is_a_declared_one_named_after_its_step(patching_spec_raw, data_root, model_engine):
+    """Written in place, the experiment compiles to the same plan it does
+    declared at the root, and the step's name is what it is declared under."""
+    inline = json.loads(json.dumps(patching_spec_raw))
+    inline["steps"]["score"]["interventions"] = inline["interventions"].pop("patching")
+    inline["interventions"] = {}
+    spec = Spec.model_validate(inline)
+    assert list(spec.interventions) == ["score"] and spec.intervention_of(spec.steps["score"]) is spec.interventions["score"]
+    named = plan.build_request(patching_spec_raw, data_root, model_engine)
+    written = plan.build_request(inline, data_root, model_engine)
+    assert repr(written.step("score", plan.Observe).forwards) == repr(named.step("score", plan.Observe).forwards)
+
+
+def test_an_inline_intervention_may_not_take_a_declared_name(patching_spec_raw):
+    clash = json.loads(json.dumps(patching_spec_raw))
+    clash["steps"]["patching"] = clash["steps"].pop("score")
+    clash["steps"]["patching"]["interventions"] = clash["interventions"]["patching"]
+    with pytest.raises(ValidationError, match="step 'patching' writes an intervention in place that would be named 'patching', and one is already declared"):
+        Spec.model_validate(clash)
+
+
+def test_a_baseline_is_an_intervention_with_no_writes(data_root, model_engine):
+    """No intervention is not a null: it is reads and metrics and nothing
+    written, reading `original`. One forward, and it scores."""
+    raw = json.loads(V2_TWO.read_text())
+    built = plan.build_request(raw, data_root, model_engine)
+    assert [f.name for f in built.step("clean", plan.Observe).forwards] == ["original"]
+    assert all(not tap.writes for tap in built.step("clean", plan.Observe).forwards[0].taps)
+    executed = model_engine.execute(built)
+    assert executed.step("clean", plan.Observe).results["logit_diff"].shape == (4,)
+
+
+def _two() -> dict:
+    return json.loads(V2_TWO.read_text())
+
+
+def test_a_list_runs_each_intervention_over_the_steps_rows(data_root, model_engine, tmp_path):
+    """`compare` lists two declared experiments and compiles to one nested
+    plan per entry. `patching` runs a source pass and the patched one;
+    `ablation` swaps in the mean the baseline published before the list, so
+    it runs one forward. Each writes into its own directory."""
+    built = plan.build_request(_two(), data_root, model_engine)
+    compare = built.step("compare", plan.Plan)
+    assert list(compare.steps) == ["patching", "ablation"]
+    patching = compare.step("patching", plan.Plan).step("compare", plan.Observe)
+    ablation = compare.step("ablation", plan.Plan).step("compare", plan.Observe)
+    assert [f.name for f in patching.forwards] == ["original", "patched"]
+    assert [f.name for f in ablation.forwards] == ["ablated"]
+    executed = model_engine.execute(built)
+    clean = executed.step("clean", plan.Observe).results["logit_diff"]
+    patched = executed.step("compare", plan.Plan).step("patching", plan.Plan).result("logit_diff")
+    ablated = executed.step("compare", plan.Plan).step("ablation", plan.Plan).result("logit_diff")
+    assert not torch.equal(clean, patched) and not torch.equal(clean, ablated) and not torch.equal(patched, ablated)
+    written = {str(one.relative_to(tmp_path)) for one in executed.write(tmp_path)}
+    assert {"clean.json", "compare/patching/iia.json", "compare/patching/logit_diff.json",
+            "compare/ablation/logit_diff.json"} <= written
+
+
+def test_a_list_lowers_to_what_one_intervention_at_a_time_compiles_to(data_root, model_engine):
+    """The lowered step is the nested plan you would get by compiling the
+    step once per intervention and nesting the results by hand."""
+    lowered = plan.build_request(_two(), data_root, model_engine).step("compare", plan.Plan)
+    by_hand = {}
+    for child, saves in (("patching", [{"value": "iia", "file_path": "iia.json"},
+                                       {"value": "logit_diff", "file_path": "logit_diff.json"}]),
+                         ("ablation", [{"value": "logit_diff", "file_path": "logit_diff.json"}])):
+        one = _two()
+        one["steps"]["compare"]["interventions"] = child
+        one["steps"]["compare"]["saves"] = saves
+        by_hand[child] = plan.Plan(steps={"compare": plan.build_request(one, data_root, model_engine).steps["compare"]})
+    # `produced_by` is the document's digest, and the hand-written ones are
+    # different documents; everything else is the same plan
+    digest = re.compile(r"produced_by='[0-9a-f]{64}'")
+    assert digest.sub("", repr(lowered)) == digest.sub("", repr(plan.Plan(steps=by_hand)))
+
+
+def test_a_save_on_a_list_resolves_by_its_bare_name_when_one_intervention_has_it():
+    spec = Spec.model_validate(_two())
+    lowered = spec.lower("compare", spec.steps["compare"])
+    assert [(s.value, s.file_path) for s in lowered["patching"].saves] == [("iia", "iia.json"), ("logit_diff", "logit_diff.json")]
+    assert [(s.value, s.file_path) for s in lowered["ablation"].saves] == [("logit_diff", "logit_diff.json")]
+
+
+def test_an_ambiguous_save_on_a_list_is_refused_with_its_candidates():
+    raw = _two()
+    raw["steps"]["compare"]["saves"] = [{"value": "logit_diff", "file_path": "x.json"}]
+    with pytest.raises(ValidationError, match=r"save 'logit_diff' is produced by 2 .* qualify it as one of \['patching/logit_diff', 'ablation/logit_diff'\]"):
+        Spec.model_validate(raw)
+    raw["steps"]["compare"]["saves"] = [{"value": "nope", "file_path": "x.json"}]
+    with pytest.raises(ValidationError, match=r"save 'nope' names nothing it runs; one of \['ablation/logit_diff', 'patching/iia', 'patching/logit_diff'\]"):
+        Spec.model_validate(raw)
+
+
+def test_a_mixed_list_declares_its_inline_entry_by_position(data_root, model_engine):
+    """A name and an intervention written in place, in one list. The inline
+    one is `<step>[i]`, and runs like any other entry."""
+    raw = _two()
+    baseline = raw["steps"]["clean"]["interventions"]
+    raw["steps"]["compare"]["interventions"] = ["patching", baseline]
+    raw["steps"]["compare"]["saves"] = [{"value": "iia", "file_path": "iia.json"},
+                                        {"value": "compare[1]/logit_diff", "file_path": "clean.json"}]
+    del raw["interventions"]["ablation"]
+    spec = Spec.model_validate(raw)
+    assert getattr(spec.steps["compare"], "interventions") == ["patching", "compare[1]"]
+    assert spec.interventions["compare[1]"] == spec.interventions["clean"]
+    built = plan.build_request(raw, data_root, model_engine)
+    assert list(built.step("compare", plan.Plan).steps) == ["patching", "compare[1]"]
+    inline = built.step("compare", plan.Plan).step("compare[1]", plan.Plan).step("compare", plan.Observe)
+    assert [f.name for f in inline.forwards] == ["original"] and inline.saves[0].value == "logit_diff"
+
+
+def test_a_single_name_and_a_single_inline_are_one_step_not_a_list(patching_spec_raw, data_root, model_engine):
+    named = plan.build_request(patching_spec_raw, data_root, model_engine)
+    assert isinstance(named.steps["score"], plan.Observe)
+    inline = json.loads(json.dumps(patching_spec_raw))
+    inline["steps"]["score"]["interventions"] = inline["interventions"].pop("patching")
+    assert isinstance(plan.build_request(inline, data_root, model_engine).steps["score"], plan.Observe)
+
+
+def test_the_old_key_is_refused_with_the_new_one_named(patching_spec_raw):
+    old = json.loads(json.dumps(patching_spec_raw))
+    old["steps"]["score"]["intervention"] = old["steps"]["score"].pop("interventions")
+    with pytest.raises(ValidationError, match="names no intervention; say which with `interventions`"):
+        Spec.model_validate(old)
 
 
 def test_mean_ablation_is_three_steps_and_the_mean_never_needs_a_file(
@@ -348,3 +479,23 @@ def test_a_reads_shorthand_keeps_it_unreduced(mean_raw):
     harvest = spec.steps["harvest"]
     assert isinstance(harvest, spec_module.Observe)
     assert harvest.outputs["acts_kept"].reduce == "none"
+
+
+@pytest.mark.parametrize(
+    "component, layers, message",
+    [
+        ("lm_head", [0], "lm_head takes no layers"),
+        ("block_output", None, "block_output is addressed at one layer"),
+    ],
+    ids=["a whole-model site with a layer", "a per-layer site without one"],
+)
+def test_a_site_is_checked_against_its_component(das_spec_raw, component, layers, message):
+    """The plan-shaped format asks the same question the protocol's does, of
+    the same table — whether a component is one place or one per layer is
+    `address`'s to answer, and neither format keeps a list of its own."""
+    site = {"component": component}
+    if layers is not None:
+        site["layers"] = layers
+    das_spec_raw["sites"]["probe"] = site
+    with pytest.raises(ValidationError, match=message):
+        Spec.model_validate(das_spec_raw)

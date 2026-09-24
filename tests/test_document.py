@@ -5,6 +5,7 @@ import json
 import pytest
 
 from causalab_mini.plan import document
+from causalab_mini.shapes import Where
 
 REPO = __import__("pathlib").Path(__file__).resolve().parents[1]
 
@@ -15,8 +16,8 @@ def test_minimal_cpu_parses_to_the_declarations_notes_describes():
     assert doc.model.dtype == "fp32"
     assert doc.sites["target"] == document.SiteSpec("block_output", 0)
     assert doc.sites["lm_head"] == document.SiteSpec("lm_head", None)
-    assert doc.reads["v_cf"] == document.ReadSpec("target", -1, "original", "counterfactual")
-    assert doc.writes["patch"] == document.WriteSpec("target", -1, "swap", "v_cf")
+    assert doc.reads["v_cf"] == document.ReadSpec("target", Where(index=-1), "original", "counterfactual")
+    assert doc.writes["patch"] == document.WriteSpec("target", Where(index=-1), "swap", "v_cf")
     assert doc.intervened_models["patched"].writes == ("patch",)
     # The metric named `iia` is a `match` here and a `logit_diff` in das.json:
     # the name is the author's, the arithmetic is the kind's.
@@ -88,8 +89,8 @@ def test_a_document_this_slice_cannot_run_is_a_load_error(minimal_raw, mutate, m
         (lambda: document.SiteSpec("attention_probs", 0), "not implemented"),
         (lambda: document.SiteSpec("lm_head", 0), "takes no layers"),
         (lambda: document.SiteSpec("block_output", None), "one layer"),
-        (lambda: document.ReadSpec("target", -1, "original", "cf"), "read input"),
-        (lambda: document.WriteSpec("target", -1, "add_scaled", "v_cf"), "not implemented"),
+        (lambda: document.ReadSpec("target", Where(index=-1), "original", "cf"), "read input"),
+        (lambda: document.WriteSpec("target", Where(index=-1), "add_scaled", "v_cf"), "not implemented"),
         (lambda: document.MetricSpec("match", "logits", "bare", ("cf_answer",)), "token_form"),
         (lambda: document.SaveSpec("iia", "iia.safetensors", "patched", "base"), ".json file"),
     ],

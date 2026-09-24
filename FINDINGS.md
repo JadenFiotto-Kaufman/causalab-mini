@@ -598,7 +598,7 @@ and comments — and, the result that matters, it runs the same documents to
 
 Nothing outside the new directory changed. `engine/steps.py`, `ops/`, `plan/`
 and `address.py` are untouched; `engine/__init__.py` gained an export. So the
-seven-member contract held for a runtime that shares no execution code with the
+eight-member contract held for a runtime that shares no execution code with the
 first, which is the claim HANDOFF §3.6 wanted tested.
 
 ### 6.1 The translation is one function with three statements
@@ -722,7 +722,7 @@ envoy assignment and a hook's return value are two spellings of one write, and
 
 ### 6.5 What the contract did not give the engine, and did not need to
 
-Nothing. The seven members were enough, and the two halves split the way HANDOFF
+Nothing. The eight members were enough, and the two halves split the way HANDOFF
 §3.6 claims: `load`/`tokenizer`/`num_layers`/`locate`/`width` are answered from
 the loaded objects on the client, `execute`/`forward` are the run. Two smaller
 observations:
@@ -967,18 +967,21 @@ are three. So "swap the counterfactual's entity into the base's entity" —
 the most natural ragged interchange there is — has rows where the source
 window is three tokens and the target is one. There is no way to land that
 without a policy, and the protocol has two (`exact_length_buckets`,
-`padded_masked`); mini implements `refuse`, naming the rows, before any
-forward. This is not an edge case: it is the *default* outcome of an entity
-patch on real text.
+`padded_masked`); mini implements `refuse`, naming the rows, at the write.
+This is not an edge case: it is the *default* outcome of an entity patch on
+real text — and scoping the cut (`{"index": -1, "scope": {"variable":
+"entity"}}`) is what makes the same interchange land, because "the last
+token of" is a question about tokens. §25.
 
 ### 11.3 A read may skip a row; a write may not
 
-A row whose column text is not in its prompt gets an empty window. For a
+A row whose anchor text is not in its prompt gets an empty window. For a
 read that is an excluded measurement — the row contributes no positions to
-a harvest, `explain` prints `-` for it, and it stays a row. For a write it
-is refused: writing nothing somewhere is not an intervention, and the row
-would score as if one had happened. That asymmetry is causalab's, and it is
-correct.
+a harvest, the run reports `alignment_missing` for it, and it stays a row.
+For a write it is refused: writing nothing somewhere is not an
+intervention, and the row would score as if one had happened. That
+asymmetry is causalab's, and it is correct. The refusal is at the write,
+because that is where the positions are (§25).
 
 What did **not** need to change: `apply_write`. A ragged read gathers flat,
 `(total, width)`; featurizers are pointwise; a mean over it is one vector
@@ -1164,10 +1167,11 @@ a pass (including one minibatch of a fit — its loss would be the mean of
 nothing), and a column **no** row has, which is a misspelling and not an
 exclusion. `causalab-mini data <ref>` now reports which columns have holes.
 
-Not done: a *position's* ineligibility (a `{"column": …}` window the row
-does not contain) reaching a metric. A metric reads a unit window, so that
-case cannot be authored yet; when a metric over a located position exists,
-its `rows` is this same field.
+A *position's* ineligibility reaches a metric the same way, and the two
+meet in the run: `MetricOp.rows` is the column half, the run reports which
+rows it could place, and `results["eligible"]` is the intersection. A
+metric over a text-anchored unit window — `{"index": -1, "scope":
+{"variable": "entity"}}` — is what made that authorable. §25.
 
 
 ## 16. Where the activation is inside the boundary's value
@@ -1678,3 +1682,207 @@ is not part of the model key, so the deployment decides and the client changes
 nothing — and all **2688 values are bit-identical** to the local run. Remote
 execution, the serialization round-trip and the by-reference switch perturb the
 arithmetic not at all; the whole of the difference §19 saw was served dtype.
+
+
+## 25. A position is a spec, and the tokenizer that answers it is the model's
+
+Resolving a position on the client means resolving it against a tokenizer
+the client happens to have, and carrying the answer as integers. Moving the
+resolver into the block — `ops/locate.py`, called from `engine/steps.py`
+inside the session — is what makes `{"index": -1, "scope": {"variable":
+"entity"}}` mean *this row's* entity, and it is also what makes the same
+document run on a model whose tokenizer the client never loads. Six things
+came out of doing it.
+
+### 25.1 The block gets the served checkpoint's own tokenizer, for free
+
+Traced through nnsight at `524c33fc` and then measured. `TransformersModel`
+lists `tokenizer` in `_PERSISTENT`; `__getstate__` tags it with an id;
+`CustomCloudPickler.persistent_id` writes the id instead of the object; and
+the server's `_remoteable_persistent_objects` puts its *live* tokenizer
+under that id. So `engine.tokenizer` -> `self.model.tokenizer` resolves
+server-side to the served checkpoint's own, no bytes travel, and nothing
+had to be added to NDIF. `remote="local"` exercises exactly that path — it
+serializes, hides the local modules and deserializes against the same map —
+and an anchored document comes back with identical positions, identical
+decoded tokens and identical numbers.
+
+The rule that makes it hold is about *names*: a bare `tokenizer` local
+closed over by a block would be pickled by value, a few megabytes and a
+different object. `tests/test_structure.py` already banned the name; only
+its reason changed.
+
+### 25.2 A character map from prefix lengths needs the prefixes to be prefixes
+
+`offsets[k] = len(decode(ids[:k]))` is a character offset only while the
+decode of a prefix really is a prefix of the decode of the whole. For a
+byte-fallback token it is not: a tokenizer that has no piece for 🙂 spells
+it as four byte tokens, and each *incomplete* prefix of those bytes decodes
+to one U+FFFD. Four bytes therefore contribute four characters to the
+prefixes and one to the whole, and the offsets run **backwards** —
+`(…, 11, 12, 13, 11, 17, …)` on the tiny Llama. Every window located after
+such a character is then wrong, and wrong quietly: `locate` reported a
+non-contiguous `(5, 7)` for an anchor whose tokens are `(3,)`, with no
+reason and with `tokens_of` naming a byte of the emoji.
+
+The fix is to park a prefix that is not one at the character it belongs to:
+the incomplete bytes get an empty span and the byte that completes the
+character gets the whole of it. Offsets are then non-decreasing whatever
+the tokenizer does, and an anchor after the character addresses its own
+tokens. Tested on both fixtures with an emoji and with CJK (the tiny GPT-2
+byte-falls-back on both; the tiny Llama has pieces for 東京 and not for 🙂).
+
+**Do not check a tokenizer by re-encoding.** `encode(decode(ids)) == ids`
+is not a property tokenizers have — it holds for ASCII on both fixtures
+here and fails on the first emoji — so a guard built on it refuses ordinary
+prompts, at compile time, accusing a tokenizer of disagreeing with itself.
+What both sides *can* do is read the same ids: the client puts row 0's
+decoded content in the plan and the run decodes the same row with its own
+tokenizer and compares the strings. Same cost, and it is true.
+
+### 25.3 Left padding makes "the index differs per row" quietly false
+
+The obvious demonstration of a dynamic position — patch each row's entity,
+watch the index differ — does not work on prompts that differ only in the
+entity. They are padded on the left and share a suffix, so the entity's
+last token is at the *same* absolute index on every row; what differs is
+which piece of text is there (`'day'` for ` Thursday`, `' Saturday'` for
+` Saturday`). The index only moves when the tokens *after* the anchor
+differ, as in `natural_domains_arithmetic`, where ` Tuesday` is three
+tokens and ` Monday` one and the `number` anchor lands at 8 on some rows and
+6 on others. Both facts are worth knowing: the provenance (`tokens`) is what
+shows an entity patch is doing something per row, and an assertion that the
+integers differ needs a corpus where they do.
+
+### 25.4 The continuation frame cost the engines nothing, by fanning out
+
+A read that cannot say which decode step it wants until the decode has
+finished — `{"index": -1}`, `{"scope": {"segment": "eos"}}` — needs every
+step's value. Rather than teach both engines to buffer, the compiler emits
+one ordinary read per decode step, each carrying the same spec and the name
+of the stack it belongs to, and the shared walk stacks them and cuts them
+against the continuation afterwards. The eight-member engine contract is
+untouched and `test_engine.py`'s assertion did not move. The cost is stated
+where it is paid: `rows x decode x width` numbers, refused above a limit.
+
+### 25.5 EOS held off means no row ever stops, and that is a result
+
+Mini decodes with `min_new_tokens == max_new_tokens` so the loop is a bound
+and the batch stays rectangular. EOS is therefore never generated, so
+`{"scope": {"segment": "eos"}}` reports `alignment_missing` on every row of
+every document here. That is the right shape for the answer — "did the
+model stop?" is a reported reason and not an exception — but it means the
+positive case is only reachable in a unit test over `locate.continuation`
+with hand-made ids, which is where it is tested.
+
+### 25.6 An empty gather is a float tensor, at both of the two sites
+
+`ops.intervene` builds its index tensors from Python lists, in `_flat` for
+a ragged window and in `_window` for a rectangular one. When *every* row's
+window is empty, those lists are empty, `torch.as_tensor([])` is `float32`,
+and the gather raises `tensors used as indices must be long` — which is not
+the refusal anyone wants and names nothing. Both sites state the dtype now;
+fixing one and claiming the class was fixed is how the second one survived
+a round of review.
+
+The dtype is not the interesting half. A row with no window means two
+different things, and they want opposite answers. An **anchored** cut that
+found nothing is data — that row is an excluded measurement, and the run
+reports `alignment_missing` and scores the others. A cut of a **fixed
+width** that fits no row is a document that is wrong about its own prompts:
+it names the same number of tokens on every row, so it is refused where it
+is resolved, naming the op, the rows and the reason. Master refused it at
+compile time, against the client's tokenization; moving the resolver moved
+the refusal, and for a while it moved it into a float tensor instead.
+
+
+### 25.7 Report in the frame you resolved in
+
+A tap in the continuation frame is handed a dummy window: whatever the
+spec names, a decode step processes one position, and `intervene.at_step`
+puts any non-empty window on it. Filling the run's record from that window
+against the *prompt* frame produced `rows: (0,)` and, under left padding,
+`tokens` read at a negative offset — and it reached the written table, so a
+number read at decode step 2 was labelled prompt token 0.
+
+Provenance that is confidently wrong is worse than none, and the shape of
+the mistake is general: the record must be written by whatever holds the
+frame the position was resolved against. The prompt frame now says nothing
+about a continuation tap, and `_continuation` — which builds the frame of
+the ids the decode produced — reports every tap in it, stacked or not: the
+decode step, and the token the model produced there.
+
+
+## 26. Three facts a whole-system audit found, and where each of them lives
+
+An audit of the package against nnterp `internals-accessors` and against base
+causalab's surface found three things mini was answering for itself that it
+had no business answering, or was answering wrongly. Each is here because the
+measurement cost something to make.
+
+### 26.1 Forward order is the family's, and mini had a second copy of it
+
+`_Component.stage` and `_Component.band` — two columns over twenty rows —
+were mini's own numbering of where each place sits in a block, beside
+nnterp's `Address.order` and `Internals.rank`. Measured on the tiny Llama:
+the two orderings agree **15/15** on every accessor-backed row, and *nothing
+in the suite compared them*. They would not agree forever: nnterp overrides
+the order per family (DBRX moves `attentions_norm_output` from 5 to 12), and
+a family override moves one side only.
+
+The rank is now stamped into the `Address` by `locate`, from
+`model.internals.rank(accessor, layer)`, and `per_layer` is checked against
+nnterp's rather than assumed. What mini still numbers is the four interiors
+nnterp does not address, interleaved into nnterp's own numbering — 11, 12,
+15, 22, in the gaps it leaves between `attentions_input` at 10 and
+`attentions_premix` at 25. The general shape: **a table that restates a
+dependency's facts is a table that will disagree with it, and the only
+question is when.**
+
+### 26.2 `lm_head_output` is not `logits`, and on Gemma-2 the difference is the answer
+
+nnterp carries them as two rows because Gemma-2's `final_logit_softcapping`
+bounds what the model predicts from and leaves the head's own output alone.
+Mini had one name for the pair, so every token-space metric on that family
+scored numbers the model never used — with no symptom, because both are
+`(rows, vocab)` and both look like logits.
+
+Measured on `trl-internal-testing/tiny-Gemma2ForCausalLM` (cap 30.0): on a
+natural forward the two differ by 8.2e-08, because the head's output there
+peaks at 0.06 and the cap does not bite. **A tiny checkpoint cannot show this
+by being run**; it shows it when a value large enough to reach the cap is
+written in. Swapping 100.0 into the head reads back 100.0 at `lm_head` and
+29.924 at `logits`, which is `tanh(100/30)·30`. That is the shape of the
+test to write for any "these two places are the same tensor" claim: make the
+difference reachable rather than waiting for it.
+
+The logit lens has the same problem and mini owns it: `lm_head(ln_final(x))`
+is the head's arithmetic, so `view: "logits"` takes the model's last step
+too (`ops.intervene.softcap`). nnterp has nothing about softcapping outside
+that one row's comment, so this is not a gap to push upstream — it is one
+line of arithmetic per consumer, and the consumer has to know it exists.
+
+Both engines reach the row. The tensor is a *field of the model's output
+object* rather than the output itself, and nnterp says so the same way it
+says "the first element of a tuple": a `Selection` on the row, with
+`get`/`put`. The hooks engine had that rule hardcoded as an `isinstance`
+check on a tuple, which is one `Selection` out of the set; asking the row
+for its own is both smaller and general, and `logits` fell out with no case
+of its own.
+
+### 26.3 `pos: 0` meant two different tokens on two families
+
+Llama's sentencepiece prepends a BOS to every prompt and GPT-2's BPE
+prepends nothing, and mini's content run started at the first unmasked
+index — so `{"index": 0}` decoded to `'<s>'` on one and `'If'` on the other,
+from the same document. nnterp has nothing about BOS (zero hits), so this is
+mini's, and the protocol had already decided it: "`{"index": 0}` is the
+first token of the user's text".
+
+The run starts after whatever the tokenizer puts in front of everything,
+asked rather than guessed — whatever it makes of the empty string is what it
+adds to every prompt. One shipped document's numbers moved and that is the
+fix working: `pca_harvest.json` reads `{"all": true}` and its basis no
+longer has the BOS embedding among the vectors it is the principal
+directions of. **A standardized name that resolves differently per family is
+worse than no name**, because nothing downstream can tell.

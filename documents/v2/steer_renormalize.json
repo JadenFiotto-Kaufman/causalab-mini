@@ -126,7 +126,7 @@
   "steps": {
     "harvest": {
       "kind": "observe",
-      "intervention": "harvest",
+      "interventions": "harvest",
       "rows": {
         "base": "weekdays/train",
         "counterfactual": "weekdays/train"
@@ -140,7 +140,7 @@
     },
     "steer": {
       "kind": "observe",
-      "intervention": "steer",
+      "interventions": "steer",
       "rows": {
         "base": "weekdays/train",
         "counterfactual": "weekdays/train"

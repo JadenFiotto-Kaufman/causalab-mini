@@ -101,6 +101,7 @@
   "steps": {
     "score": {
       "kind": "observe",
+      "interventions": "knockout",
       "rows": {
         "base": "weekdays/train",
         "counterfactual": "weekdays/train"

@@ -1,6 +1,6 @@
 {
   "header": {
-    "description": "Neuron patching: the interchange of patching.json, of a few MLP neurons at a time. The site names `units` \u2014 single features of `mlp_activation` \u2014 and the sweep is over which. `heads` on an attention site (head_patching.json) is the same mechanism at a coarser grain: both compile to one Selection, positions plus a part of the feature axis."
+    "description": "The pair-native interchange: one position spec, two roles, and each row's entity is different text. `{'index': -1, 'scope': {'variable': 'entity'}}` is the last token of THIS row's entity \u2014 ' Thursday' is three tokens on this tokenizer and ' Friday' one, so the base and the counterfactual are addressed by what they say rather than by a number counted off the end. The window is one token on every row, because 'the last token of' is a question about tokens, which is what makes the swap land where documents/v2/entity_mean_ablation.json's whole-entity read cannot. A row whose entity text is not in its prompt has nothing to write, and the run refuses it by name."
   },
   "model": {
     "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
@@ -17,32 +17,10 @@
   },
   "sites": {
     "target": {
-      "component": "mlp_activation",
+      "component": "block_output",
       "layers": [
         0
-      ],
-      "units": {
-        "sweep": [
-          [
-            0,
-            1,
-            2,
-            3
-          ],
-          [
-            4,
-            5,
-            6,
-            7
-          ],
-          [
-            8,
-            9,
-            10,
-            11
-          ]
-        ]
-      }
+      ]
     },
     "head": {
       "component": "lm_head"
@@ -53,7 +31,12 @@
       "reads": {
         "v_cf": {
           "site": "target",
-          "pos": -1,
+          "pos": {
+            "index": -1,
+            "scope": {
+              "variable": "entity"
+            }
+          },
           "model": "original",
           "input": "counterfactual"
         },
@@ -67,7 +50,12 @@
       "writes": {
         "patch": {
           "site": "target",
-          "pos": -1,
+          "pos": {
+            "index": -1,
+            "scope": {
+              "variable": "entity"
+            }
+          },
           "mechanism": "swap",
           "operand": "v_cf"
         }

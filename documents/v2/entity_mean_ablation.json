@@ -1,6 +1,6 @@
 {
   "header": {
-    "description": "Mean ablation where the mean is taken over a RAGGED read: the tokens of each row's entity (`{'column': 'entity'}` located in the prompt \u2014 one token for Friday, three for Thursday), averaged over every entity token in the corpus, then swapped in at the answer position. A row whose entity text is not in its prompt would contribute nothing and stay a row; here every row has one."
+    "description": "Mean ablation where the mean is taken over a RAGGED read: the tokens of each row's entity (`{'all': true, 'scope': {'variable': 'entity'}}` \u2014 the row's own entity text, located in its prompt \u2014 one token for Friday, three for Thursday), averaged over every entity token in the corpus, then swapped in at the answer position. A row whose entity text is not in its prompt would contribute nothing and stay a row; here every row has one."
   },
   "model": {
     "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
@@ -29,7 +29,10 @@
         "acts": {
           "site": "target",
           "pos": {
-            "column": "entity"
+            "all": true,
+            "scope": {
+              "variable": "entity"
+            }
           },
           "input": "base"
         }
@@ -92,7 +95,7 @@
   "steps": {
     "harvest": {
       "kind": "observe",
-      "intervention": "harvest",
+      "interventions": "harvest",
       "rows": {
         "base": "weekdays/train"
       },
@@ -111,7 +114,7 @@
     },
     "clean": {
       "kind": "observe",
-      "intervention": "clean",
+      "interventions": "clean",
       "rows": {
         "base": "weekdays/train"
       },
@@ -124,7 +127,7 @@
     },
     "ablated": {
       "kind": "observe",
-      "intervention": "ablated",
+      "interventions": "ablated",
       "rows": {
         "base": "weekdays/train"
       },

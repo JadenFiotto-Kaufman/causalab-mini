@@ -78,7 +78,7 @@ needed is nothing new on the engine: `load(spec, dispatch=False)`. §2.A.
   shape.
 - **One session per request, `remote` as the only switch.** Unchanged since
   day one and still the right rule.
-- **The engine contract** (seven members) and the fixture role of the hooks
+- **The engine contract** (eight members) and the fixture role of the hooks
   engine. Two runtimes agree to the bit on single writes; that is enough
   generality, and the contract should be shaped around nnsight from here.
 - **The write seam**, `inverse(do(featurize(x)), err, x)`. One line covers

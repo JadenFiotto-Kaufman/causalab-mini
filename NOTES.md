@@ -826,21 +826,51 @@ surface that **nothing** in `documents/` needs.
 
 **Positions**
 
-- `{"variable": "x"}` — per-row windows located from prompt variables.
-- `{"column": "c"}` — per-row windows from a column's string.
-- `{"span": [a, b]}`, `{"all": true}`, `{"segment": "s"}`.
-- `scope` and `relative_to` anchors.
-- **Generated positions**: `{"generated": {"max_new_tokens": n}}`, the
-  continuation frame, greedy decode, EOS handling, ragged continuations,
-  per-step metric rows with a `step` column, `matched: false`.
+> The run a position cuts is the **prompt's own tokens**: it starts after
+> whatever the tokenizer puts in front of every prompt, so `{"index": 0}` is
+> the first token of the user's text on a family that prepends a BOS and on
+> one that does not — which is what sec. 3.3 says it is. Nothing addresses
+> the prefix itself.
+>
+> Largely implemented since this was written, in one vocabulary
+> (`shapes.Where`): `frame` (`prompt` / `generated`), `scope` (an `Anchor`:
+> a `variable`, a `segment`, or both), and one of `index` / `span` / `last`
+> / `all`. `{"variable": "x"}` is `{"scope": {"variable": "x"}}` and binds
+> by the protocol's own rule — the `<column>_variables` sibling of the
+> role's field, then a top-level column. `{"all": true}` and `{"span": [a,
+> b)}` are cuts of whatever run the scope names. The continuation frame is
+> `{"frame": "generated", …}`, greedy, cut per row at its first stop token,
+> with `{"segment": "eos"}` naming where a row stopped. The ragged write
+> policy is `refuse`, at the write. The reason codes `alignment_missing` and
+> `alignment_ambiguous` are reported per row, with `out_of_range` added for
+> a cut that does not fit; a row that reports one is ineligible for the
+> metrics over that read rather than fatal. The rest of this list stands.
+
+- `{"column": "c"}` as a form of its own: a column *is* a variable here, and
+  the sibling rule reaches both, so there is one anchor and not two.
+- `segments` as a *named table* on the document. A turn is named by its own
+  role — `{"segment": "user"}`, `{"segment": "user[1]"}` for the second of
+  two — because the conversation already says the names, and a role whose
+  field holds a list of `{"role", "content"}` messages is rendered through
+  the checkpoint's template at compile time. What is not here is a table of
+  spans an author writes by hand.
+- `relative_to` — an offset from an anchor. There is no spelling of "from
+  the anchor's last token to the end of the run": a `span` is a half-open
+  window of the run it cuts, and `[a, 0]` is empty for every `a` because
+  `0` is the run's start however it is signed.
+- `{"generated": {"max_new_tokens": n}}` as a *position's* own key: the
+  budget is `decode` on the intervention, and the position names the frame.
+- Per-step metric rows with a `step` column, and `matched: false`.
 - **Span algebra**: `indices`, `union`, `intersection`, `before`, `after`,
   `between`, `atomic`.
-- **Ragged positions** and the `ragged` write policies `refuse` /
-  `exact_length_buckets` / `padded_masked`, and the `ragged_write_unsupported`
-  refusal.
-- The `alignment` key and its five cardinalities (`one_to_one`, `one_to_many`,
-  `many_to_one`, `absent`, `ambiguous`), declared-vs-observed checking, and the
-  reason codes `alignment_missing` / `alignment_ambiguous`.
+- The ragged write policies `exact_length_buckets` / `padded_masked`, and
+  the `ragged_write_unsupported` refusal by that name.
+- The declared `alignment` key and its five cardinalities (`one_to_one`,
+  `one_to_many`, `many_to_one`, `absent`, `ambiguous`), and
+  declared-vs-observed checking: mini reports what it observed per row
+  instead of taking a declaration.
+- An `occurrence` selector: a value that occurs twice is
+  `alignment_ambiguous`, and scoping it to a segment is the disambiguator.
 - `edit_groups` — per-row character spans, `atomic` coordinated edits, and the
   refusal to address one constituent without its siblings.
 

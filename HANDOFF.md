@@ -36,9 +36,9 @@ It **imports nothing from causalab**. Only the JSON documents were copied.
 
 ## 2. State as of this handoff
 
-`master`, clean tree, pushed to GitHub (private). **444 tests passing**
-(`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~8 s), `uvx pyright` at 0
-errors. **4,381 source lines** across 30 files in `causalab_mini/`.
+`master`, clean tree, pushed to GitHub (private). **486 tests passing**
+(`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~30 s), `uvx pyright` at 0
+errors. **7,356 lines** across 31 files in `causalab_mini/`.
 
 The package is five sub-packages and a short spine, each named for what it is
 allowed to know:
@@ -47,8 +47,9 @@ allowed to know:
                                                   map, the entry point
     plan/   document.py spec.py plan.py           the request, as pure data
             build.py    write.py  sweep.py         (two authoring formats)
-    data/   rows.py     encoding.py                the corpus -> padded tokens
+    data/   rows.py     tokens.py                  the corpus -> padded tokens
     ops/    intervene.py metrics.py featurizer.py  agnostic: tensors only
+            locate.py                              a position spec -> indices
     engine/ base.py     steps.py                   the contract, and what a
                                                    plan means on any runtime
       engines/nnterp/   engine.py  loading.py      one directory per runtime
@@ -70,7 +71,10 @@ change to `steps.py`, `ops/`, `plan/` or `address.py`. What it had to supply by
 hand — and what turned out to be free — is FINDINGS §6. It is not wired into
 the CLI: `--engine` is a flag nobody has needed yet.
 
-Documents in `documents/`: nine. Ported from causalab's own corpus:
+Documents: **nine** in `documents/` (the protocol format), **21** in
+`documents/v2/` (the plan-shaped one) and **five** in `documents/real/`,
+which pin real checkpoints and are compiled but not run by the suite. The
+nine, ported from causalab's own corpus:
 `multi_position_patch_cpu.json` (three disjoint absolute writes in one
 intervened model), `hydra_effect_cpu.json` (five intervened models, and a
 read taken inside one that is the operand of a write in another — the only
@@ -103,20 +107,34 @@ These are load-bearing. Several tests enforce them.
    no `execute`: a plan that knew how to run itself would only run on one
    engine.
 5. **No trace body may reference a client object** — no executor, document,
-   tokenizer. `tests/test_structure.py` is an AST tripwire over every
-   `with ….trace(`/`.session(` block, package-wide; it has a vacuity guard.
+   dataset, or bare `tokenizer`. `tests/test_structure.py` is an AST tripwire
+   over every `with ….trace(`/`.session(` block, package-wide; it has a
+   vacuity guard. The run does use a tokenizer — resolving a position is
+   its job — and reaches it through the *model*: `model.tokenizer` is one of
+   nnsight's persistent objects, so it is written as an id and a server
+   resolves it to the served checkpoint's own tokenizer. A bare name closed
+   over would be pickled by value instead, and would be the wrong object.
 6. **`address.py` is the only file that knows anything about model
    internals**, and since FINDINGS §23 most of what it knows it asks nnterp
-   for: a boundary inside the block is the *name of a nnterp accessor* plus
-   its stage in the forward, and which child module that is on a checkpoint,
-   whether the block has the place at all, and every width and head count
-   are nnterp's (`locate` writes the resolved child and side into the
-   `Address`). Interiors and the four layerless modules are still mini's
-   rows. Reaching there is the engine's (`engine/engines/nnterp/engine.py`'s
-   `read`/`write`). `ops/` knows nothing about models at all.
-7. **An engine is seven members and no more**: `load`, then `tokenizer`,
-   `num_layers`, `locate` and `width` — what the compiler asks of a runtime —
-   then `execute` and `forward`, what the run asks.
+   for. A boundary is the *name of a nnterp accessor*, and which child
+   module that is on a checkpoint, whether the block has the place at all,
+   whether it is one per layer, **where it sits in the forward pass**, and
+   every width and head count are nnterp's — `locate` stamps the resolved
+   child, side and rank into the `Address` and checks `per_layer` against
+   nnterp's answer, so the two cannot drift. The table is a floor and not a
+   fence: a name only `model.internals` has is addressable, because
+   `RenameConfig(addresses={...})` is how a user adds a place. Four
+   interiors (`attention_query/key/scores/z`) are still mini's rows, and so
+   is their rank, interleaved into nnterp's numbering. What is left that is
+   purely mini's: the per-head kind, the key axis, the seq axis, the width
+   *attribute name*, and read-only. Reaching there is the engine's
+   (`engine/engines/nnterp/engine.py`'s `read`/`write`). `ops/` knows
+   nothing about models at all.
+7. **An engine is eight members and no more**: `load`, then `tokenizer`,
+   `num_layers`, `locate`, `width` and `heads` — what the compiler asks of a
+   runtime — then `execute` and `forward`, what the run asks. (`heads` joined
+   when a site could name them: like `width`, it is a question about the
+   checkpoint that only its holder can answer.)
    Everything else lives in `engine/steps.py` and is shared.
    `tests/test_engine.py` pins this: it asserts the override set is exactly
    the contract, and runs a real compiled plan on an engine that has no model
@@ -126,11 +144,104 @@ These are load-bearing. Several tests enforce them.
    against the engine, not against a handle — because what a tokenizer is,
    how a site is located and how wide it is are all runtime questions.
 9. **The client never decides anything from a tensor.** The plan carries a
-   spec; the block resolves it, including any dynamic case. (Nothing here needs
-   a dynamic case yet. In the real engine this is how the generated frame and
-   the DeltaNet fire count work.)
+   spec; the block resolves it, including any dynamic case. **Positions are
+   the standing example**: a plan carries the `Where` a document wrote and
+   the per-row text a text anchor names, and `engine/steps.py` turns those
+   into integers against the model's own tokenizer, per row, inside the
+   session. See §5.
 
-## 4. The step/plan refactor — BUILT
+## 4. Positions are a spec, resolved where the model is — BUILT
+
+A position used to be an integer the compiler worked out against a tokenizer
+the client happened to have. It is now one `shapes.Where`, three independent
+fields and nothing else, and the *run* resolves it:
+
+    frame                 which sequence: "prompt", or "generated"
+    scope                 which run of it: an `Anchor` — a variable's text,
+                          a segment the frame located, or both
+    index/span/last/all   how much of that run
+
+A position's run is the prompt's own tokens: it starts after whatever the
+tokenizer puts in front of every prompt, so `{"index": 0}` is the first word
+on Llama (which prepends a BOS) and on GPT-2 (which does not). Nothing
+addresses the prefix itself yet.
+
+`{"index": -1}` is the last token; `{"index": -1, "scope": {"variable":
+"entity"}}` is the last token of *this row's* entity; `{"frame": "generated",
+"index": -1}` is the last token of this row's continuation, which is its
+stop token on a row that stopped (the frame is cut *after* it — a stop
+token is a token the model produced). A bare `-1` is sugar for
+`{"index": -1}` and is what every shipped document still writes.
+
+- **One resolver, `ops/locate.py`.** A `Frame` is one padded batch as text —
+  each row's content span, what it decodes to, and the character each token
+  starts at, built by decoding growing prefixes, so no fast tokenizer is
+  needed. `locate(frame, where, anchors)` is three steps: find the run, cut
+  the run, bounds-check. An integer position is the scope-free case of those
+  same three steps, which is why there is one resolver and not two. It
+  imports the standard library, `torch` and `shapes.py` and nothing else;
+  on a server it resolves by reference from the installed `causalab_mini`,
+  like the rest of the package (FINDINGS §24).
+- **`engine/steps.py` calls it**, once per forward per window of rows, with
+  `engine.tokenizer` — which is `model.tokenizer`, one of nnsight's
+  persistent objects, so on a server it is the *served checkpoint's own*.
+  `Selection.positions` is filled in on a copy; the plan stays fresh. **The
+  engine contract did not change**: an engine is still handed integers.
+- **Three refusals moved to run time**, and this is the design's real cost: a
+  write with nothing to write on a row, a ragged write whose operand is a
+  different width, and a metric none of whose rows could be placed. Which
+  rows a text anchor is in is a question about the model's own tokenization,
+  and the compiler no longer pretends to know it. A client-side pre-check
+  (`explain --precheck`) is designed and not built. Each of those names the
+  row's own reason — `alignment_missing`, `alignment_ambiguous`,
+  `out_of_range` — because the three want different fixes.
+- **A cut of a fixed width that fits no row is refused, not reported.**
+  `{"last": 12}` on a nine-token row names the same number of tokens on
+  every row, so a row it does not fit is a document that is wrong about its
+  own prompts. Only an *anchored* cut reports per row, because which rows
+  carry a word is data.
+- **What a run reports, it reports in the frame it resolved in.** A tap in
+  the continuation frame is given the one position its decode step
+  processes, and where in the *continuation* that was is said by the code
+  that has that frame. The prompt frame says nothing about it.
+- **The character map is built only for a pass that has a position the
+  document does not already fix.** It is O(L) decode calls of O(L) work per
+  row and was built once per forward per pass; a fit whose every position is
+  a bare `-1` built 42 of them and read none.
+- **Eligibility is two halves meeting in the run.** `MetricOp.rows` is still
+  the column half, decided where the data is; the position half is what the
+  run could place; `results["eligible"]` is the intersection per metric and
+  `results["positions"]` the window, the reason and the decoded tokens per
+  op. A pass with no dynamic position and nothing out of range reports
+  neither, so an older document writes the table it always wrote.
+- **The continuation frame is cut per row at its first stop token.** A read
+  whose cut only the finished text can settle (`{"index": -1}`, a scope)
+  compiles to one ordinary read per decode step carrying a `stack` name, and
+  the run puts them back together and cuts them — so neither engine needed a
+  line. A write may only name a step the decode has reached.
+- **Chat turns are segments, and the data says so.** A role whose field
+  holds a list of `{"role", "content"}` messages is rendered through the
+  checkpoint's own chat template at compile time, and the character span of
+  each turn's content travels in the plan beside the anchors. A position
+  then names a turn by its own role — `{"segment": "user"}`, or
+  `{"segment": "user[1]"}` when that role speaks twice, with the bare name
+  `alignment_ambiguous` exactly as a variable occurring twice is. The
+  template's control tokens are between the turns and in none of them.
+  `{"segment": …, "variable": …}` composes. `documents/v2/chat_turn.json`.
+- **Deferred, deliberately**: the client-side pre-check and the CLI work
+  around it (`--precheck`, `validate` warnings).
+- **Not run**: a real NDIF deployment. `remote="local"` pins the whole
+  mechanism (it serializes, hides the local modules and resolves the
+  persistent objects exactly as a server does) and an anchored document comes
+  back identical, but no request has gone to ndif.us — and `remote="local"`
+  does **not** serialize the way home (FINDINGS §19). `results["positions"]`
+  and `results["eligible"]` are the first non-tensor, three-deep payloads to
+  go through `nnsight.save({})`: nested dicts of tuples of ints and strings,
+  with no class of ours in them, so they satisfy §19.6's rule and should be
+  fine — but "should" is the word until a real run says otherwise. A run
+  against the local stack is queued.
+
+## 5. The step/plan refactor — BUILT
 
 What §4 used to describe as decided-but-unbuilt is in. How it landed, and
 where it differs from the plan written here before it was built:
@@ -185,7 +296,7 @@ because `iia` means three things now, and the three points write into
 `pos=-1/`, `pos=-2/` and `pos=-3/` because a plan's path in the tree is its
 path on disk.
 
-## 5. Findings from this project worth carrying
+## 6. Findings from this project worth carrying
 
 Full detail in `FINDINGS.md`; these are the ones that reach past mini.
 
@@ -246,7 +357,7 @@ Full detail in `FINDINGS.md`; these are the ones that reach past mini.
 - **There is no machine-readable protocol schema.** `docs/intervention_protocol.md`
   is 372 KB of authoritative prose and the Python implements it.
 
-## 6. Environment
+## 7. Environment
 
 - `uv` (0.12.1). `CONTRIBUTING.md` has the commands.
 - Tests: `CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`. Type check:
@@ -268,7 +379,7 @@ Full detail in `FINDINGS.md`; these are the ones that reach past mini.
   weekdays documents — `" Friday"` is four tokens there — hence
   `documents/data/counting` and `gpt2_cpu.json`.
 
-## 7. The wider context this sits in
+## 8. The wider context this sits in
 
 Three other pieces of work are in flight. None of them blocks mini, but mini
 produces evidence for the second.
@@ -297,7 +408,7 @@ produces evidence for the second.
 - **nnsight**: PR <https://github.com/ndif-team/nnsight/pull/729>, a per-host
   cache for the remote environment lookup.
 
-## 8. How the owner works
+## 9. How the owner works
 
 - They want to be **grilled before a project starts** so the two sides are
   aligned, and they answer numbered questions directly.
