@@ -107,7 +107,7 @@ def test_the_fit_leaves_the_gate_hard_and_annealed(dbm_raw, data_root):
     assert not gate.training
     assert gate.temperature == pytest.approx(0.05)
     # the eval record: the watched metric, then the fraction the hard mask keeps
-    record = fit.results["train/eval"]
+    record = fit.results["train"]["eval"]
     assert record.shape[1] == 2
     assert record[-1, 1] == pytest.approx(float((gate.weight > 0).float().mean()))
 
@@ -196,6 +196,6 @@ def test_a_gate_fit_survives_being_shipped(dbm_raw, data_root, model_engine):
     shipped = model_engine.execute(plan.build_request(dbm_raw, data_root, model_engine), remote="local")
     assert torch.equal(here.result("mask"), shipped.result("mask"))
     assert torch.equal(
-        here.step("fit", plan.Fit).results["train/eval"],
-        shipped.step("fit", plan.Fit).results["train/eval"],
+        here.step("fit", plan.Fit).results["train"]["eval"],
+        shipped.step("fit", plan.Fit).results["train"]["eval"],
     )

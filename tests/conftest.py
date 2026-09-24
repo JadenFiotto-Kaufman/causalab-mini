@@ -70,3 +70,12 @@ def provenance(executed):
     """Where each step of a run acted and which rows it scored, by step —
     what two runs of one plan must agree on beside their numbers."""
     return {name: (one.results.get("positions"), one.results.get("eligible")) for name, one in executed.steps.items()}
+
+
+def tensors(results):
+    """A run's results as tensors by name, a record's parts as `<name>/<part>`
+    — so two runs are compared tensor by tensor."""
+    found = {}
+    for name, value in results.items():
+        found.update({f"{name}/{part}": one for part, one in value.items()} if isinstance(value, dict) else {name: value})
+    return found

@@ -201,7 +201,7 @@ def test_a_one_row_minibatch_takes_its_flat_operand_whole(data_root, model_engin
         return model_engine.execute(plan.build_request(raw, data_root, model_engine))
 
     anchored, rectangle = fitted(ENTITY), fitted({"span": [3, 6]})
-    assert torch.equal(anchored.result("train/loss"), rectangle.result("train/loss"))
+    assert torch.equal(anchored.result("train")["loss"], rectangle.result("train")["loss"])
     assert torch.equal(anchored.result("rot"), rectangle.result("rot"))
 
 

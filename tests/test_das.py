@@ -10,7 +10,7 @@ import json
 import pytest
 import safetensors
 import torch
-from conftest import of_kind
+from conftest import of_kind, tensors
 
 from causalab_mini import cli, ops, plan
 from causalab_mini.ops import featurizer
@@ -184,7 +184,7 @@ def fitted(model_engine, das_plan, model):
 def test_the_fit_reduces_its_own_objective(fitted):
     """Measured at step 0 and at the end, on the thing the document said to
     minimize — `[[1.0, "ce"]]` — and not on anything else."""
-    losses = fitted.result("train/loss")
+    losses = fitted.result("train")["loss"]
     assert losses[-1] < losses[0]
     assert (losses[1:] < losses[:-1]).all(), losses
 
@@ -219,8 +219,8 @@ def test_early_stopping_ends_the_fit_before_its_epoch_budget(fitted):
     to the budget would leave 10 losses. The watched metric (`iia`, mode max)
     *falls* on every pass — the objective is `ce`, and on this model the two
     disagree — so the first pass is the best and patience 3 ends it at 4."""
-    assert len(fitted.result("train/loss")) == 4
-    evaluated = fitted.result("train/eval")[:, 0]
+    assert len(fitted.result("train")["loss"]) == 4
+    evaluated = fitted.result("train")["eval"][:, 0]
     assert (evaluated[1:] < evaluated[:-1]).all(), evaluated
 
 
@@ -258,9 +258,10 @@ def test_remote_local_fits_the_same_rotation_and_gets_the_same_numbers(model_eng
     this project's modules hidden. Same plan, same numbers."""
     here = model_engine.execute(das_plan)
     shipped = model_engine.execute(das_plan, remote="local")
-    assert set(here.all_results()) == set(shipped.all_results())
-    for name, values in here.all_results().items():
-        assert torch.equal(values, shipped.result(name)), name
+    here, shipped = tensors(here.all_results()), tensors(shipped.all_results())
+    assert set(here) == set(shipped)
+    for name, values in here.items():
+        assert torch.equal(values, shipped[name]), name
 
 
 # --------------------------------------------------------------------- #

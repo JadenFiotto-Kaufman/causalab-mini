@@ -38,7 +38,7 @@ import torch
 
 from ..ops import featurizer as featurizer_module, intervene, locate, metrics
 from ..ops.locate import Frame
-from ..plan import Featurizers, Fit, Forward, Generate, Metric, Plan, PlanError, Reduce, Step, Weights
+from ..plan import Featurizers, Fit, Forward, Generate, Metric, Plan, PlanError, Reduce, Step
 from ..plan import plan as plan_module
 from ..shapes import Positions, Selection
 
@@ -124,8 +124,6 @@ def run(engine: Any, step: Step, state: State | None = None, batch_size: int | N
         reduce(name, step, state)
     elif isinstance(step, Fit):
         fit(engine, step, state)
-    elif isinstance(step, Weights):
-        weights(step, state)
     else:
         raise TypeError(f"{type(step).__name__} is not a step this engine runs")
 
@@ -583,8 +581,9 @@ def fit(engine: Any, step: Fit, state: State) -> None:
             waited += 1
             if waited >= step.patience:
                 break
-    step.results["train/loss"] = torch.stack(losses).cpu()
-    step.results["train/eval"] = torch.stack(scores).cpu()
+    # the fit's own results: its record, and each parameter as it trained it
+    step.results["train"] = {"loss": torch.stack(losses).cpu(), "eval": torch.stack(scores).cpu()}
+    step.results.update({name: featurizers[name].weight.detach().cpu() for name in step.params})
 
 
 def _scored(engine: Any, steps: Plan, state: State) -> dict[str, Any]:
@@ -600,13 +599,6 @@ def _training(featurizers: dict[str, Any], names: tuple[str, ...], on: bool) -> 
     hard whenever it is scored. A rotation has no use for the flag."""
     for name in names:
         featurizers[name].training = on
-
-
-def weights(step: Weights, state: State) -> None:
-    """The fitted parameters, as results. This is the step that makes a
-    rotation something a save entry can name."""
-    for name in step.names:
-        step.results[name] = state.featurizers[name].weight.detach().cpu()
 
 
 def objective(terms: tuple[tuple[float, str], ...], scored: dict[str, Any]) -> Any:

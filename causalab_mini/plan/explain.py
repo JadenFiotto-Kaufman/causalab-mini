@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .plan import Featurizers, Fit, Forward, Generate, Metric, Plan, Reduce, Step, Weights
+from .plan import Featurizers, Fit, Forward, Generate, Metric, Plan, Reduce, Step
 
 
 def _features(at: Any) -> str:
@@ -104,6 +104,4 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
         out.append(f"{pad}{name}: metric {step.kind}({step.of}){rows}{tail}")
     elif isinstance(step, Reduce):
         out.append(f"{pad}{name}: reduce {step.reduce}{'' if step.k is None else step.k}({step.of}){tail}")
-    elif isinstance(step, Weights):
-        out.append(f"{pad}{name}: Weights  names={list(step.names)}{tail}")
     return out

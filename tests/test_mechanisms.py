@@ -121,7 +121,7 @@ def test_a_fit_may_early_stop_on_a_minimized_metric(data_root, model_engine):
     raw = json.loads((REPO / "documents" / "v2" / "das.json").read_text())
     raw["steps"]["fit"]["early_stop"] = {"metric": "ce", "mode": "min", "patience": 3}
     executed = model_engine.execute(plan.build_request(raw, data_root, model_engine))
-    curve = executed.step("fit", plan.Fit).results["train/eval"].squeeze(-1)
+    curve = executed.step("fit", plan.Fit).results["train"]["eval"].squeeze(-1)
     assert curve.shape[0] >= 1
 
 

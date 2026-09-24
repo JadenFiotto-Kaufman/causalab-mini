@@ -114,8 +114,8 @@ class Basis:
     parametrized: what a PCA of harvested activations gives you, and the
     untrained control a DAS fit is compared against.
 
-    `weight` is the basis itself, so a `Weights` step can publish it and a
-    save can stamp it exactly as it would a rotation's parameter.
+    `weight` is the basis itself, so a save can stamp it exactly as it
+    would a rotation's parameter.
     """
 
     def __init__(self, weight: torch.Tensor) -> None:

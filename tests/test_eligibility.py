@@ -118,8 +118,8 @@ def test_a_fit_trains_and_scores_over_the_eligible_rows(holed_root, model_engine
     raw = json.loads(DAS.read_text())
     executed = model_engine.execute(plan.build_request(raw, holed_root, model_engine))
     fit = executed.step("fit", plan.Fit)
-    assert torch.isfinite(fit.results["train/loss"]).all()
-    assert torch.isfinite(fit.results["train/eval"]).all()
+    assert torch.isfinite(fit.results["train"]["loss"]).all()
+    assert torch.isfinite(fit.results["train"]["eval"]).all()
 
     executed.write(tmp_path)
     table = json.loads((tmp_path / "iia.json").read_text())

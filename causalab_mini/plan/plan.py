@@ -17,8 +17,8 @@ or a reduction of what one read, a fit — each on its own:
     Generate(…, generation)     one model call that decodes
     Metric(kind, of, ids)       a score of one read, per row
     Reduce(of, reduce)          a read's mean, or its principal basis
-    Fit(epochs, evaluation, …)  a subtree per minibatch, an optimizer between
-    Weights(names)              the fitted parameters, as results
+    Fit(epochs, evaluation, …)  a subtree per minibatch, an optimizer between;
+                                its results are its record and what it trained
 
 and, inside a forward, the ops of the one call:
 
@@ -36,7 +36,7 @@ other one on a plan.** Every other field is frozen: a plan cannot be edited,
 only filled. Filling it is how results come home —
 the engine saves the root plan at the top of its session, so what the run
 produced is navigable exactly where it happened,
-`root.steps["fit"].results["train/loss"]`.
+`root.steps["fit"].results["train"]["loss"]`.
 
 A fit is a request, so a fit is part of one plan: `Fit` holds the steps of
 every update it will make, already batched, already tokenized, already in the
@@ -313,6 +313,10 @@ class Fit(Step):
     decides which rows share a padded batch, which is a tokenizer question and
     therefore a client-side one. The *parameter* seed travels as data and is
     drawn where the parameter is built.
+
+    What a fit produces is its own results: `train`, its record — `loss`
+    per update and `eval` per epoch — and each parameter it trained, under
+    its name. A save names either, as it names any result.
     """
 
     epochs: tuple[tuple["Plan", ...], ...]
@@ -328,13 +332,6 @@ class Fit(Step):
     #: `(gate, first, last)`: the temperature of a gate's soft mask, annealed
     #: geometrically across the fit's updates.
     anneal: tuple[tuple[str, float, float], ...] = ()
-
-
-@dataclass(frozen=True, kw_only=True)
-class Weights(Step):
-    """The fitted parameters, as results, so they can be saved."""
-
-    names: tuple[str, ...]
 
 
 S = TypeVar("S", bound=Step)

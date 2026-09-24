@@ -70,14 +70,14 @@ def test_a_documents_steps_are_the_plans_steps(patching, data_root, model_engine
     assert built.step("iia", plan.Metric).of == "patched.logits"
 
 
-def test_a_fits_plan_is_its_steps_with_the_parameters_it_trained_after_it(das, data_root, model_engine):
+def test_a_fits_plan_is_its_steps(das, data_root, model_engine):
     """What you read in the file is what runs, in that order. The compiler
-    adds `featurizers`, because declaring a parameter set is what builds it,
-    and `fit.weights`, because a save names `fit.rot`. Each update of the fit
-    is its body's steps, named as the body names them."""
+    adds `featurizers`, because declaring a parameter set is what builds it.
+    Each update of the fit is its body's steps, named as the body names
+    them."""
     built = _compile(das, data_root, model_engine)
     assert [name for name, _ in Spec.model_validate(das).steps.items()] == ["fit", "counterfactual", "patched", "iia", "ce"]
-    assert list(built.steps) == ["featurizers", "fit", "fit.weights", "counterfactual", "patched", "iia", "ce"]
+    assert list(built.steps) == ["featurizers", "fit", "counterfactual", "patched", "iia", "ce"]
     fit = built.step("fit", plan.Fit)
     assert fit.objective == ((1.0, "ce"),) and fit.early_stop == "iia" and fit.params == ("rot",)
     update = fit.epochs[0][0]
@@ -88,14 +88,15 @@ def test_a_fits_plan_is_its_steps_with_the_parameters_it_trained_after_it(das, d
 
 def test_a_save_lands_on_the_step_that_produces_its_value(das, data_root, model_engine):
     """No prefixes to invent and no search: `iia` is the scoring's and
-    `fit.iia` the held-out run's, and each file sits on its own step."""
+    `fit.iia` the held-out run's, and each file sits on its own step — the
+    trained rotation on the fit, among whose results it is."""
     built = _compile(das, data_root, model_engine)
     assert [(one.value, one.file_path) for name in ("iia", "ce") for one in built.steps[name].saves] == [
         ("iia", "iia.json"), ("ce", "ce.json")
     ]
     evaluation = built.step("fit", plan.Fit).evaluation
     assert [(one.value, one.file_path) for one in evaluation.steps["iia"].saves] == [("iia", "held_out_iia.json")]
-    assert [(one.value, one.file_path) for one in built.step("fit.weights", plan.Weights).saves] == [("rot", "rot.safetensors")]
+    assert [(one.value, one.file_path) for one in built.step("fit", plan.Fit).saves] == [("rot", "rot.safetensors")]
 
 
 def test_the_held_out_score_and_the_training_record_reach_disk(das, data_root, model_engine, tmp_path):
@@ -600,7 +601,7 @@ def test_a_fits_body_may_train_through_a_mean_of_its_own_reads(das, data_root, m
         "iia": body["iia"],
         "ce": body["ce"],
     }
-    losses = model_engine.execute(_compile(das, data_root, model_engine)).result("train/loss")
+    losses = model_engine.execute(_compile(das, data_root, model_engine)).result("train")["loss"]
     assert losses[-1] < losses[0]
 
 

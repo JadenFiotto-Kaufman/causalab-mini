@@ -26,7 +26,7 @@ and the rest, each named for what it is allowed to know:
                 session, local or on NDIF.
 
 A plan holds its own results, so what a run produced is navigable where it
-happened: `root.steps["fit"].results["train/loss"]`. One document can be
+happened: `root.steps["fit"].results["train"]["loss"]`. One document can be
 several experiments — see `plan/sweep.py` — and then the root plan holds one
 child plan per point. `shapes.py` is shared vocabulary, names for the tuples
 that travel, and `cli.py` is the whole pipeline in ten lines.

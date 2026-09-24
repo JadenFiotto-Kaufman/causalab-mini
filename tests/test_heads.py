@@ -152,7 +152,7 @@ def test_a_rotation_over_two_heads_is_as_wide_as_two_heads(data_root, model_engi
     built = plan.build_request(raw, data_root, model_engine)
     (spec,) = built.step("featurizers", plan.Featurizers).specs
     assert (spec.d, spec.k) == (8, 4)
-    assert torch.isfinite(model_engine.execute(built).step("fit", plan.Fit).results["train/loss"]).all()
+    assert torch.isfinite(model_engine.execute(built).step("fit", plan.Fit).results["train"]["loss"]).all()
 
     raw["featurizers"]["rot"]["k"] = 9
     with pytest.raises(plan.PlanError, match="not a subspace of the 8-wide site"):

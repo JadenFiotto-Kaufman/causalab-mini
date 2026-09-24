@@ -44,7 +44,6 @@ from .plan import (
     SaveFile,
     Step,
     Tap,
-    Weights,
     WriteOp,
 )
 
@@ -69,7 +68,7 @@ def build_spec(spec: Spec, data_root: str | Path, engine: Any) -> Plan:
     The document's steps are the plan's, one for one: a forward or a
     generate is one model call, a metric and a reduce are their own steps,
     and a fit is a plan of its body's steps per minibatch and one over the
-    held-out rows — with what it trained after it, as `Weights`, when a save
+    held-out rows — whose results are its record and what it trained, when a save
     names it. What this adds is what needs a model and rows: the addresses,
     the widths, the tokens, the row counts.
     """
@@ -103,10 +102,10 @@ def build_spec(spec: Spec, data_root: str | Path, engine: Any) -> Plan:
         if step.kind != "fit":
             scope[name] = _spec_step(spec, spec.steps, name, step, scope, table, sites, engine.tokenizer)
             continue
-        scope[name] = _spec_fit(spec, name, step, table, sites, engine.tokenizer)
-        weights = _spec_weights(spec, name, step, featurizers, at)
-        if weights is not None:
-            scope[f"{name}.weights"] = weights
+        scope[name] = replace(
+            _spec_fit(spec, name, step, table, sites, engine.tokenizer),
+            saves=_fit_saves(spec, name, step, featurizers, at),
+        )
     _check_patterns(tuple(one for one in scope.values() if isinstance(one, Forward)))
     for ref, file in spec.steps.saves.items():
         head = ref.partition(".")[0]
@@ -297,8 +296,6 @@ def _spec_fit(spec: Spec, name: str, fit: Any, table: Any, sites: _Sites, tokeni
         patience=fit.early_stop.patience,
         mode=fit.early_stop.mode,
         anneal=tuple((gate, one.start, one.end) for gate, one in fit.anneal.items()),
-        # `<fit>` is its record, `train/loss` and `train/eval`, as one bundle
-        saves=(SaveFile(file_path=spec.steps.saves[name], value="train/"),) if name in spec.steps.saves else (),
     )
 
 
@@ -336,24 +333,24 @@ def _spec_featurizers(spec: Spec, at: dict[str, tuple[str, Any]], sites: _Sites,
     return featurizers
 
 
-def _spec_weights(spec: Spec, name: str, fit: Any, featurizers: tuple[FeaturizerOp, ...], at: dict[str, tuple[str, Any]]) -> Weights | None:
-    """What a fit trained, as results, when a save names it: `<fit>.<name>`,
-    stamped with what it is of, so a later document loading it is checked."""
-    saved = [one for one in fit.train if f"{name}.{one}" in spec.steps.saves]
-    if not saved:
-        return None
+def _fit_saves(
+    spec: Spec, name: str, fit: Any, featurizers: tuple[FeaturizerOp, ...], at: dict[str, tuple[str, Any]]
+) -> tuple[SaveFile, ...]:
+    """A fit's own results a save names: `<fit>`, its record, as a bundle of
+    `loss` and `eval`; and `<fit>.<name>`, a parameter it trained, stamped
+    with what it is of, so a later document loading it is checked."""
+    saves = spec.steps.saves
     d = {one.name: one.d for one in featurizers}
-    return Weights(
-        names=tuple(saved),
-        saves=tuple(
-            SaveFile(
-                file_path=spec.steps.saves[f"{name}.{one}"],
-                value=one,
-                produced_by=spec.digest,
-                identity={"produced_by": spec.digest, **_identity(spec, one, *at[one], d[one])},
-            )
-            for one in saved
-        ),
+    record = (SaveFile(file_path=saves[name], value="train"),) if name in saves else ()
+    return record + tuple(
+        SaveFile(
+            file_path=saves[f"{name}.{one}"],
+            value=one,
+            produced_by=spec.digest,
+            identity={"produced_by": spec.digest, **_identity(spec, one, *at[one], d[one])},
+        )
+        for one in fit.train
+        if f"{name}.{one}" in saves
     )
 
 
@@ -586,18 +583,15 @@ def build(document: Document, data_root: str | Path, engine: Any) -> Plan:
         steps["featurizers"] = Featurizers(specs=featurizers)
     fit = _fit(document, data_root, rows, addresses, tokenizer)
     if fit is not None:
-        steps["fit"] = fit
+        # what it trained is among its own results, and saved from there
+        steps["fit"] = replace(fit, saves=weight_saves)
     scored = _steps_over(document, rows, addresses, tokenizer)
     for save in metric_saves:
         scored[save.value] = replace(scored[save.value], saves=(*scored[save.value].saves, save))
     for key, one in scored.items():
-        if key in steps or key == "weights":
+        if key in steps:
             raise PlanError(f"{key!r} names a model or a metric and a step of the plan; rename one")
         steps[key] = one
-    if featurizers:
-        steps["weights"] = Weights(
-            names=tuple(one.name for one in featurizers), saves=weight_saves
-        )
     return Plan(steps=steps)
 
 

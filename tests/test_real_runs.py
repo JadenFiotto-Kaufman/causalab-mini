@@ -84,7 +84,7 @@ def test_what_comes_home_from_a_run_is_plain(data_root, model_engine):
     executed = model_engine.execute(plan.build_request(raw, data_root, model_engine))
     home = plan_module.results_of(executed)
 
-    assert {path.split("/")[0] for path in home} == {"fit", "fit.weights", "iia", "ce"}
+    assert {path.split("/")[0] for path in home} == {"fit", "iia", "ce"}
     blob = pickle.dumps(home)
     assert b"causalab_mini" not in blob, "nothing of ours rides home"
 
