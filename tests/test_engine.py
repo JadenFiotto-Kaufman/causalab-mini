@@ -36,7 +36,7 @@ class FakeEngine(Engine):
         return self._tokenizer
 
     def execute(self, plan: Plan, remote: bool | str = False, batch_size: int | None = None) -> Plan:
-        steps.run(self, plan, batch_size=batch_size)
+        steps.run(self, plan, steps.State(batch_size=batch_size))
         return plan
 
     def forward(

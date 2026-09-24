@@ -112,7 +112,7 @@ class HooksEngine(Engine):
                 "the nnterp engine's, where the whole request is one nnsight session."
             )
         plan.provenance.update(provenance.record(self, remote, batch_size))
-        steps.run(self, plan, batch_size=batch_size)
+        steps.run(self, plan, steps.State(batch_size=batch_size))
         return plan
 
     def forward(self, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:

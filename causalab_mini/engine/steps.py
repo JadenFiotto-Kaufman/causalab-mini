@@ -53,7 +53,10 @@ Record = dict[str, dict[str, Any]]
 class State:
     """What one `steps` list shares, for as long as it runs."""
 
-    featurizers: dict[str, Any] = field(default_factory=dict)
+    #: The live parameter sets. The stateless ones exist before any document
+    #: declares anything: `identity` is what a read or a write with no
+    #: `featurizer` names, and it is never declared.
+    featurizers: dict[str, Any] = field(default_factory=lambda: dict(intervene.FEATURIZERS))
     #: Every value the steps so far produced, by name.
     values: dict[str, Any] = field(default_factory=dict)
     #: For a value that still has its rows, whether it came back flat — one
@@ -103,14 +106,10 @@ class State:
         return intervene.rows(value, self.records[name]["rows"] if self.flat[name] else None, start, stop)
 
 
-def run(engine: Any, step: Step, state: State | None = None, batch_size: int | None = None, name: str = "") -> None:
+def run(engine: Any, step: Step, state: State, name: str = "") -> None:
     """Execute one step. A `Plan` is a step, so this is the whole walk; `name`
-    is the key a step has in its plan, which is what it publishes under."""
-    if state is None:
-        # The stateless featurizers exist before any document declares
-        # anything: `identity` is what a read or a write with no `featurizer`
-        # names, and it is never declared.
-        state = State(featurizers=dict(intervene.FEATURIZERS), batch_size=batch_size)
+    is the key a step has in its plan, which is what it publishes under. An
+    engine starts it with a fresh `State` of its run's `batch_size`."""
     if isinstance(step, Plan):
         for key, child in step.steps.items():
             run(engine, child, state.child() if isinstance(child, Plan) else state, name=key)
@@ -192,14 +191,7 @@ def call(engine: Any, name: str, step: Forward, state: State) -> None:
         one: produced[0][one] if len(produced) == 1 else torch.cat([part[one] for part in produced])
         for one in (produced[0] if produced else ())
     }
-    # a read at every layer is its layers stacked, in layer order, the layer
-    # axis first; every layer read the same positions, so one record says so
-    layered = _layers(step)
-    for stacked, parts in layered.items():
-        made[stacked] = torch.stack([made.pop(part) for part in parts])
-        record[stacked] = record[parts[0]]
-        for part in parts:
-            del record[part]
+    _stack_layers(step, made, record)
     state.records.update(record)
     # a read has its own form; a call's own result is a rectangle; a read at
     # every layer has the layers first, and no rows a later window could take
@@ -217,15 +209,21 @@ def call(engine: Any, name: str, step: Forward, state: State) -> None:
         state.reported |= set(record)
 
 
-def _layers(step: Forward) -> dict[str, list[str]]:
-    """This step's reads at every layer: each stacked name, and its per-layer
-    reads in layer order."""
-    found: dict[str, list[tuple[int, str]]] = {}
+def _stack_layers(step: Forward, made: dict[str, Any], record: Record) -> None:
+    """A read at every layer, as the one value it is: its per-layer reads
+    stacked in layer order, the layer axis first. Every layer read the same
+    positions, so one record says where."""
+    layers: dict[str, list[tuple[int, str]]] = {}
     for tap in step.taps:
         for op in tap.reads:
             if op.layered:
-                found.setdefault(op.layered, []).append((tap.address.layer or 0, op.name))
-    return {name: [one for _, one in sorted(parts)] for name, parts in found.items()}
+                layers.setdefault(op.layered, []).append((tap.address.layer or 0, op.name))
+    for stacked, parts in layers.items():
+        names = [one for _, one in sorted(parts)]
+        made[stacked] = torch.stack([made.pop(one) for one in names])
+        record[stacked] = record[names[0]]
+        for one in names:
+            del record[one]
 
 
 def _dynamic(step: Forward) -> bool:
@@ -360,11 +358,7 @@ def located(engine: Any, forward: Forward, start: int = 0, text: bool = True) ->
         windows, reasons = locate.locate(frame, where, op.at.anchors)
         if not where.ragged:
             _fits_every_row(kind, op, windows, reasons, start)
-        found[op.name] = {
-            "rows": windows,
-            "reason": reasons,
-            "tokens": tuple(locate.tokens_of(frame, one, row) for row, one in enumerate(windows)),
-        }
+        found[op.name] = _record(frame, windows, reasons)
         return replace(op, at=replace(op.at, positions=windows))
 
     return (
@@ -383,7 +377,7 @@ def located(engine: Any, forward: Forward, start: int = 0, text: bool = True) ->
     )
 
 
-def _continuation(engine: Any, forward: Forward, values: dict[str, Any], generated: Any) -> Record:
+def _continuation(engine: Any, forward: Forward, values: dict[str, Any], generated_ids: Any) -> Record:
     """What the continuation frame's taps did, once there is a continuation.
 
     Two jobs, and they need the same `Frame`: the ids the decode produced,
@@ -402,36 +396,36 @@ def _continuation(engine: Any, forward: Forward, values: dict[str, Any], generat
     prompt — so the prompt frame has nothing true to say about it, and this
     is the only place that does.
     """
-    in_frame = [
-        (tap.step, op)
-        for tap in forward.taps
-        for op in (*tap.reads, *tap.writes)
-        if op.at.where is not None and op.at.where.frame == "generated"
-    ]
-    if not in_frame:
+    def generated(op: Any) -> bool:
+        return op.at.where is not None and op.at.where.frame == "generated"
+
+    # a read cut out of the continuation is its decode steps' reads, in step
+    # order; every other op in the frame is one
+    stacks: dict[str, list[Any]] = {}
+    for _, op in sorted(((tap.step, op) for tap in forward.taps for op in tap.reads if generated(op)), key=_by_step):
+        stacks.setdefault(op.stack or op.name, []).append(op)
+    ops = {name: parts[0] for name, parts in stacks.items()}
+    ops |= {op.name: op for tap in forward.taps for op in tap.writes if generated(op)}
+    if not ops:
         return {}
-    frame = locate.continuation(
-        engine.tokenizer, tuple(tuple(int(one) for one in row) for row in generated)
-    )
+    frame = locate.continuation(engine.tokenizer, tuple(tuple(int(one) for one in row) for row in generated_ids))
     found: Record = {}
-    for name in dict.fromkeys(getattr(op, "stack", "") or op.name for _, op in in_frame):
-        parts = [op for _, op in sorted(in_frame, key=_by_step) if (getattr(op, "stack", "") or op.name) == name]
-        where = parts[0].at.where
-        assert where is not None
-        windows, reasons = locate.locate(frame, where, parts[0].at.anchors)
-        if getattr(parts[0], "stack", ""):
-            steps = [values.pop(op.name) for op in parts]
+    for name, op in ops.items():
+        where = op.at.where
+        windows, reasons = locate.locate(frame, where, op.at.anchors)
+        if name in stacks and op.stack:
             # (rows, steps, width): each step read the one position it processed
-            whole = torch.stack(steps, dim=1).squeeze(2)
-            values[name] = intervene.gather(
-                whole, Selection(positions=windows, flat=where.ragged), seq_axis=1
-            )
-        found[name] = {
-            "rows": windows,
-            "reason": reasons,
-            "tokens": tuple(locate.tokens_of(frame, one, row) for row, one in enumerate(windows)),
-        }
+            whole = torch.stack([values.pop(one.name) for one in stacks[name]], dim=1).squeeze(2)
+            values[name] = intervene.gather(whole, Selection(positions=windows, flat=where.ragged), seq_axis=1)
+        found[name] = _record(frame, windows, reasons)
     return found
+
+
+def _record(frame: Frame, windows: Positions, reasons: tuple[str, ...]) -> dict[str, Any]:
+    """What a run reports of one op: each row's window, why it is empty when
+    it is, and what it decoded to in `frame`."""
+    tokens = tuple(locate.tokens_of(frame, one, row) for row, one in enumerate(windows))
+    return {"rows": windows, "reason": reasons, "tokens": tokens}
 
 
 def _by_step(one: tuple[Any, Any]) -> int:

@@ -94,7 +94,7 @@ class NNterpEngine(Engine):
             # and nothing of ours has to survive the way back. (`remote="local"`
             # never noticed: it does not serialize the way back. FINDINGS §19.)
             home = nnsight.save({})
-            steps.run(engine, plan, batch_size=batch_size)
+            steps.run(engine, plan, steps.State(batch_size=batch_size))
             home.update(plan_module.results_of(plan))
             # A server serves the dtype *it* chose; the document's is only a
             # request. Say what ran, where the run record is.
