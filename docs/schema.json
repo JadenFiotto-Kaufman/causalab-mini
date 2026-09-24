@@ -219,16 +219,29 @@
      "title": "Rows",
      "type": "object"
     },
-    "intervention": {
+    "interventions": {
      "anyOf": [
       {
        "type": "string"
       },
       {
        "$ref": "#/$defs/Intervention"
+      },
+      {
+       "items": {
+        "anyOf": [
+         {
+          "type": "string"
+         },
+         {
+          "$ref": "#/$defs/Intervention"
+         }
+        ]
+       },
+       "type": "array"
       }
      ],
-     "title": "Intervention"
+     "title": "Interventions"
     },
     "params": {
      "items": {
@@ -296,7 +309,7 @@
    "required": [
     "kind",
     "rows",
-    "intervention",
+    "interventions",
     "params",
     "objective",
     "epochs",
@@ -539,16 +552,29 @@
      "title": "Rows",
      "type": "object"
     },
-    "intervention": {
+    "interventions": {
      "anyOf": [
       {
        "type": "string"
       },
       {
        "$ref": "#/$defs/Intervention"
+      },
+      {
+       "items": {
+        "anyOf": [
+         {
+          "type": "string"
+         },
+         {
+          "$ref": "#/$defs/Intervention"
+         }
+        ]
+       },
+       "type": "array"
       }
      ],
-     "title": "Intervention"
+     "title": "Interventions"
     },
     "outputs": {
      "additionalProperties": {
@@ -568,7 +594,7 @@
    "required": [
     "kind",
     "rows",
-    "intervention"
+    "interventions"
    ],
    "title": "Observe",
    "type": "object"

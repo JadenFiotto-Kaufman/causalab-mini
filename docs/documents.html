@@ -184,7 +184,7 @@
   &quot;steps&quot;: {
     &quot;score&quot;: {
       &quot;kind&quot;: &quot;observe&quot;,
-      &quot;intervention&quot;: &quot;patching&quot;,
+      &quot;interventions&quot;: &quot;patching&quot;,
       &quot;rows&quot;: {
         &quot;base&quot;: &quot;weekdays/train&quot;,
         &quot;counterfactual&quot;: &quot;weekdays/train&quot;
@@ -217,7 +217,7 @@ ok: documents/v2/patching.json is a valid plan-shaped document</code></pre>
             <tr><td><code>roles</code></td><td><code>{name: object}</code></td><td>required</td><td>which column of a row each input role's text comes from</td></tr>
             <tr><td><code>sites</code></td><td><code>{name: object}</code></td><td>required</td><td>the places a read or a write may name</td></tr>
             <tr><td><code>featurizers</code></td><td><code>{name: object}</code></td><td><code>{}</code></td><td>parameter sets, by name</td></tr>
-            <tr><td><code>interventions</code></td><td><code>{name: object}</code></td><td>required</td><td>the experiments steps name: reads, writes, intervened models, metrics. One written inline on a step is declared here under the step's name, and there must be at least one</td></tr>
+            <tr><td><code>interventions</code></td><td><code>{name: object}</code></td><td>required</td><td>the experiments steps name: reads, writes, intervened models, metrics. One written inline on a step is declared here under the step's name, or <code>&lt;step&gt;[i]</code> as entry <code>i</code> of a list, and there must be at least one</td></tr>
             <tr><td><code>steps</code></td><td><code>{name: object}</code></td><td>required</td><td>what runs, over which rows, and what comes out</td></tr>
             </tbody>
           </table>
@@ -241,12 +241,12 @@ ok: documents/v2/patching.json is a valid plan-shaped document</code></pre>
           experiment — and nothing there runs. A declared intervention no step names
           is never compiled.</p>
 
-          <!-- causalab_mini/plan/spec.py:381-393 — class Observe: rows + intervention -->
-          <p>A step is an execution: it binds <strong>rows</strong> to <strong>one
-          intervention</strong>, and every <code>observe</code> and <code>fit</code>
-          says which with <code>intervention</code>. There is no default, even when
-          the document declares only one: a step on its own tells you what it
-          runs.</p>
+          <!-- causalab_mini/plan/spec.py:381-393 — class Observe: rows + interventions -->
+          <p>A step is an execution: it binds <strong>rows</strong> to the
+          interventions it runs, and every <code>observe</code> and
+          <code>fit</code> says which with <code>interventions</code>. There is no
+          default, even when the document declares only one: a step on its own
+          tells you what it runs.</p>
 
           <!-- causalab_mini/plan/build.py — build_spec compiles each step's intervention_of(step) -->
           <p>An intervention is declared once at the root, and not inside the step
@@ -257,14 +257,14 @@ ok: documents/v2/patching.json is a valid plan-shaped document</code></pre>
           step's outputs and saves are named by what the intervention reads and
           scores, so two steps over different rows produce comparable results.</p>
 
-          <p>Two experiments at one site, each bound by its own step, and a baseline
-          beside them:</p>
+          <p>A baseline, then two experiments at one site run over the same rows by
+          one step:</p>
 
           <details class="listing">
             <summary><code>documents/v2/two_observes.json</code> <span class="what">— the whole document</span></summary>
             <pre><code class="language-json">{
   &quot;header&quot;: {
-    &quot;description&quot;: &quot;Two experiments at one site, each named once and bound by its own step, and a baseline written in place. `interventions` declares interchange patching and mean ablation at the last position of layer 0; nothing there runs. `clean` is an intervention with no writes, written inline on its step: it reads the original model, scores it, and publishes the mean activation at the site. `patched` and `ablated` each name the declared experiment they run, and `ablated` swaps in the mean `clean` published. Tiny CPU Llama, so the numbers demonstrate the mechanism and nothing else.&quot;
+    &quot;description&quot;: &quot;Two experiments over the same rows, as one step, and a baseline written in place. `interventions` declares interchange patching and mean ablation at the last position of layer 0; nothing there runs. `clean` is an intervention with no writes, written inline on its step: it reads the original model, scores it, and publishes the mean activation at the site. `compare` lists both declared experiments, so each runs over its rows: `ablation` swaps in the mean `clean` published, `iia` belongs to patching alone and is saved by its bare name, and `logit_diff`, which both produce, is saved qualified. Tiny CPU Llama, so the numbers demonstrate the mechanism and nothing else.&quot;
   },
   &quot;model&quot;: {
     &quot;key&quot;: &quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;,
@@ -338,7 +338,7 @@ ok: documents/v2/patching.json is a valid plan-shaped document</code></pre>
         }
       }
     },
-    &quot;mean_ablation&quot;: {
+    &quot;ablation&quot;: {
       &quot;reads&quot;: {
         &quot;logits&quot;: {
           &quot;site&quot;: &quot;head&quot;,
@@ -379,7 +379,7 @@ ok: documents/v2/patching.json is a valid plan-shaped document</code></pre>
   &quot;steps&quot;: {
     &quot;clean&quot;: {
       &quot;kind&quot;: &quot;observe&quot;,
-      &quot;intervention&quot;: {
+      &quot;interventions&quot;: {
         &quot;reads&quot;: {
           &quot;acts&quot;: {
             &quot;site&quot;: &quot;target&quot;,
@@ -421,31 +421,28 @@ ok: documents/v2/patching.json is a valid plan-shaped document</code></pre>
         }
       ]
     },
-    &quot;patched&quot;: {
+    &quot;compare&quot;: {
       &quot;kind&quot;: &quot;observe&quot;,
-      &quot;intervention&quot;: &quot;patching&quot;,
+      &quot;interventions&quot;: [
+        &quot;patching&quot;,
+        &quot;ablation&quot;
+      ],
       &quot;rows&quot;: {
         &quot;base&quot;: &quot;weekdays/train&quot;,
         &quot;counterfactual&quot;: &quot;weekdays/train&quot;
       },
       &quot;saves&quot;: [
         {
-          &quot;value&quot;: &quot;logit_diff&quot;,
-          &quot;file_path&quot;: &quot;patched.json&quot;
-        }
-      ]
-    },
-    &quot;ablated&quot;: {
-      &quot;kind&quot;: &quot;observe&quot;,
-      &quot;intervention&quot;: &quot;mean_ablation&quot;,
-      &quot;rows&quot;: {
-        &quot;base&quot;: &quot;weekdays/train&quot;,
-        &quot;counterfactual&quot;: &quot;weekdays/train&quot;
-      },
-      &quot;saves&quot;: [
+          &quot;value&quot;: &quot;iia&quot;,
+          &quot;file_path&quot;: &quot;iia.json&quot;
+        },
         {
-          &quot;value&quot;: &quot;logit_diff&quot;,
-          &quot;file_path&quot;: &quot;ablated.json&quot;
+          &quot;value&quot;: &quot;patching/logit_diff&quot;,
+          &quot;file_path&quot;: &quot;logit_diff.json&quot;
+        },
+        {
+          &quot;value&quot;: &quot;ablation/logit_diff&quot;,
+          &quot;file_path&quot;: &quot;logit_diff.json&quot;
         }
       ]
     }
@@ -458,7 +455,7 @@ ok: documents/v2/patching.json is a valid plan-shaped document</code></pre>
             <pre><code class="language-json">  &quot;steps&quot;: {
     &quot;clean&quot;: {
       &quot;kind&quot;: &quot;observe&quot;,
-      &quot;intervention&quot;: {
+      &quot;interventions&quot;: {
         &quot;reads&quot;: {
           &quot;acts&quot;: {
             &quot;site&quot;: &quot;target&quot;,
@@ -500,52 +497,74 @@ ok: documents/v2/patching.json is a valid plan-shaped document</code></pre>
         }
       ]
     },
-    &quot;patched&quot;: {
+    &quot;compare&quot;: {
       &quot;kind&quot;: &quot;observe&quot;,
-      &quot;intervention&quot;: &quot;patching&quot;,
+      &quot;interventions&quot;: [
+        &quot;patching&quot;,
+        &quot;ablation&quot;
+      ],
       &quot;rows&quot;: {
         &quot;base&quot;: &quot;weekdays/train&quot;,
         &quot;counterfactual&quot;: &quot;weekdays/train&quot;
       },
       &quot;saves&quot;: [
         {
-          &quot;value&quot;: &quot;logit_diff&quot;,
-          &quot;file_path&quot;: &quot;patched.json&quot;
-        }
-      ]
-    },
-    &quot;ablated&quot;: {
-      &quot;kind&quot;: &quot;observe&quot;,
-      &quot;intervention&quot;: &quot;mean_ablation&quot;,
-      &quot;rows&quot;: {
-        &quot;base&quot;: &quot;weekdays/train&quot;,
-        &quot;counterfactual&quot;: &quot;weekdays/train&quot;
-      },
-      &quot;saves&quot;: [
+          &quot;value&quot;: &quot;iia&quot;,
+          &quot;file_path&quot;: &quot;iia.json&quot;
+        },
         {
-          &quot;value&quot;: &quot;logit_diff&quot;,
-          &quot;file_path&quot;: &quot;ablated.json&quot;
+          &quot;value&quot;: &quot;patching/logit_diff&quot;,
+          &quot;file_path&quot;: &quot;logit_diff.json&quot;
+        },
+        {
+          &quot;value&quot;: &quot;ablation/logit_diff&quot;,
+          &quot;file_path&quot;: &quot;logit_diff.json&quot;
         }
       ]
     }
   }</code></pre>
           </figure>
 
-          <!-- causalab_mini/plan/spec.py:494-528 — Spec._inline -->
-          <p><code>patched</code> and <code>ablated</code> name declared
-          interventions. <code>clean</code> writes its intervention in place: the
-          value of <code>intervention</code> may be the object itself instead of a
-          name. It is compiled exactly as a declared one, because at load it
-          <em>is</em> declared — under the step's own name, <code>clean</code>. A
-          step may not write one inline under a name that is already declared.</p>
+          <!-- causalab_mini/plan/spec.py:514-560 — Spec.lower; plan/build.py:227-238 -->
+          <p><code>compare</code> lists two declared interventions, so it runs each
+          over its rows. A list is lowered, not executed specially: the step
+          compiles to one nested plan per entry, named by the intervention, each
+          holding the step exactly as a document naming only that intervention
+          would compile it — so each writes into its own directory,
+          <code>compare/patching/</code> and <code>compare/ablation/</code>. A save
+          on a list step names a value by its bare name when one entry produces it
+          (<code>iia</code> is patching's alone), and as
+          <code>&lt;intervention&gt;/&lt;value&gt;</code>, the nested plan's path,
+          when several do. A name no entry has, or several have, is refused with
+          the qualified names it could have been:</p>
+
+          <!-- ran 2026-09-24, CPU, fp32 -->
+          <figure class="listing">
+            <figcaption><code>documents/v2/two_observes.json</code> <span class="what">— with the <code>compare</code> saves reduced to a bare <code>logit_diff</code></span></figcaption>
+            <pre><code class="language-bash">$ uv run causalab-mini validate bad/ambiguous_save.json
+ValidationError: 1 validation error for Spec
+  Value error, step &#x27;compare&#x27;: save &#x27;logit_diff&#x27; is produced by 2 of its interventions [&#x27;patching&#x27;, &#x27;ablation&#x27;]; qualify it as one of [&#x27;patching/logit_diff&#x27;, &#x27;ablation/logit_diff&#x27;] [type=value_error, input_value={&#x27;header&#x27;: {&#x27;description&#x27;...: &#x27;logit_diff.json&#x27;}]}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/value_error</code></pre>
+          </figure>
+
+          <!-- causalab_mini/plan/spec.py:581-630 — Spec._inline -->
+          <p><code>clean</code> writes its intervention in place: an entry of
+          <code>interventions</code> may be the object itself instead of a name.
+          It is compiled exactly as a declared one, because at load it
+          <em>is</em> declared — under the step's own name, <code>clean</code>, or
+          as <code>&lt;step&gt;[i]</code> when it is entry <code>i</code> of a list.
+          It may not take a name that is already declared.</p>
 
           <!-- tests/test_spec.py — test_a_baseline_is_an_intervention_with_no_writes -->
           <p>"No intervention" is not a missing field or a <code>null</code>. It is an
           intervention with no <code>writes</code>, whose reads say
           <code>"model": "original"</code>: one un-intervened forward, scored by the
-          same metrics as the others. Here it also publishes the mean activation
-          that <code>ablated</code> swaps in, through the <code>outputs</code> and
-          <code>ref</code> seam described <a href="#outputs">below</a>.</p>
+          same metrics as the others. <code>clean</code> is its own step rather than
+          a third entry of the list because it also publishes the mean that
+          <code>ablation</code> swaps in, through the <code>outputs</code> and
+          <code>ref</code> seam described <a href="#outputs">below</a>. A nested
+          plan reads what was published before it, and what it publishes stays its
+          own, so a list entry cannot hand a value to its sibling.</p>
 
           <!-- ran 2026-09-24, CPU, fp32 -->
           <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/two_observes.json
@@ -554,16 +573,19 @@ ok: documents/v2/patching.json is a valid plan-shaped document</code></pre>
       forward &#x27;original&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
         read  &#x27;acts&#x27; at block_output[0] pos={index:-1} via &#x27;identity&#x27;
         read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
-  patched: Observe  metrics=[&#x27;iia/match&#x27;, &#x27;logit_diff/logit_diff&#x27;]  saves=[&#x27;patched.json&#x27;]
-      forward &#x27;original&#x27; on &#x27;counterfactual&#x27;  (4 rows x 11 tokens)
-        read  &#x27;v_cf&#x27; at block_output[0] pos={index:-1} via &#x27;identity&#x27;
-      forward &#x27;patched&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
-        write &#x27;patch&#x27; at block_output[0] pos={index:-1} swap(v_cf) via &#x27;identity&#x27;
-        read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
-  ablated: Observe  metrics=[&#x27;logit_diff/logit_diff&#x27;]  saves=[&#x27;ablated.json&#x27;]
-      forward &#x27;ablated&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
-        write &#x27;ablate&#x27; at block_output[0] pos={index:-1} swap(mean) via &#x27;identity&#x27;
-        read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;</code></pre>
+  compare: Plan
+    patching: Plan
+      compare: Observe  metrics=[&#x27;iia/match&#x27;, &#x27;logit_diff/logit_diff&#x27;]  saves=[&#x27;iia.json&#x27;, &#x27;logit_diff.json&#x27;]
+          forward &#x27;original&#x27; on &#x27;counterfactual&#x27;  (4 rows x 11 tokens)
+            read  &#x27;v_cf&#x27; at block_output[0] pos={index:-1} via &#x27;identity&#x27;
+          forward &#x27;patched&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+            write &#x27;patch&#x27; at block_output[0] pos={index:-1} swap(v_cf) via &#x27;identity&#x27;
+            read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
+    ablation: Plan
+      compare: Observe  metrics=[&#x27;logit_diff/logit_diff&#x27;]  saves=[&#x27;logit_diff.json&#x27;]
+          forward &#x27;ablated&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+            write &#x27;ablate&#x27; at block_output[0] pos={index:-1} swap(mean) via &#x27;identity&#x27;
+            read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;</code></pre>
 
           <h2 id="model">model <a class="anchor" href="#model" aria-label="Link to this section">#</a></h2>
 
@@ -748,7 +770,7 @@ weekdays/data: 4 rows
 
           <!-- causalab_mini/plan/spec.py:310-321 — class Intervention -->
           <p>An intervention is the experiment, declared once. Every step that runs
-          a forward names the one it runs, or writes it in place (see
+          a forward names the ones it runs, or writes them in place (see
           <a href="#fits-together">how a document fits together</a>). That is why a
           fit and the run that scores it cannot drift apart — they are the same
           declaration over different rows.</p>
@@ -1022,8 +1044,8 @@ weekdays/data: 4 rows
           <table>
             <thead><tr><th><code>kind</code></th><th>what it does</th><th>its fields</th></tr></thead>
             <tbody>
-            <tr><td><code>observe</code></td><td>one pass over its rows</td><td><code>rows</code>, <code>intervention</code>, <code>outputs</code>, <code>saves</code></td></tr>
-            <tr><td><code>fit</code></td><td>trains featurizers, then scores held-out rows</td><td><code>rows</code>, <code>intervention</code>, <code>params</code>, <code>objective</code>, <code>anneal</code>, <code>epochs</code>, <code>pairs</code>, <code>seed</code>, <code>optimizer</code>, <code>early_stop</code>, <code>eval</code>, <code>saves</code></td></tr>
+            <tr><td><code>observe</code></td><td>one pass over its rows</td><td><code>rows</code>, <code>interventions</code>, <code>outputs</code>, <code>saves</code></td></tr>
+            <tr><td><code>fit</code></td><td>trains featurizers, then scores held-out rows</td><td><code>rows</code>, <code>interventions</code>, <code>params</code>, <code>objective</code>, <code>anneal</code>, <code>epochs</code>, <code>pairs</code>, <code>seed</code>, <code>optimizer</code>, <code>early_stop</code>, <code>eval</code>, <code>saves</code></td></tr>
             <tr><td><code>weights</code></td><td>publishes fitted parameters</td><td><code>names</code>, <code>saves</code></td></tr>
             </tbody>
           </table>
@@ -1031,12 +1053,21 @@ weekdays/data: 4 rows
           <!-- causalab_mini/plan/spec.py:381-393 — class Observe; :494-528 _inline; :560-561 every role needs rows -->
           <p>An <code>observe</code> or a <code>fit</code> gives
           <code>rows</code> as role → dataset ref, and <strong>every declared role
-          needs one</strong>. Both require <code>intervention</code>: a string naming
-          one under <code>interventions</code>, or an intervention object written in
-          place, which is declared under the step's own name. Leaving it out is
-          refused with the step's name and the names it could have used:</p>
+          needs one</strong>. Both require <code>interventions</code>: a name
+          declared under the document's <code>interventions</code>, an intervention
+          object written in place, or a list of either, which runs each over the
+          step's rows (see <a href="#fits-together">how a document fits
+          together</a>). Leaving it out is refused with the step's name and the
+          names it could have used:</p>
 
-          <pre><code class="language-text">step &#x27;score&#x27; runs a forward and names no intervention; say which with `intervention` — declared: [&#x27;das&#x27;] — or write one there in place</code></pre>
+          <!-- ran 2026-09-24, CPU, fp32 -->
+          <figure class="listing">
+            <figcaption><code>documents/v2/das.json</code> <span class="what">— with <code>interventions</code> removed from the <code>score</code> step</span></figcaption>
+            <pre><code class="language-bash">$ uv run causalab-mini validate bad/unnamed.json
+ValidationError: 1 validation error for Spec
+  Value error, step &#x27;score&#x27; runs a forward and names no intervention; say which with `interventions` — declared: [&#x27;das&#x27;] — or write one there in place [type=value_error, input_value={&#x27;header&#x27;: {&#x27;description&#x27;...: &#x27;rot.safetensors&#x27;}]}}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/value_error</code></pre>
+          </figure>
 
           <h3 id="saves">saves <a class="anchor" href="#saves" aria-label="Link to this section">#</a></h3>
 
@@ -1093,7 +1124,7 @@ weekdays/data: 4 rows
             <pre><code class="language-json">  &quot;steps&quot;: {
     &quot;harvest&quot;: {
       &quot;kind&quot;: &quot;observe&quot;,
-      &quot;intervention&quot;: &quot;harvest&quot;,
+      &quot;interventions&quot;: &quot;harvest&quot;,
       &quot;rows&quot;: {
         &quot;base&quot;: &quot;weekdays/train&quot;
       },
@@ -1112,7 +1143,7 @@ weekdays/data: 4 rows
     },
     &quot;clean&quot;: {
       &quot;kind&quot;: &quot;observe&quot;,
-      &quot;intervention&quot;: &quot;clean&quot;,
+      &quot;interventions&quot;: &quot;clean&quot;,
       &quot;rows&quot;: {
         &quot;base&quot;: &quot;weekdays/train&quot;
       },
@@ -1125,7 +1156,7 @@ weekdays/data: 4 rows
     },
     &quot;ablated&quot;: {
       &quot;kind&quot;: &quot;observe&quot;,
-      &quot;intervention&quot;: &quot;ablated&quot;,
+      &quot;interventions&quot;: &quot;ablated&quot;,
       &quot;rows&quot;: {
         &quot;base&quot;: &quot;weekdays/train&quot;
       },
@@ -1184,7 +1215,7 @@ weekdays/data: 4 rows
             <tr><td><code>early_stop</code></td><td>object</td><td>required</td><td><code>metric</code>, <code>mode</code> (<code>"max"</code> | <code>"min"</code>, default <code>"max"</code>), <code>patience</code> &gt; 0</td></tr>
             <tr><td><code>eval</code></td><td>object</td><td>required</td><td>the held-out pass: its own <code>rows</code>, and its own <code>saves</code></td></tr>
             <tr><td><code>anneal</code></td><td><code>{gate: object}</code></td><td><code>{}</code></td><td>a gate's temperature: <code>start</code>, <code>end</code>, geometric between</td></tr>
-            <tr><td><code>intervention</code></td><td>string | object</td><td>required</td><td>which experiment it fits: a declared name, or one written in place</td></tr>
+            <tr><td><code>interventions</code></td><td>string | object | <code>[string | object]</code></td><td>required</td><td>which experiment it fits through: a declared name, one written in place, or a list, which fits through each in turn as its own nested plan</td></tr>
             <tr><td><code>saves</code></td><td><code>[object]</code></td><td><code>[]</code></td><td>its own results: <code>train/loss</code>, <code>train/eval</code></td></tr>
             </tbody>
           </table>
@@ -1505,7 +1536,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
   &quot;steps&quot;: {
     &quot;fit&quot;: {
       &quot;kind&quot;: &quot;fit&quot;,
-      &quot;intervention&quot;: &quot;dbm&quot;,
+      &quot;interventions&quot;: &quot;dbm&quot;,
       &quot;rows&quot;: {
         &quot;base&quot;: &quot;weekdays/data#train&quot;,
         &quot;counterfactual&quot;: &quot;weekdays/data#train&quot;
@@ -1564,7 +1595,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
     },
     &quot;score&quot;: {
       &quot;kind&quot;: &quot;observe&quot;,
-      &quot;intervention&quot;: &quot;dbm&quot;,
+      &quot;interventions&quot;: &quot;dbm&quot;,
       &quot;rows&quot;: {
         &quot;base&quot;: &quot;weekdays/data#train&quot;,
         &quot;counterfactual&quot;: &quot;weekdays/data#train&quot;

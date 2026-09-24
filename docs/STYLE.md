@@ -54,7 +54,7 @@ The comment is for the next person to edit the page, not for the reader. Rules:
   `path` for a whole file's job. If you cite a line, quote enough of it in the
   surrounding prose that the next person can find it again if it moved.
 - **Do not invent API.** If you cannot find out how something works, read the
-  tests — `tests/` has 509 of them and they are the executable spec. If it is
+  tests — `tests/` has 515 of them and they are the executable spec. If it is
   still unclear, leave the claim out and put a comment where it would have
   gone:
 
