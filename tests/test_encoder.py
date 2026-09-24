@@ -27,7 +27,7 @@ from causalab_mini.plan import sweep
 from causalab_mini.plan.spec_v2 import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-DOCUMENT = REPO / "documents" / "v2" / "sae_feature_ablation.json"
+DOCUMENT = REPO / "tests" / "fixtures" / "v2_old" / "sae_feature_ablation.json"
 BUNDLE = REPO / "documents" / "artifacts" / "sae.safetensors"
 AT = ((2,), (2,))
 
@@ -144,7 +144,7 @@ def test_the_hooks_engine_agrees(raw, data_root, model_engine):
 def test_features_of_a_rotation_swap_part_of_a_subspace(data_root, model_engine):
     """Nothing about `features` is an SAE's: two of a rotation's eight
     directions, instead of all of them."""
-    das = json.loads((REPO / "documents" / "v2" / "das.json").read_text())
+    das = json.loads((REPO / "tests" / "fixtures" / "v2_old" / "das.json").read_text())
     das["steps"] = {"score": das["steps"]["score"]}
     whole = model_engine.execute(plan.build_request(das, data_root, model_engine)).result("ce")
     das["interventions"]["das"]["writes"]["patch"]["features"] = [0, 1]

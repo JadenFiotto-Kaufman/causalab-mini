@@ -1,0 +1,120 @@
+{
+  "header": {
+    "description": "Neuron patching: the interchange of patching.json, of a few MLP neurons at a time. The site names `units` \u2014 single features of `mlp_activation` \u2014 and the sweep is over which. `heads` on an attention site (head_patching.json) is the same mechanism at a coarser grain: both compile to one Selection, positions plus a part of the feature axis."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "roles": {
+    "base": {
+      "field": "input"
+    },
+    "counterfactual": {
+      "field": "counterfactual_inputs[0]"
+    }
+  },
+  "sites": {
+    "target": {
+      "component": "mlp_activation",
+      "layers": [
+        0
+      ],
+      "units": {
+        "sweep": [
+          [
+            0,
+            1,
+            2,
+            3
+          ],
+          [
+            4,
+            5,
+            6,
+            7
+          ],
+          [
+            8,
+            9,
+            10,
+            11
+          ]
+        ]
+      }
+    },
+    "head": {
+      "component": "lm_head"
+    }
+  },
+  "interventions": {
+    "patching": {
+      "reads": {
+        "v_cf": {
+          "site": "target",
+          "pos": -1,
+          "model": "original",
+          "input": "counterfactual"
+        },
+        "logits": {
+          "site": "head",
+          "pos": -1,
+          "model": "patched",
+          "input": "base"
+        }
+      },
+      "writes": {
+        "patch": {
+          "site": "target",
+          "pos": -1,
+          "mechanism": "swap",
+          "operand": "v_cf"
+        }
+      },
+      "models": {
+        "patched": {
+          "input": "base",
+          "writes": [
+            "patch"
+          ]
+        }
+      },
+      "metrics": {
+        "iia": {
+          "kind": "match",
+          "of": "logits",
+          "expected": "cf_answer",
+          "token_form": "space_prefixed"
+        },
+        "logit_diff": {
+          "kind": "logit_diff",
+          "of": "logits",
+          "a": "cf_answer",
+          "b": "base_answer",
+          "token_form": "space_prefixed"
+        }
+      }
+    }
+  },
+  "steps": {
+    "score": {
+      "kind": "observe",
+      "interventions": "patching",
+      "rows": {
+        "base": "weekdays/train",
+        "counterfactual": "weekdays/train"
+      },
+      "saves": [
+        {
+          "value": "iia",
+          "file_path": "iia.json"
+        },
+        {
+          "value": "logit_diff",
+          "file_path": "logit_diff.json"
+        }
+      ]
+    }
+  }
+}

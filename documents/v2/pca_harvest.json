@@ -1,58 +1,22 @@
 {
   "header": {
-    "description": "The first half of a PCA control: harvest the residual stream at EVERY token of the training prompts \u2014 a ragged read, ~36 vectors from 4 rows, the tokenizer's own BOS not among them because it is not a token of the prompt \u2014 and reduce it to its top-4 principal directions, an orthonormal (16, 4) basis, written as a bundle a later document loads as a `pca` featurizer. Nothing is trained; the basis is what the data says. (One position per row would be 4 vectors, and four vectors have no rank-4 PCA; the compiler says so.)"
+    "description": "The first half of a PCA control: read the residual stream at EVERY token of the training prompts — a ragged read, ~36 vectors from 4 rows, the tokenizer's own BOS not among them because it is not a token of the prompt — and reduce it to its top-4 principal directions, an orthonormal (16, 4) basis, saved as a bundle a later document loads as a `pca` featurizer. Nothing is trained; the basis is what the data says. (One position per row would be 4 vectors, and four vectors have no rank-4 PCA; the compiler says so.)"
   },
   "model": {
     "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
     "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
     "dtype": "fp32"
   },
-  "roles": {
-    "base": {
-      "field": "input"
-    }
-  },
-  "sites": {
-    "target": {
-      "component": "block_output",
-      "layers": [
-        0
-      ]
-    }
-  },
-  "interventions": {
-    "harvest": {
-      "reads": {
-        "acts": {
-          "site": "target",
-          "pos": {
-            "all": true
-          },
-          "input": "base"
-        }
-      }
-    }
-  },
+  "data": {"prompts": {"path": "weekdays/train"}},
+  "sites": {"target": {"component": "block_output", "layers": [0]}},
   "steps": {
     "harvest": {
-      "kind": "observe",
-      "interventions": "harvest",
-      "rows": {
-        "base": "weekdays/train"
-      },
-      "outputs": {
-        "basis": {
-          "read": "acts",
-          "reduce": "pca",
-          "k": 4
-        }
-      },
-      "saves": [
-        {
-          "value": "basis",
-          "file_path": "pca.safetensors"
-        }
-      ]
-    }
+      "kind": "forward",
+      "data": "prompts",
+      "field": "input",
+      "reads": {"acts": {"site": "target", "pos": {"all": true}}}
+    },
+    "basis": {"kind": "reduce", "reduce": "pca", "of": "harvest.acts", "k": 4},
+    "saves": {"basis": "pca.safetensors"}
   }
 }

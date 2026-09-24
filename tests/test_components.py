@@ -372,7 +372,7 @@ def test_the_token_ids_can_be_read_and_never_written(minimal_raw, data_root, mod
 
     from causalab_mini.plan.spec_v2 import Spec
 
-    raw = __import__("json").loads((REPO / "documents" / "v2" / "patching.json").read_text())
+    raw = __import__("json").loads((REPO / "tests" / "fixtures" / "v2_old" / "patching.json").read_text())
     raw["sites"]["ids"] = {"component": "input_ids"}
     raw["interventions"]["patching"]["reads"]["tokens"] = {"site": "ids", "pos": {"last": 2}, "input": "base"}
     raw["steps"]["score"]["outputs"] = {"last_two": "tokens"}

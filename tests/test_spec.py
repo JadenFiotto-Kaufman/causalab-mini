@@ -26,10 +26,10 @@ from causalab_mini.plan import spec_v2 as spec_module
 from causalab_mini.plan.spec_v2 import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-V2_DAS = REPO / "documents" / "v2" / "das.json"
-V2_PATCHING = REPO / "documents" / "v2" / "patching.json"
-V2_MEAN = REPO / "documents" / "v2" / "mean_ablation.json"
-V2_TWO = REPO / "documents" / "v2" / "two_observes.json"
+V2_DAS = REPO / "tests" / "fixtures" / "v2_old" / "das.json"
+V2_PATCHING = REPO / "tests" / "fixtures" / "v2_old" / "patching.json"
+V2_MEAN = REPO / "tests" / "fixtures" / "v2_old" / "mean_ablation.json"
+V2_TWO = REPO / "tests" / "fixtures" / "v2_old" / "two_observes.json"
 
 
 @pytest.fixture

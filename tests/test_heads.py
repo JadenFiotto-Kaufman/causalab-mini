@@ -29,10 +29,10 @@ from causalab_mini.plan.spec_v2 import Spec
 from causalab_mini.shapes import Selection
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-PATCHING = REPO / "documents" / "v2" / "patching.json"
-HEADS = REPO / "documents" / "v2" / "head_patching.json"
-KNOCKOUT = REPO / "documents" / "v2" / "attention_knockout.json"
-DAS = REPO / "documents" / "v2" / "das.json"
+PATCHING = REPO / "tests" / "fixtures" / "v2_old" / "patching.json"
+HEADS = REPO / "tests" / "fixtures" / "v2_old" / "head_patching.json"
+KNOCKOUT = REPO / "tests" / "fixtures" / "v2_old" / "attention_knockout.json"
+DAS = REPO / "tests" / "fixtures" / "v2_old" / "das.json"
 
 
 def _at(component, heads=None):
@@ -293,7 +293,7 @@ def test_a_gate_over_neurons_is_a_gate_at_a_site_of_units(data_root, model_engin
     """DBM over a chosen set of neurons: nothing but the site changed."""
     from causalab_mini.plan import sweep
 
-    _, raw = sweep.points(json.loads((REPO / "documents" / "v2" / "dbm.json").read_text()))[0]
+    _, raw = sweep.points(json.loads((REPO / "tests" / "fixtures" / "v2_old" / "dbm.json").read_text()))[0]
     raw["sites"]["target"] = {"component": "mlp_activation", "layers": [0], "units": [0, 2, 4, 6]}
     built = plan.build_request(raw, data_root, model_engine)
     (spec,) = built.step("featurizers", plan.Featurizers).specs
@@ -316,7 +316,7 @@ def test_what_a_site_of_units_may_not_say(data_root, model_engine):
 # swapping a counterfactual's pattern in
 # --------------------------------------------------------------------- #
 
-PATTERN = REPO / "documents" / "v2" / "attention_pattern_patching.json"
+PATTERN = REPO / "tests" / "fixtures" / "v2_old" / "attention_pattern_patching.json"
 
 
 def _pattern_raw(heads):

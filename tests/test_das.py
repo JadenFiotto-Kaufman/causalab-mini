@@ -335,5 +335,5 @@ def das_plan_model():
     from causalab_mini.plan.spec_v2 import Spec
 
     return Spec.model_validate(
-        json.loads((pathlib.Path(__file__).resolve().parents[1] / "documents" / "v2" / "das.json").read_text())
+        json.loads((pathlib.Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "v2_old" / "das.json").read_text())
     ).model

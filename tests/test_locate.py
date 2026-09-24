@@ -208,7 +208,7 @@ def test_a_tokenizer_that_disagrees_with_the_plan_is_refused_by_name(model_engin
     from causalab_mini import plan
     from causalab_mini.engine import steps
 
-    raw = json.loads((REPO / "documents" / "v2" / "entity_patch.json").read_text())
+    raw = json.loads((REPO / "tests" / "fixtures" / "v2_old" / "entity_patch.json").read_text())
     built = plan.build_request(raw, data_root, model_engine)
     forward = of_kind(built, plan.Forward)[0]
     assert forward.sample.endswith("tomorrow is"), "the client put its own reading in the plan"

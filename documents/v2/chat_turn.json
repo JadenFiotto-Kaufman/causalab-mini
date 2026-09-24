@@ -1,92 +1,40 @@
 {
   "header": {
-    "description": "A chat prompt, and a position inside one of its turns. The `base` role's field is a list of {'role', 'content'} messages rather than a string, so the compiler renders it through the checkpoint's own chat template and records where each turn landed; a position may then name a turn the way it names a variable. This one reads the last token of the SECOND user turn \u2014 `{'segment': 'user[1]'}`, because the conversation has two and a bare 'user' is ambiguous, the same rule a variable that occurs twice gets. The template's control tokens are between the turns and in none of them, so the read is at the question's own last token and not at `[/INST]`."
+    "description": "A chat prompt, and a position inside one of its turns. The `chat` column holds a list of {'role', 'content'} messages rather than a string, so the compiler renders it through the checkpoint's own chat template and records where each turn landed; a position may then name a turn the way it names a variable. `blanked` zeroes, and reads, the last token of the SECOND user turn — `{'segment': 'user[1]'}`, because the conversation has two and a bare 'user' is ambiguous, the same rule a variable that occurs twice gets. The template's control tokens are between the turns and in none of them, so the position is the question's own last token and not `[/INST]`."
   },
   "model": {
     "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
     "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
     "dtype": "fp32"
   },
-  "roles": {
-    "base": {
-      "field": "chat"
-    }
-  },
-  "sites": {
-    "target": {
-      "component": "block_output",
-      "layers": [
-        0
-      ]
-    },
-    "head": {
-      "component": "logits"
-    }
-  },
-  "interventions": {
-    "ask": {
-      "reads": {
-        "asked": {
-          "site": "target",
-          "pos": {
-            "index": -1,
-            "scope": {
-              "segment": "user[1]"
-            }
-          },
-          "model": "zeroed",
-          "input": "base"
-        },
-        "logits": {
-          "site": "head",
-          "pos": -1,
-          "model": "zeroed",
-          "input": "base"
-        }
-      },
-      "writes": {
-        "blank": {
-          "site": "target",
-          "pos": {
-            "index": -1,
-            "scope": {
-              "segment": "user[1]"
-            }
-          },
-          "mechanism": "swap",
-          "operand": 0.0
-        }
-      },
-      "models": {
-        "zeroed": {
-          "input": "base",
-          "writes": [
-            "blank"
-          ]
-        }
-      },
-      "metrics": {
-        "p_answer": {
-          "kind": "token_prob",
-          "of": "logits",
-          "token": "base_answer"
-        }
-      }
-    }
-  },
+  "data": {"chats": {"path": "weekdays/chat"}},
+  "sites": {"target": {"component": "block_output", "layers": [0]}, "head": {"component": "logits"}},
   "steps": {
-    "score": {
-      "kind": "observe",
-      "interventions": "ask",
-      "rows": {
-        "base": "weekdays/chat"
-      },
-      "saves": [
-        {
-          "value": "p_answer",
-          "file_path": "p_answer.json"
+    "blanked": {
+      "kind": "forward",
+      "data": "chats",
+      "field": "chat",
+      "interventions": {
+        "writes": {
+          "blank": {
+            "site": "target",
+            "pos": {"index": -1, "scope": {"segment": "user[1]"}},
+            "mechanism": "swap",
+            "operand": 0.0
+          }
         }
-      ]
-    }
+      },
+      "reads": {
+        "asked": {"site": "target", "pos": {"index": -1, "scope": {"segment": "user[1]"}}},
+        "logits": {"site": "head", "pos": -1}
+      }
+    },
+    "p_answer": {
+      "kind": "metric",
+      "metric": "token_prob",
+      "of": "blanked.logits",
+      "token": "chats.base_answer"
+    },
+    "saves": {"p_answer": "p_answer.json"}
   }
 }

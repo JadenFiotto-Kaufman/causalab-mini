@@ -21,7 +21,7 @@ from causalab_mini.plan import sweep
 from causalab_mini.plan.spec_v2 import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-V2 = REPO / "documents" / "v2"
+V2 = REPO / "tests" / "fixtures" / "v2_old"
 
 
 def _point(name):

@@ -7,167 +7,101 @@
     "revision": "4e20de362430cd3b72f300e6b0f18e50e7166e08",
     "dtype": "fp32"
   },
-  "roles": {
-    "base": {
-      "field": "input"
-    },
-    "counterfactual": {
-      "field": "counterfactual_inputs[0]"
-    }
+  "data": {
+    "train": {"path": "weekdays_full/data#train"},
+    "test": {"path": "weekdays_full/data#test"}
   },
   "sites": {
-    "target": {
-      "component": "block_output",
-      "layers": [
-        8
-      ]
-    },
-    "head": {
-      "component": "lm_head"
-    }
+    "target": {"component": "block_output", "layers": [8]},
+    "head": {"component": "lm_head"}
   },
-  "featurizers": {
-    "rot": {
-      "kind": "subspace",
-      "k": {
-        "sweep": [
-          1,
-          4,
-          16,
-          64
-        ]
-      }
-    }
-  },
+  "featurizers": {"rot": {"kind": "subspace", "k": {"sweep": [1, 4, 16, 64]}}},
   "interventions": {
+    "cf_read": {"reads": {"v_cf": {"site": "target", "pos": -4, "featurizer": "fit.rot"}}},
     "das": {
-      "reads": {
-        "v_cf": {
-          "site": "target",
-          "pos": -4,
-          "model": "original",
-          "input": "counterfactual",
-          "featurizer": "rot"
-        },
-        "logits": {
-          "site": "head",
-          "pos": -1,
-          "model": "patched",
-          "input": "base"
-        }
-      },
       "writes": {
         "patch": {
           "site": "target",
           "pos": -4,
           "mechanism": "swap",
-          "operand": "v_cf",
-          "featurizer": "rot"
+          "operand": "counterfactual.v_cf",
+          "featurizer": "fit.rot"
         }
       },
-      "models": {
-        "patched": {
-          "input": "base",
-          "writes": [
-            "patch"
-          ]
-        }
-      },
-      "metrics": {
-        "iia": {
-          "kind": "match",
-          "of": "logits",
-          "token_form": "space_prefixed",
-          "expected": "cf_answer"
-        },
-        "logit_diff": {
-          "kind": "logit_diff",
-          "of": "logits",
-          "token_form": "space_prefixed",
-          "a": "cf_answer",
-          "b": "base_answer"
-        },
-        "ce": {
-          "kind": "cross_entropy",
-          "of": "logits",
-          "token_form": "space_prefixed",
-          "target": "cf_answer"
-        }
-      }
+      "reads": {"logits": {"site": "head", "pos": -1}}
     }
   },
   "steps": {
     "fit": {
       "kind": "fit",
-      "interventions": "das",
-      "rows": {
-        "base": "weekdays_full/data#train",
-        "counterfactual": "weekdays_full/data#train"
-      },
-      "params": [
-        "rot"
-      ],
-      "objective": [
-        [
-          1.0,
-          "ce"
-        ]
-      ],
+      "train": ["rot"],
+      "objective": [[1.0, "ce"]],
       "epochs": 20,
-      "pairs": 10,
+      "batch_size": 10,
       "seed": 0,
-      "optimizer": {
-        "name": "adamw",
-        "lr": 0.003,
-        "weight_decay": 0.0
-      },
-      "early_stop": {
-        "metric": "iia",
-        "mode": "max",
-        "patience": 20
-      },
-      "eval": {
-        "rows": {
-          "base": "weekdays_full/data#test",
-          "counterfactual": "weekdays_full/data#test"
+      "optimizer": {"name": "adamw", "lr": 0.003, "weight_decay": 0.0},
+      "early_stop": {"metric": "iia", "mode": "max", "patience": 20},
+      "eval": {"data": {"train": "test"}},
+      "steps": {
+        "counterfactual": {
+          "kind": "forward",
+          "data": "train",
+          "field": "counterfactual_inputs[0]",
+          "interventions": "cf_read"
         },
-        "saves": [
-          {
-            "value": "iia",
-            "file_path": "held_out_iia.json"
-          }
-        ]
+        "patched": {"kind": "forward", "data": "train", "field": "input", "interventions": "das"},
+        "iia": {
+          "kind": "metric",
+          "metric": "match",
+          "of": "patched.logits",
+          "expected": "train.cf_answer"
+        },
+        "logit_diff": {
+          "kind": "metric",
+          "metric": "logit_diff",
+          "of": "patched.logits",
+          "a": "train.cf_answer",
+          "b": "train.base_answer"
+        },
+        "ce": {
+          "kind": "metric",
+          "metric": "cross_entropy",
+          "of": "patched.logits",
+          "target": "train.cf_answer"
+        }
       }
     },
-    "score": {
-      "kind": "observe",
-      "interventions": "das",
-      "rows": {
-        "base": "weekdays_full/data#test",
-        "counterfactual": "weekdays_full/data#test"
-      },
-      "saves": [
-        {
-          "value": "iia",
-          "file_path": "iia.json"
-        },
-        {
-          "value": "logit_diff",
-          "file_path": "logit_diff.json"
-        }
-      ]
+    "counterfactual": {
+      "kind": "forward",
+      "data": "test",
+      "field": "counterfactual_inputs[0]",
+      "interventions": "cf_read"
     },
-    "weights": {
-      "kind": "weights",
-      "names": [
-        "rot"
-      ],
-      "saves": [
-        {
-          "value": "rot",
-          "file_path": "rot.safetensors"
-        }
-      ]
+    "patched": {"kind": "forward", "data": "test", "field": "input", "interventions": "das"},
+    "iia": {
+      "kind": "metric",
+      "metric": "match",
+      "of": "patched.logits",
+      "expected": "test.cf_answer"
+    },
+    "logit_diff": {
+      "kind": "metric",
+      "metric": "logit_diff",
+      "of": "patched.logits",
+      "a": "test.cf_answer",
+      "b": "test.base_answer"
+    },
+    "ce": {
+      "kind": "metric",
+      "metric": "cross_entropy",
+      "of": "patched.logits",
+      "target": "test.cf_answer"
+    },
+    "saves": {
+      "fit.iia": "held_out_iia.json",
+      "iia": "iia.json",
+      "logit_diff": "logit_diff.json",
+      "fit.rot": "rot.safetensors"
     }
   }
 }

@@ -23,8 +23,8 @@ from causalab_mini.ops import featurizer
 from causalab_mini.plan.spec_v2 import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-DBM = REPO / "documents" / "v2" / "dbm.json"
-PATCHING = REPO / "documents" / "v2" / "patching.json"
+DBM = REPO / "tests" / "fixtures" / "v2_old" / "dbm.json"
+PATCHING = REPO / "tests" / "fixtures" / "v2_old" / "patching.json"
 
 
 @pytest.fixture

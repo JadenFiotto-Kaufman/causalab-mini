@@ -28,7 +28,7 @@ from causalab_mini.plan.spec_v2 import Spec
 from causalab_mini.shapes import Where
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-WINDOW = REPO / "documents" / "v2" / "window_patch.json"
+WINDOW = REPO / "tests" / "fixtures" / "v2_old" / "window_patch.json"
 THREE = REPO / "documents" / "multi_position_patch_cpu.json"
 
 
@@ -209,7 +209,7 @@ def test_a_write_and_its_operand_cover_the_same_window():
 
 
 def test_a_referenced_output_must_match_the_window_too(data_root, model_engine):
-    raw = json.loads((REPO / "documents" / "v2" / "mean_ablation.json").read_text())
+    raw = json.loads((REPO / "tests" / "fixtures" / "v2_old" / "mean_ablation.json").read_text())
     raw["interventions"]["ablated"]["writes"]["ablate"]["pos"] = {"last": 2}
     with pytest.raises(plan.PlanError, match="covers 2 position\\(s\\) but 'mean' was read over \\[1\\]"):
         plan.build_request(raw, data_root, model_engine)

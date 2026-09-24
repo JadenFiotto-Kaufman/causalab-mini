@@ -18,7 +18,7 @@ from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.plan.spec_v2 import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-ZERO = REPO / "documents" / "v2" / "zero_ablation.json"
+ZERO = REPO / "tests" / "fixtures" / "v2_old" / "zero_ablation.json"
 AT = ((2,), (2,))
 
 
@@ -123,7 +123,7 @@ def test_a_mechanism_and_its_numbers_must_agree(zero_raw, edit, message):
 def test_a_fit_may_early_stop_on_a_minimized_metric(data_root, model_engine):
     """`mode: min` on the cross-entropy: the objective and the early stop
     agree on direction, which the protocol allows and mini refused."""
-    raw = json.loads((REPO / "documents" / "v2" / "das.json").read_text())
+    raw = json.loads((REPO / "tests" / "fixtures" / "v2_old" / "das.json").read_text())
     raw["steps"]["fit"]["early_stop"] = {"metric": "ce", "mode": "min", "patience": 3}
     executed = model_engine.execute(plan.build_request(raw, data_root, model_engine))
     curve = executed.step("fit", plan.Fit).results["train/eval"].squeeze(-1)
@@ -134,7 +134,7 @@ def test_a_fit_may_early_stop_on_a_minimized_metric(data_root, model_engine):
 # clamp and renormalize
 # --------------------------------------------------------------------- #
 
-STEER = REPO / "documents" / "v2" / "steer_renormalize.json"
+STEER = REPO / "tests" / "fixtures" / "v2_old" / "steer_renormalize.json"
 
 
 def test_clamp_bounds_either_side_and_takes_no_operand():

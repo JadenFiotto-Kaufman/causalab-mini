@@ -1,98 +1,47 @@
 {
   "header": {
-    "description": "The multi-position patch as ONE write: three content tokens of the counterfactual, -4/-3/-2, swapped into the base in a single window, {'span': [-4, -1]}. documents/multi_position_patch_cpu.json is the same experiment in the protocol's format as three writes at -4, -3, -2 - and the two produce the same logits to the bit, which is the test of what a window is."
+    "description": "The multi-position patch as ONE write: three content tokens of the counterfactual, -4/-3/-2, swapped into the base in a single window, {'span': [-4, -1]}. documents/multi_position_patch_cpu.json is the same experiment in the protocol's format as three writes at -4, -3, -2 — and the two produce the same logits to the bit, which is the test of what a window is."
   },
   "model": {
     "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
     "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
     "dtype": "fp32"
   },
-  "roles": {
-    "base": {
-      "field": "input"
-    },
-    "counterfactual": {
-      "field": "counterfactual_inputs[0]"
-    }
-  },
+  "data": {"pairs": {"path": "weekdays/train"}},
   "sites": {
-    "target": {
-      "component": "block_output",
-      "layers": [
-        0
-      ]
-    },
-    "head": {
-      "component": "lm_head"
-    }
-  },
-  "interventions": {
-    "window": {
-      "reads": {
-        "v_cf": {
-          "site": "target",
-          "pos": {
-            "span": [
-              -4,
-              -1
-            ]
-          },
-          "model": "original",
-          "input": "counterfactual"
-        },
-        "logits": {
-          "site": "head",
-          "pos": -1,
-          "model": "patched",
-          "input": "base"
-        }
-      },
-      "writes": {
-        "patch": {
-          "site": "target",
-          "pos": {
-            "span": [
-              -4,
-              -1
-            ]
-          },
-          "mechanism": "swap",
-          "operand": "v_cf"
-        }
-      },
-      "models": {
-        "patched": {
-          "input": "base",
-          "writes": [
-            "patch"
-          ]
-        }
-      },
-      "metrics": {
-        "logit_diff": {
-          "kind": "logit_diff",
-          "of": "logits",
-          "a": "cf_answer",
-          "b": "base_answer",
-          "token_form": "space_prefixed"
-        }
-      }
-    }
+    "target": {"component": "block_output", "layers": [0]},
+    "head": {"component": "lm_head"}
   },
   "steps": {
-    "score": {
-      "kind": "observe",
-      "interventions": "window",
-      "rows": {
-        "base": "weekdays/train",
-        "counterfactual": "weekdays/train"
-      },
-      "saves": [
-        {
-          "value": "logit_diff",
-          "file_path": "logit_diff.json"
+    "counterfactual": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "counterfactual_inputs[0]",
+      "reads": {"v_cf": {"site": "target", "pos": {"span": [-4, -1]}}}
+    },
+    "patched": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "input",
+      "interventions": {
+        "writes": {
+          "patch": {
+            "site": "target",
+            "pos": {"span": [-4, -1]},
+            "mechanism": "swap",
+            "operand": "counterfactual.v_cf"
+          }
         }
-      ]
-    }
+      },
+      "reads": {"logits": {"site": "head", "pos": -1}}
+    },
+    "logit_diff": {
+      "kind": "metric",
+      "metric": "logit_diff",
+      "of": "patched.logits",
+      "a": "pairs.cf_answer",
+      "b": "pairs.base_answer"
+    },
+    "saves": {"logit_diff": "logit_diff.json"}
   }
 }

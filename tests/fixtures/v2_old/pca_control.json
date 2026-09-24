@@ -1,0 +1,107 @@
+{
+  "header": {
+    "description": "The PCA control: the same interchange DAS fits a rotation for, run through the top-4 principal directions of the residual stream instead \u2014 a basis loaded from what pca_harvest.json wrote, never trained. What a trained rotation has to beat."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "roles": {
+    "base": {
+      "field": "input"
+    },
+    "counterfactual": {
+      "field": "counterfactual_inputs[0]"
+    }
+  },
+  "sites": {
+    "target": {
+      "component": "block_output",
+      "layers": [
+        0
+      ]
+    },
+    "head": {
+      "component": "lm_head"
+    }
+  },
+  "featurizers": {
+    "rot": {
+      "kind": "pca",
+      "k": 4,
+      "file_path": "documents/artifacts/pca.safetensors"
+    }
+  },
+  "interventions": {
+    "das": {
+      "reads": {
+        "v_cf": {
+          "site": "target",
+          "pos": -1,
+          "model": "original",
+          "input": "counterfactual",
+          "featurizer": "rot"
+        },
+        "logits": {
+          "site": "head",
+          "pos": -1,
+          "model": "patched",
+          "input": "base"
+        }
+      },
+      "writes": {
+        "patch": {
+          "site": "target",
+          "pos": -1,
+          "featurizer": "rot",
+          "mechanism": "swap",
+          "operand": "v_cf"
+        }
+      },
+      "models": {
+        "patched": {
+          "input": "base",
+          "writes": [
+            "patch"
+          ]
+        }
+      },
+      "metrics": {
+        "iia": {
+          "kind": "logit_diff",
+          "of": "logits",
+          "a": "cf_answer",
+          "b": "base_answer",
+          "token_form": "space_prefixed"
+        },
+        "ce": {
+          "kind": "cross_entropy",
+          "of": "logits",
+          "target": "cf_answer",
+          "token_form": "space_prefixed"
+        }
+      }
+    }
+  },
+  "steps": {
+    "score": {
+      "kind": "observe",
+      "interventions": "das",
+      "rows": {
+        "base": "weekdays/data#test",
+        "counterfactual": "weekdays/data#test"
+      },
+      "saves": [
+        {
+          "value": "iia",
+          "file_path": "iia.json"
+        },
+        {
+          "value": "ce",
+          "file_path": "ce.json"
+        }
+      ]
+    }
+  }
+}

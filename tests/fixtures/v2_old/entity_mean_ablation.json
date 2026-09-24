@@ -1,0 +1,142 @@
+{
+  "header": {
+    "description": "Mean ablation where the mean is taken over a RAGGED read: the tokens of each row's entity (`{'all': true, 'scope': {'variable': 'entity'}}` \u2014 the row's own entity text, located in its prompt \u2014 one token for Friday, three for Thursday), averaged over every entity token in the corpus, then swapped in at the answer position. A row whose entity text is not in its prompt would contribute nothing and stay a row; here every row has one."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "roles": {
+    "base": {
+      "field": "input"
+    }
+  },
+  "sites": {
+    "target": {
+      "component": "block_output",
+      "layers": [
+        0
+      ]
+    },
+    "head": {
+      "component": "lm_head"
+    }
+  },
+  "interventions": {
+    "harvest": {
+      "reads": {
+        "acts": {
+          "site": "target",
+          "pos": {
+            "all": true,
+            "scope": {
+              "variable": "entity"
+            }
+          },
+          "input": "base"
+        }
+      }
+    },
+    "clean": {
+      "reads": {
+        "logits": {
+          "site": "head",
+          "pos": -1,
+          "input": "base"
+        }
+      },
+      "metrics": {
+        "logit_diff": {
+          "kind": "logit_diff",
+          "of": "logits",
+          "a": "cf_answer",
+          "b": "base_answer"
+        }
+      }
+    },
+    "ablated": {
+      "reads": {
+        "logits": {
+          "site": "head",
+          "pos": -1,
+          "model": "ablated",
+          "input": "base"
+        }
+      },
+      "writes": {
+        "ablate": {
+          "site": "target",
+          "pos": -1,
+          "mechanism": "swap",
+          "operand": {
+            "ref": "mean"
+          }
+        }
+      },
+      "models": {
+        "ablated": {
+          "input": "base",
+          "writes": [
+            "ablate"
+          ]
+        }
+      },
+      "metrics": {
+        "logit_diff": {
+          "kind": "logit_diff",
+          "of": "logits",
+          "a": "cf_answer",
+          "b": "base_answer"
+        }
+      }
+    }
+  },
+  "steps": {
+    "harvest": {
+      "kind": "observe",
+      "interventions": "harvest",
+      "rows": {
+        "base": "weekdays/train"
+      },
+      "outputs": {
+        "mean": {
+          "read": "acts",
+          "reduce": "mean"
+        }
+      },
+      "saves": [
+        {
+          "value": "mean",
+          "file_path": "entity_mean.safetensors"
+        }
+      ]
+    },
+    "clean": {
+      "kind": "observe",
+      "interventions": "clean",
+      "rows": {
+        "base": "weekdays/train"
+      },
+      "saves": [
+        {
+          "value": "logit_diff",
+          "file_path": "clean.json"
+        }
+      ]
+    },
+    "ablated": {
+      "kind": "observe",
+      "interventions": "ablated",
+      "rows": {
+        "base": "weekdays/train"
+      },
+      "saves": [
+        {
+          "value": "logit_diff",
+          "file_path": "ablated.json"
+        }
+      ]
+    }
+  }
+}

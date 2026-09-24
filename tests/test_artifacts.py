@@ -19,10 +19,10 @@ from causalab_mini.ops import featurizer
 from causalab_mini.plan.spec_v2 import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-DAS = REPO / "documents" / "v2" / "das.json"
-APPLY = REPO / "documents" / "v2" / "das_apply.json"
-HARVEST = REPO / "documents" / "v2" / "pca_harvest.json"
-CONTROL = REPO / "documents" / "v2" / "pca_control.json"
+DAS = REPO / "tests" / "fixtures" / "v2_old" / "das.json"
+APPLY = REPO / "tests" / "fixtures" / "v2_old" / "das_apply.json"
+HARVEST = REPO / "tests" / "fixtures" / "v2_old" / "pca_harvest.json"
+CONTROL = REPO / "tests" / "fixtures" / "v2_old" / "pca_control.json"
 
 
 def _fit_into(tmp_path, data_root, engine):

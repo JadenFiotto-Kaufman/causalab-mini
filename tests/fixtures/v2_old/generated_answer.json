@@ -1,0 +1,73 @@
+{
+  "header": {
+    "description": "The continuation frame, read where the model said the row's own text. `said` is a word this checkpoint does say in its first six tokens for two of these rows and does not for the other two \u2014 the weights are random, so what it says is gibberish and the column was written to match it; on a real model `said` would be the answer. The read is {'frame': 'generated', 'index': -1, 'scope': {'variable': 'said'}}: the last token of that word in what this row generated. Whether the model said it at all is a reported result \u2014 two rows score and two come back `alignment_missing` \u2014 rather than an exception that ends the run. The second read asks where the row stopped; mini holds EOS off so the decode runs to its bound, so no row stops and every row says so."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "roles": {
+    "base": {
+      "field": "input"
+    }
+  },
+  "sites": {
+    "head": {
+      "component": "lm_head"
+    }
+  },
+  "interventions": {
+    "say": {
+      "reads": {
+        "at_said": {
+          "site": "head",
+          "pos": {
+            "frame": "generated",
+            "index": -1,
+            "scope": {
+              "variable": "said"
+            }
+          },
+          "model": "original",
+          "input": "base"
+        },
+        "at_stop": {
+          "site": "head",
+          "pos": {
+            "frame": "generated",
+            "index": -1,
+            "scope": {
+              "segment": "eos"
+            }
+          },
+          "model": "original",
+          "input": "base"
+        }
+      },
+      "metrics": {
+        "p_answer": {
+          "kind": "token_prob",
+          "of": "at_said",
+          "token": "cf_answer"
+        }
+      },
+      "decode": 6
+    }
+  },
+  "steps": {
+    "score": {
+      "kind": "observe",
+      "interventions": "say",
+      "rows": {
+        "base": "weekdays/said"
+      },
+      "saves": [
+        {
+          "value": "p_answer",
+          "file_path": "p_answer.json"
+        }
+      ]
+    }
+  }
+}

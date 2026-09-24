@@ -29,7 +29,7 @@ from causalab_mini.plan.spec_v2 import Spec
 from causalab_mini.shapes import Anchor, Where
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-ENTITY = REPO / "documents" / "v2" / "entity_mean_ablation.json"
+ENTITY = REPO / "tests" / "fixtures" / "v2_old" / "entity_mean_ablation.json"
 
 
 @pytest.fixture
@@ -159,7 +159,7 @@ def test_an_entity_patch_between_rows_of_different_widths_is_refused_by_row(data
     the windows differ and no landing policy exists here. Refused, naming
     the rows — the protocol's `exact_length_buckets` and `padded_masked` are
     what would make it land."""
-    raw = json.loads((REPO / "documents" / "v2" / "patching.json").read_text())
+    raw = json.loads((REPO / "tests" / "fixtures" / "v2_old" / "patching.json").read_text())
     reads = raw["interventions"]["patching"]["reads"]
     entity = {"all": True, "scope": {"variable": "entity"}}
     reads["v_cf"]["pos"] = entity
@@ -183,7 +183,7 @@ def test_an_unreduced_ragged_output_cannot_be_an_operand(entity_raw, data_root, 
 
 @pytest.fixture
 def patch_raw():
-    return json.loads((REPO / "documents" / "v2" / "entity_patch.json").read_text())
+    return json.loads((REPO / "tests" / "fixtures" / "v2_old" / "entity_patch.json").read_text())
 
 
 def _holed(data_root, tmp_path, entity="Neptune", drop=None):

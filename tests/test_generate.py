@@ -31,7 +31,7 @@ from causalab_mini.plan.explain import explain
 from causalab_mini.plan.spec_v2 import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-PROBE = REPO / "documents" / "v2" / "generate_probe.json"
+PROBE = REPO / "tests" / "fixtures" / "v2_old" / "generate_probe.json"
 
 
 @pytest.fixture
@@ -200,7 +200,7 @@ def test_a_read_over_a_stack_is_refused_when_it_would_hold_too_much(
 # --------------------------------------------------------------------- #
 
 
-ANSWER = REPO / "documents" / "v2" / "generated_answer.json"
+ANSWER = REPO / "tests" / "fixtures" / "v2_old" / "generated_answer.json"
 
 
 def test_whether_the_model_said_it_is_a_result_and_not_an_exception(data_root, model_engine):

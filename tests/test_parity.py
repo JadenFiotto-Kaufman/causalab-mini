@@ -1,13 +1,15 @@
-"""The steps-first format reproduces the corpus: same plans, same numbers.
+"""The steps-first corpus is the old one: same plans, same numbers.
 
-Every roles-and-interventions document, rewritten by `convert_v2.py` and
-compiled through the new front end, must compile to the plan the old one
-did — the same forwards in the same order, with the same ids, masks, taps,
-positions and operands; the same metrics, reductions, fits and files — and,
-for the 22 the suite can run, write the bytes `test_golden.py` pinned.
-Names are the one thing allowed to differ, so a plan is compared with every
-name taken out: an operand is the read that produced it, an op is where it
-acts, a file is where it lands.
+`documents/v2/` and `documents/real/` are written in the steps-first
+format, and `tests/fixtures/*_old/` keeps them as they were. Every
+rewritten document must compile to the plan its old self did — the same
+model calls in the same order, with the same ids, masks, taps, positions
+and operands; the same metrics, reductions, fits and files. (`test_golden.py`
+holds the 22 the suite can run to the bytes they wrote.) And the old one,
+put through `convert_v2.py`, must still write those bytes. Names are the
+one thing allowed to differ, so a plan is compared with every name taken
+out: an operand is the read that produced it, an op is where it acts, a
+file is where it lands.
 
 Test-only, like the converter, and deleted with the old format;
 `test_golden.py` stays as the lasting pin.
@@ -28,6 +30,7 @@ from causalab_mini.plan.spec import Model
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 DATA_ROOT = REPO / "documents" / "data"
+FIXTURES = REPO / "tests" / "fixtures"
 RUNNABLE = sorted(f"documents/v2/{path.name}" for path in (REPO / "documents" / "v2").glob("*.json"))
 REAL = sorted(f"documents/real/{path.name}" for path in (REPO / "documents" / "real").glob("*.json"))
 
@@ -103,19 +106,24 @@ def _same_plan(old, new):
         assert one[key] == other[key], key
 
 
+def _old(document):
+    """The document as it was, before the rewrite."""
+    folder, name = document.split("/")[1:]
+    return json.loads((FIXTURES / f"{folder}_old" / name).read_text())
+
+
 @pytest.mark.parametrize("document", RUNNABLE + REAL)
-def test_a_converted_document_compiles_to_the_plan_it_was(document, engines, monkeypatch):
+def test_a_rewritten_document_compiles_to_the_plan_it_was(document, engines, monkeypatch):
     monkeypatch.chdir(REPO)
-    raw = json.loads((REPO / document).read_text())
-    converted = convert(raw)
-    assert [label for label, _ in sweep.points(converted)] == [label for label, _ in sweep.points(raw)]
-    engine = _engine(raw, engines, **({"dispatch": False} if document in REAL else {"device_map": "cpu"}))
-    _same_plan(plan.build_request(raw, DATA_ROOT, engine), plan.build_request(converted, DATA_ROOT, engine))
+    old, new = _old(document), json.loads((REPO / document).read_text())
+    assert [label for label, _ in sweep.points(new)] == [label for label, _ in sweep.points(old)]
+    engine = _engine(old, engines, **({"dispatch": False} if document in REAL else {"device_map": "cpu"}))
+    _same_plan(plan.build_request(old, DATA_ROOT, engine), plan.build_request(new, DATA_ROOT, engine))
 
 
 @pytest.mark.parametrize("document", RUNNABLE)
 def test_a_converted_document_writes_the_pinned_bytes(document, engines, tmp_path, monkeypatch):
     monkeypatch.chdir(REPO)
     converted = tmp_path / "converted.json"
-    converted.write_text(json.dumps(convert(json.loads((REPO / document).read_text()))))
+    converted.write_text(json.dumps(convert(_old(document))))
     assert outputs(str(converted), tmp_path / "out", engines) == json.loads(GOLDEN.read_text())[document]

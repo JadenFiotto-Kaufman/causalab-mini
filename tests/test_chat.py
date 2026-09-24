@@ -28,7 +28,7 @@ from causalab_mini.plan.spec_v2 import Spec
 from causalab_mini.shapes import Anchor, Where
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-CHAT = REPO / "documents" / "v2" / "chat_turn.json"
+CHAT = REPO / "tests" / "fixtures" / "v2_old" / "chat_turn.json"
 
 
 @pytest.fixture

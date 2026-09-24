@@ -19,7 +19,7 @@ from causalab_mini.plan import sweep
 from causalab_mini.plan.spec_v2 import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-LENS = REPO / "documents" / "v2" / "logit_lens.json"
+LENS = REPO / "tests" / "fixtures" / "v2_old" / "logit_lens.json"
 
 
 @pytest.fixture
@@ -101,7 +101,7 @@ def test_where_a_logits_view_is_refused(lens_raw, edit, message):
 
 
 def test_a_logits_view_cannot_be_written_back():
-    raw = json.loads((REPO / "documents" / "v2" / "patching.json").read_text())
+    raw = json.loads((REPO / "tests" / "fixtures" / "v2_old" / "patching.json").read_text())
     raw["interventions"]["patching"]["reads"]["v_cf"]["view"] = "logits"
     with pytest.raises(ValidationError, match="is a logits view, which is vocabulary-wide"):
         Spec.model_validate(raw)

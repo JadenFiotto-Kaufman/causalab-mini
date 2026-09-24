@@ -14,7 +14,7 @@ import pytest
 from causalab_mini import cli
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-DAS = str(REPO / "documents" / "v2" / "das.json")
+DAS = str(REPO / "tests" / "fixtures" / "v2_old" / "das.json")
 PATCHING = str(REPO / "documents" / "minimal_cpu.json")
 DATA = str(REPO / "documents" / "data")
 TINY = "hf-internal-testing/tiny-random-LlamaForCausalLM"

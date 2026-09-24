@@ -1,0 +1,116 @@
+{
+  "header": {
+    "description": "Zero ablation, the cheapest baseline there is: the residual stream at the answer position replaced by 0.0, scored against the un-intervened model. The operand is a number, not a read \u2014 the write seam's operand was never a read-name seam."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "roles": {
+    "base": {
+      "field": "input"
+    }
+  },
+  "sites": {
+    "target": {
+      "component": "block_output",
+      "layers": [
+        0
+      ]
+    },
+    "head": {
+      "component": "lm_head"
+    }
+  },
+  "interventions": {
+    "clean": {
+      "reads": {
+        "logits": {
+          "site": "head",
+          "pos": -1,
+          "input": "base"
+        }
+      },
+      "metrics": {
+        "logit_diff": {
+          "kind": "logit_diff",
+          "of": "logits",
+          "a": "cf_answer",
+          "b": "base_answer"
+        }
+      }
+    },
+    "zeroed": {
+      "reads": {
+        "logits": {
+          "site": "head",
+          "pos": -1,
+          "model": "zeroed",
+          "input": "base"
+        }
+      },
+      "writes": {
+        "zero": {
+          "site": "target",
+          "pos": -1,
+          "mechanism": "swap",
+          "operand": 0.0
+        }
+      },
+      "models": {
+        "zeroed": {
+          "input": "base",
+          "writes": [
+            "zero"
+          ]
+        }
+      },
+      "metrics": {
+        "logit_diff": {
+          "kind": "logit_diff",
+          "of": "logits",
+          "a": "cf_answer",
+          "b": "base_answer"
+        },
+        "p_answer": {
+          "kind": "token_prob",
+          "of": "logits",
+          "token": "cf_answer"
+        }
+      }
+    }
+  },
+  "steps": {
+    "clean": {
+      "kind": "observe",
+      "interventions": "clean",
+      "rows": {
+        "base": "weekdays/train"
+      },
+      "saves": [
+        {
+          "value": "logit_diff",
+          "file_path": "clean.json"
+        }
+      ]
+    },
+    "zeroed": {
+      "kind": "observe",
+      "interventions": "zeroed",
+      "rows": {
+        "base": "weekdays/train"
+      },
+      "saves": [
+        {
+          "value": "logit_diff",
+          "file_path": "zeroed.json"
+        },
+        {
+          "value": "p_answer",
+          "file_path": "p_answer.json"
+        }
+      ]
+    }
+  }
+}

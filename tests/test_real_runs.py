@@ -79,7 +79,7 @@ def test_what_comes_home_from_a_run_is_plain(data_root, model_engine):
     """A server runs the plan by value and cannot pickle one of its classes
     back. So results travel as `{step path: {name: tensor}}` — strings and
     tensors — and fill the plan the client never gave up."""
-    raw = json.loads((REPO / "documents" / "v2" / "das.json").read_text())
+    raw = json.loads((REPO / "tests" / "fixtures" / "v2_old" / "das.json").read_text())
     executed = model_engine.execute(plan.build_request(raw, data_root, model_engine))
     home = plan_module.results_of(executed)
 
@@ -99,7 +99,7 @@ def test_what_comes_home_from_a_run_is_plain(data_root, model_engine):
 def test_the_run_record_says_what_dtype_was_served(data_root, model_engine):
     """The document's dtype is a request; a server serves its own (NDIF: bf16
     under an fp32 document). What ran is in `run.json`."""
-    raw = json.loads((REPO / "documents" / "v2" / "patching.json").read_text())
+    raw = json.loads((REPO / "tests" / "fixtures" / "v2_old" / "patching.json").read_text())
     executed = model_engine.execute(plan.build_request(raw, data_root, model_engine))
     assert executed.provenance["served_dtype"] == "torch.float32"
 
@@ -108,7 +108,7 @@ def test_the_real_documents_are_valid_and_compile_without_weights(data_root):
     from causalab_mini.plan import sweep
     from causalab_mini.plan.spec_v2 import Spec
 
-    found = sorted((REPO / "documents" / "real").glob("*.json"))
+    found = sorted((REPO / "tests" / "fixtures" / "real_old").glob("*.json"))
     assert len(found) == 5
     for path in found:
         for _, point in sweep.points(json.loads(path.read_text())):

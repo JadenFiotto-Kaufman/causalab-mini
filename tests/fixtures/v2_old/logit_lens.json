@@ -1,0 +1,73 @@
+{
+  "header": {
+    "description": "The logit lens as one document: at every layer, push the residual stream at the answer position through the model's final norm and head and read what it would say if that were its last layer. `view: logits` is the projection; the layer sweep is the lens; `token_prob` on the answer is what to plot against depth. Two layers here, so two points."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "roles": {
+    "base": {
+      "field": "input"
+    }
+  },
+  "sites": {
+    "resid": {
+      "component": "block_output",
+      "layers": {
+        "sweep": [
+          [
+            0
+          ],
+          [
+            1
+          ]
+        ]
+      }
+    }
+  },
+  "interventions": {
+    "lens": {
+      "reads": {
+        "lens": {
+          "site": "resid",
+          "pos": -1,
+          "input": "base",
+          "view": "logits"
+        }
+      },
+      "metrics": {
+        "p_answer": {
+          "kind": "token_prob",
+          "of": "lens",
+          "token": "base_answer"
+        },
+        "top1": {
+          "kind": "match",
+          "of": "lens",
+          "expected": "base_answer"
+        }
+      }
+    }
+  },
+  "steps": {
+    "lens": {
+      "kind": "observe",
+      "interventions": "lens",
+      "rows": {
+        "base": "weekdays/train"
+      },
+      "saves": [
+        {
+          "value": "p_answer",
+          "file_path": "p_answer.json"
+        },
+        {
+          "value": "top1",
+          "file_path": "top1.json"
+        }
+      ]
+    }
+  }
+}

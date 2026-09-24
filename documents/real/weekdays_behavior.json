@@ -7,61 +7,27 @@
     "revision": "4e20de362430cd3b72f300e6b0f18e50e7166e08",
     "dtype": "fp32"
   },
-  "roles": {
-    "base": {
-      "field": "input"
-    }
-  },
-  "sites": {
-    "head": {
-      "component": "lm_head"
-    }
-  },
-  "interventions": {
-    "behavior": {
-      "reads": {
-        "logits": {
-          "site": "head",
-          "pos": -1,
-          "model": "original",
-          "input": "base"
-        }
-      },
-      "writes": {},
-      "models": {},
-      "metrics": {
-        "accuracy": {
-          "kind": "match",
-          "of": "logits",
-          "token_form": "space_prefixed",
-          "expected": "base_answer"
-        },
-        "p_answer": {
-          "kind": "token_prob",
-          "of": "logits",
-          "token_form": "space_prefixed",
-          "token": "base_answer"
-        }
-      }
-    }
-  },
+  "data": {"days": {"path": "weekdays_full/data"}},
+  "sites": {"head": {"component": "lm_head"}},
   "steps": {
-    "score": {
-      "kind": "observe",
-      "interventions": "behavior",
-      "rows": {
-        "base": "weekdays_full/data"
-      },
-      "saves": [
-        {
-          "value": "accuracy",
-          "file_path": "accuracy.json"
-        },
-        {
-          "value": "p_answer",
-          "file_path": "p_answer.json"
-        }
-      ]
-    }
+    "answer": {
+      "kind": "forward",
+      "data": "days",
+      "field": "input",
+      "reads": {"logits": {"site": "head", "pos": -1}}
+    },
+    "accuracy": {
+      "kind": "metric",
+      "metric": "match",
+      "of": "answer.logits",
+      "expected": "days.base_answer"
+    },
+    "p_answer": {
+      "kind": "metric",
+      "metric": "token_prob",
+      "of": "answer.logits",
+      "token": "days.base_answer"
+    },
+    "saves": {"accuracy": "accuracy.json", "p_answer": "p_answer.json"}
   }
 }

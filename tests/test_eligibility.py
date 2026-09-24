@@ -23,8 +23,8 @@ from causalab_mini.plan import explain
 from causalab_mini.plan.spec_v2 import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-PATCHING = REPO / "documents" / "v2" / "patching.json"
-DAS = REPO / "documents" / "v2" / "das.json"
+PATCHING = REPO / "tests" / "fixtures" / "v2_old" / "patching.json"
+DAS = REPO / "tests" / "fixtures" / "v2_old" / "das.json"
 EXCLUDED = 1  # the row whose counterfactual answer is unknown
 
 
