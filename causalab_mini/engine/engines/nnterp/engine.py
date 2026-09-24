@@ -106,7 +106,7 @@ class NNterpEngine(Engine):
     def forward(self, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
         model, made = self.model, {}
         with model.trace(batch(forward)):
-            apply_taps(model, forward, values, featurizers)
+            apply_interventions(model, forward, values, featurizers)
             if forward.logits:
                 made["logits"] = model.logits.clone()
         return made.get("logits")
@@ -121,7 +121,7 @@ class NNterpEngine(Engine):
         with model.generate(batch(step), max_new_tokens=step.max_new_tokens, **step.generation) as tracer:
             if step.taps:
                 for index in tracer.iter[: step.max_new_tokens]:
-                    apply_taps(model, step, values, featurizers, index)
+                    apply_interventions(model, step, values, featurizers, index)
             made["ids"] = tracer.result[:, prompt:].clone()
         return made["ids"]
 
@@ -134,7 +134,7 @@ def batch(forward: Forward) -> dict[str, Any]:
     }
 
 
-def apply_taps(
+def apply_interventions(
     model: Any,
     forward: Forward,
     values: dict[str, Any],
