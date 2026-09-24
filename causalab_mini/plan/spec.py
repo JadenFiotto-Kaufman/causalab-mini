@@ -46,7 +46,7 @@ import json
 import re
 from typing import Annotated, Any, Iterator, Literal, NamedTuple, Union
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Discriminator, Field, PrivateAttr, StringConstraints, Tag, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Discriminator, Field, NonNegativeInt, StringConstraints, Tag, model_validator
 
 from .. import address
 from ..ops.metrics import COLUMNS as METRIC_COLUMNS
@@ -108,28 +108,20 @@ class Site(Node):
     #: At a per-head tensor, the heads this site is. The site's width is then
     #: theirs — `len(heads) · head_dim` — so a featurizer, a swap or a harvest
     #: here is of those heads and leaves the others alone.
-    heads: list[int] | None = None
+    heads: Annotated[list[NonNegativeInt], Field(min_length=1)] | None = None
     #: Anywhere with a known width, the single features this site is — the
     #: neurons of `mlp_activation`, say. Heads and units are one mechanism
     #: (a group of the feature axis) at two grains, so a site names one.
-    units: list[int] | None = None
+    units: Annotated[list[NonNegativeInt], Field(min_length=1)] | None = None
 
     @model_validator(mode="after")
     def _one_layer(self) -> "Site":
-        if self.heads is not None and self.units is not None:
-            raise ValueError("a site names heads or units, not both: they slice the same axis")
-        if self.units is not None and (
-            not self.units or len(set(self.units)) != len(self.units) or min(self.units) < 0
-        ):
-            raise ValueError("units is a non-empty list of distinct feature indices")
+        _refuse(self.heads is None or self.units is None, "a site names heads or units, not both: they slice the same axis")
+        for axis, one in (("head", self.heads), ("unit", self.units)):
+            _refuse(one is None or len(set(one)) == len(one), f"{axis}s are distinct {axis} indices")
         if self.heads is not None:
-            if not address.describe().get(self.component, {}).get("heads", False):
-                per_head = sorted(n for n, one in address.describe().items() if one["heads"])
-                raise ValueError(
-                    f"{self.component!r} is not a per-head tensor; `heads` applies at {per_head}"
-                )
-            if not self.heads or len(set(self.heads)) != len(self.heads) or min(self.heads) < 0:
-                raise ValueError("heads is a non-empty list of distinct head indices")
+            per_head = sorted(n for n, one in address.describe().items() if one["heads"])
+            _refuse(self.component in per_head, f"{self.component!r} is not a per-head tensor; `heads` applies at {per_head}")
         if isinstance(self.layers, list) and len(self.layers) != 1:
             raise ValueError(
                 "layers must be a one-element band, or \"all\"; a band spanning several "
@@ -537,6 +529,13 @@ class Fit(Node):
     #: what it produces is `<fit>.<ref>` at the root.
     steps: Steps
 
+    @property
+    def datasets(self) -> set[str]:
+        """Every declared dataset its body names: one draw indexes them all,
+        and its held-out run replaces each."""
+        calls = {one.data for _, one in self.steps.items() if isinstance(one, _Call) and isinstance(one.data, str)}
+        return calls | {one.dataset for _, one in self.steps.items() if isinstance(one, _Metric)}
+
     @model_validator(mode="after")
     def _one_body(self) -> "Fit":
         if self.steps.saves:
@@ -636,8 +635,6 @@ class Spec(Node):
     #: the ones it runs.
     interventions: dict[Name, Intervention] = Field(default_factory=dict)
     steps: Steps
-    #: each forward's ops, by the step's identity, once resolved (`ops`)
-    _ops: dict[int, tuple[dict[str, Read], dict[str, Write]]] = PrivateAttr(default_factory=dict)
 
     @property
     def digest(self) -> str:
@@ -669,13 +666,7 @@ class Spec(Node):
         """A forward's reads and the writes in force, each by name: its own
         reads, then each listed intervention's reads and writes, in the order
         the list gives. One name means one op of the step, so a name two of
-        them share is refused, naming both. Resolved once per step: the
-        checks and the compiler all ask."""
-        if id(step) not in self._ops:
-            self._ops[id(step)] = self._resolve(step)
-        return self._ops[id(step)]
-
-    def _resolve(self, step: Any) -> tuple[dict[str, Read], dict[str, Write]]:
+        them share is refused, naming both."""
         listed = step.interventions if isinstance(step.interventions, list) else [step.interventions]
         reads: dict[str, Read] = dict(step.reads)
         writes: dict[str, Write] = {}
@@ -921,9 +912,9 @@ def _call(
 
     for read_name, read in reads.items():
         what = f"read {read_name!r}"
-        component = site(what, read.site).component
+        place = site(what, read.site)
         _featurizer(spec, f"{where}: {what}", read.featurizer, trainers, visible)
-        if site(what, read.site).layers == "all":
+        if place.layers == "all":
             # one value with the layer axis first; what would make it more
             # than a read — a parameter set, a cut over the decode — is one
             # site, or one step, and every layer is many
@@ -939,9 +930,9 @@ def _call(
             )
         if read.view == "logits":
             _refuse(
-                component in RESIDUAL_STREAM,
+                place.component in RESIDUAL_STREAM,
                 f"{where}: {what}: view 'logits' projects the residual stream through the head, "
-                f"and {component!r} is not the residual stream (one of {sorted(RESIDUAL_STREAM)})",
+                f"and {place.component!r} is not the residual stream (one of {sorted(RESIDUAL_STREAM)})",
             )
             _refuse(
                 read.featurizer is None,
@@ -951,15 +942,15 @@ def _call(
 
     for write_name, write in writes.items():
         what = f"write {write_name!r}"
-        component = site(what, write.site).component
+        place = site(what, write.site)
         _refuse(
-            site(what, write.site).layers != "all",
+            place.layers != "all",
             f"{where}: {what}: a write is at one layer — a write at every layer is as many "
             "experiments; sweep `layers` for them",
         )
         _refuse(
-            not address.describe().get(component, {}).get("read_only", False),
-            f"{where}: {what}: {component!r} is read-only — the model's input, not an activation",
+            not address.describe().get(place.component, {}).get("read_only", False),
+            f"{where}: {what}: {place.component!r} is read-only — the model's input, not an activation",
         )
         _featurizer(spec, f"{where}: {what}", write.featurizer, trainers, visible)
         if isinstance(write.operand, str):
@@ -1140,8 +1131,7 @@ def _fit(spec: Spec, where: str, name: str, fit: Fit, body: dict[str, Ref]) -> N
             f"{where}: step {inner!r} writes its dataset in place; a fit's body declares each one "
             "under `data`, so `eval.data` can say what its held-out run uses instead",
         )
-    named = {one.data for _, one in fit.steps.items() if isinstance(one, _Call) and isinstance(one.data, str)}
-    named |= {one.dataset for _, one in fit.steps.items() if isinstance(one, _Metric)}
+    named = fit.datasets
     for trained, held_out in fit.eval.data.items():
         _refuse(
             trained in named,

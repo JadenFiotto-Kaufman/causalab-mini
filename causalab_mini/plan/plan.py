@@ -246,9 +246,12 @@ class Forward(Step):
     #: are in the frame's own coordinates, so the run attaches them and
     #: `locate` reads them exactly as it reads `eos` in the continuation.
     segments: tuple[dict[str, tuple[int, int]], ...] = ()
-    #: What of this call a save names — a read, or the step's own result by
-    #: the step's name: that, and only that, comes home in `results`.
-    keep: tuple[str, ...] = ()
+
+    @property
+    def keep(self) -> tuple[str, ...]:
+        """What of this call a save names — a read, or the step's own result
+        by the step's name: that, and only that, comes home in `results`."""
+        return tuple(save.value for save in self.saves)
 
     @property
     def dynamic(self) -> bool:
@@ -408,10 +411,7 @@ class Plan(Step):
         of what it produced. A sweep repeats them and this refuses; ask a point
         (`root.steps["seed=0"].all_results()`) instead.
         """
-        found: dict[str, Any] = {}
-        for name in _names(self):
-            found[name] = self.result(name)
-        return found
+        return {name: self.result(name) for name in _names(self)}
 
     def write(self, out_dir: str | Path) -> list[Path]:
         """Write this plan's save manifest, and its children's below it."""

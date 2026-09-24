@@ -201,8 +201,6 @@ def _spec_save(
     save = SaveFile(file_path=file, value=ref)
     if step.kind == "metric":
         save = replace(save, example_ids=rows_module.example_ids(table(step.dataset)), produced_by=spec.digest)
-    elif isinstance(target, Forward):
-        target = replace(target, keep=(*target.keep, ref))
     scope[head] = replace(target, saves=(*target.saves, save))
 
 
@@ -215,12 +213,7 @@ def _spec_fit(spec: Spec, name: str, fit: Any, table: Any, sites: _Sites, tokeni
     a shuffle that broke the pairing would fit a rotation against mismatched
     counterfactuals.
     """
-    keys = {
-        spec.dataset(step.data) if step.kind in ("forward", "generate") else step.dataset
-        for _, step in fit.steps.items()
-        if step.kind != "reduce"
-    }
-    counts = {key: len(table(key)) for key in sorted(keys)}
+    counts = {key: len(table(key)) for key in sorted(fit.datasets)}
     if len(set(counts.values())) != 1:
         raise PlanError(
             f"step {name!r}: its body's datasets have {counts} rows; one draw indexes them all, "
