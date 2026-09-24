@@ -26,7 +26,6 @@ from ..data import rows as rows_module, tokens
 from ..ops import featurizer as featurizer_module
 from ..ops import intervene as intervene_module
 from ..ops import locate as locate_module
-from ..ops import metrics as metrics_module
 from . import sweep
 from ..shapes import Selection, TokenRows, Where
 from .plan import (
@@ -201,18 +200,7 @@ def _spec_save(
     step, target = steps[head], scope[head]
     save = SaveFile(file_path=file, value=ref)
     if step.kind == "metric":
-        assert isinstance(target, Metric)
-        rows = table(step.dataset)
-        save = replace(
-            save,
-            layers=target.layers,
-            example_ids=rows_module.example_ids(rows),
-            eligible=_eligible(rows, step),
-            of=step.of,
-            unit=metrics_module.UNITS[step.metric][0],
-            estimand_version=metrics_module.UNITS[step.metric][1],
-            produced_by=spec.digest,
-        )
+        save = replace(save, example_ids=rows_module.example_ids(table(step.dataset)), produced_by=spec.digest)
     elif isinstance(target, Forward):
         target = replace(target, keep=(*target.keep, ref))
     scope[head] = replace(target, saves=(*target.saves, save))
@@ -563,16 +551,6 @@ def _metric(
         flat=op.flat,
         layers=tuple(address.layer for address, one in ops if one.layered and address.layer is not None),
     )
-
-
-def _eligible(base_rows: list[rows_module.Row], metric: Any) -> tuple[bool, ...]:
-    """A table's eligibility column; empty when every row is in, which is
-    what a plan compiled before this existed says too. (A fit's own saves
-    have no rows, and so nothing to be eligible.)"""
-    if not base_rows:
-        return ()
-    keep = rows_module.eligible(base_rows, tuple(metric.columns))
-    return () if all(keep) else keep
 
 
 def _ids(spec: Any, base_rows: list[rows_module.Row], keep: tuple[bool, ...], tokenizer: Any) -> tuple[Any, ...]:

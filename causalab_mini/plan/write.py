@@ -33,7 +33,8 @@ from typing import Any
 
 from safetensors.torch import save_file
 
-from .plan import Plan, SaveFile, Step, children
+from ..ops.metrics import UNITS
+from .plan import Metric, Plan, SaveFile, Step, children
 
 
 def write(step: Step, out_dir: str | Path) -> list[Path]:
@@ -89,23 +90,28 @@ def _file(step: Step, save: SaveFile, out: Path) -> Path:
     # is still a row of the table, with no value and `eligible: false` — so
     # it can never be read as a zero, or silently shorten a denominator.
     #
-    # Which rows those are has two halves. The compiled `eligible` is the
+    # Which rows those are has two halves. The compiled `rows` is the
     # column half — whether the data had an answer to score. A run that
     # anchored a position to text also reports which rows it could place,
     # and that list is already the intersection, so it wins where it exists.
+    assert isinstance(step, Metric), "a .json save is a metric's table"
     run = step.results.get("eligible", {}).get(save.value)
-    eligible = run or save.eligible or (True,) * len(save.example_ids)
-    where = step.results.get("positions", {}).get(save.of, {})
+    eligible = run or tuple(step.rows is None or row in step.rows for row in range(len(save.example_ids)))
+    where = step.results.get("positions", {}).get(step.of, {})
+    unit, version = UNITS[step.kind]
+    labels = {"unit": unit, "estimand_version": version, "produced_by": save.produced_by}
     rows = []
     # a metric of a read at every layer is a row of scores per layer, and a
     # table row per layer and example, which says its layer
-    for layer, scores in zip(save.layers or (None,), value if save.layers else [value]):
-        rows += _rows(save, scores, eligible, where, {} if layer is None else {"layer": layer})
+    for layer, scores in zip(step.layers or (None,), value if step.layers else [value]):
+        rows += _rows(save, scores, eligible, where, {} if layer is None else {"layer": layer}, labels)
     path.write_text(json.dumps(rows, indent=1) + "\n")
     return path
 
 
-def _rows(save: SaveFile, scores: Any, eligible: tuple[bool, ...], where: dict[str, Any], layer: dict[str, int]) -> list[dict[str, Any]]:
+def _rows(
+    save: SaveFile, scores: Any, eligible: tuple[bool, ...], where: dict[str, Any], layer: dict[str, int], labels: dict[str, str]
+) -> list[dict[str, Any]]:
     """One table row per example: its number when it was scored, and where."""
     numbers = iter(scores.tolist())
     rows = []
@@ -126,9 +132,7 @@ def _rows(save: SaveFile, scores: Any, eligible: tuple[bool, ...], where: dict[s
                 "positions": list(where["rows"][index]) if where else None,
                 "reason": where["reason"][index] if where else "",
                 "tokens": where["tokens"][index] if where else "",
-                "unit": save.unit,
-                "estimand_version": save.estimand_version,
-                "produced_by": save.produced_by,
+                **labels,
             }
         )
     return rows

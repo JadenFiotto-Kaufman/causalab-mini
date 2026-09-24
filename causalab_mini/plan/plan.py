@@ -184,27 +184,18 @@ class FeaturizerOp:
 
 @dataclass(frozen=True)
 class SaveFile:
+    """One file a step writes. A metric's table takes the rest of what it
+    says — its read, its layers, its unit, which rows were scored — from
+    the `Metric` it sits on."""
+
     file_path: str
     value: str  # the result this file holds, by name, from this plan's subtree
+    #: A metric table's row labels, one per row of its dataset.
     example_ids: ExampleIds = ()
-    #: Per example id, whether the metric was computed for it. Empty: all.
-    #: The result holds one value per *eligible* row, in order. This is the
-    #: *column* half, decided from the data; a run that anchored a position
-    #: to text reports the intersection with what it could place, and the
-    #: table prefers that.
-    eligible: tuple[bool, ...] = ()
-    #: The read a metric scored, so the table can say which token each row's
-    #: number came from. Empty for a save that is not a metric.
-    of: str = ""
-    unit: str = ""
-    estimand_version: str = ""
     produced_by: str = ""
     #: For a `.safetensors` bundle: the ArtifactIdentity stamped into its
     #: header. Empty for a metric table.
     identity: dict[str, str] = field(default_factory=dict)
-    #: For a metric of a read at every layer: the layers, so the table has a
-    #: row per layer and example, and says which layer each is.
-    layers: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)
