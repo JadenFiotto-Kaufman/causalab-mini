@@ -5,37 +5,43 @@ tokenizer, no document, and (until it has been run) no tensors. It does not
 know how to execute itself: an `Engine` walks it. That separation is the whole
 reason there can be more than one engine.
 
-The tree, top down:
+Its steps are the kinds of thing a document runs — a model call, a metric
+or a reduction of what one read, a fit — each on its own:
 
     Plan                        a list of steps, and the files they produce
       steps: {name: Step}       executed in order; a step may be a Plan
-      saves: (SaveFile, …)      what leaves the run, written by `Plan.write`
       results: {name: tensor}   filled in as it runs
 
     Featurizers(specs)          construct the parameter sets
-    Observe(forwards, metrics)  one pass: forwards in order, then the metrics
-    Fit(epochs, evaluation, …)  that pass N times, with an optimizer between
-    Weights(names)              the fitted parameters, as results
+    Forward(input_ids, taps)    one model call, tapped
+    Generate(…, generation)     one model call that decodes
+    Metric(kind, of, ids)       a score of one read, per row
+    Reduce(of, reduce)          a read's mean, or its principal basis
+    Fit(epochs, evaluation, …)  a subtree per minibatch, an optimizer between;
+                                its results are its record and what it trained
 
-and, inside an `Observe`, the ops that make one pass:
+and, inside a forward, the ops of the one call:
 
-    Forward(name, input, input_ids, attention_mask, taps)
       taps: one per address, in forward order
         Tap(address, writes, reads)     writes run before reads at the same
-          WriteOp(name, positions, operand, mechanism, featurizer)   address
-          ReadOp(name, positions, featurizer)
+          WriteOp(name, at, operand, mechanism, featurizer)   address
+          ReadOp(name, at, featurizer)
+
+A step's name is the key it has in its plan. What it produces is named the
+same way everywhere: a read by its op's name, a model call's own result, a
+metric and a reduction by their step's.
 
 **`results` is the only mutable thing on a step, and `provenance` the only
 other one on a plan.** Every other field is frozen: a plan cannot be edited,
 only filled. Filling it is how results come home —
 the engine saves the root plan at the top of its session, so what the run
 produced is navigable exactly where it happened,
-`root.steps["fit"].results["train/loss"]`.
+`root.steps["fit"].results["train"]["loss"]`.
 
-A fit is a request, so a fit is part of one plan: `Fit` holds the rows of every
-update it will make, already batched, already tokenized, already in the order
-the seed puts them in — as `Observe` steps, because a training update is this
-same pass over different rows.
+A fit is a request, so a fit is part of one plan: `Fit` holds the steps of
+every update it will make, already batched, already tokenized, already in the
+order the seed puts them in — as plans, because a training update is these
+same steps over different rows.
 """
 
 from __future__ import annotations
@@ -56,7 +62,9 @@ class PlanError(ValueError):
 class ReadOp:
     name: str
     at: Selection  # where in the tensor: positions, and which features
-    featurizer: str = "identity"
+    #: The parameter set the value is featurized by, or None: the tensor as
+    #: it is.
+    featurizer: str | None = None
     #: "raw" is the tensor at the address. "logits" is that tensor pushed
     #: through the model's final norm and head — the logit lens: what the
     #: model would say if this layer were its last.
@@ -67,18 +75,35 @@ class ReadOp:
     #: the steps back together and cuts them against the continuation,
     #: which does not exist until the decode has run.
     stack: str = ""
+    #: When this read is one layer of a read taken at several layers, the
+    #: name the layers are stacked under, and all of them in the order the
+    #: document listed — which the stack keeps, the layer axis first.
+    layered: str = ""
+    layers: tuple[int, ...] = ()
+
+    @property
+    def flat(self) -> bool:
+        """Whether the value this read makes comes back flat — one entry per
+        position found — rather than a row per row. A read cut out of the
+        continuation is cut after the decode, so its spec says; any other,
+        its selection."""
+        if self.stack:
+            return self.at.where is not None and self.at.where.ragged
+        return self.at.flat
 
 
 @dataclass(frozen=True)
 class WriteOp:
     name: str
     at: Selection
-    #: A name — a read of this pass, or an output published before it — a
+    #: The name of a value an earlier step produced — a read, a mean — a
     #: literal number (zero ablation is `0.0`), or nothing for a mechanism
     #: that takes none.
     operand: str | float | None
     mechanism: str
-    featurizer: str
+    #: The parameter set the mechanism acts in the space of, or None: on the
+    #: tensor as it is.
+    featurizer: str | None
     #: The mechanism's numbers: a scale, a seed.
     params: dict[str, float] = field(default_factory=dict)
     #: Which coordinates of the featurizer's space the mechanism acts on.
@@ -103,31 +128,6 @@ class Tap:
     writes: tuple[WriteOp, ...]
     reads: tuple[ReadOp, ...]
     step: int | str | None = None
-
-
-@dataclass(frozen=True)
-class Forward:
-    name: str  # "original" or an intervened model's name
-    input: str  # the data role its rows come from
-    input_ids: TokenRows
-    attention_mask: TokenRows
-    taps: tuple[Tap, ...]
-    #: How many tokens to generate after the prompt. 0 is one forward pass;
-    #: N is the prefill plus N decode steps, greedy, EOS held off so the
-    #: bound holds, and the generated ids come back as a value named
-    #: `<forward>.generated`.
-    decode: int = 0
-    #: What row 0's ids say, according to the tokenizer that encoded them.
-    #: The run decodes the same row with its own and compares before it
-    #: looks for any text in it. One row is a sample, not a proof.
-    sample: str = ""
-    #: Per row, the character span of each run the *frame* located in this
-    #: prompt — a chat turn, by its own role. Empty for a prompt that is a
-    #: plain string, which is most of them. They are the client's because
-    #: only the client knows the conversation the template rendered; they
-    #: are in the frame's own coordinates, so the run attaches them and
-    #: `locate` reads them exactly as it reads `eos` in the continuation.
-    segments: tuple[dict[str, tuple[int, int]], ...] = ()
 
 
 def window(forward: Forward, start: int, stop: int) -> Forward:
@@ -161,32 +161,6 @@ def _rows(at: Selection, start: int, stop: int) -> Selection:
 
 
 @dataclass(frozen=True)
-class OutputOp:
-    """One value a pass makes available to the steps after it: a read, kept
-    — optionally reduced over rows — under a name later steps reference."""
-
-    name: str
-    read: str
-    #: "none" keeps the read; "mean" averages the rows away; "pca" reduces
-    #: the rows to their top-k principal directions, a `(d, k)` basis.
-    reduce: str = "none"
-    k: int | None = None
-
-
-@dataclass(frozen=True)
-class MetricOp:
-    name: str
-    kind: str
-    of: str  # the read it binds to
-    ids: tuple[TokenIds, ...]  # one vocabulary id per scored row, per operand
-    #: The rows this metric is computed for, when that is not all of them: a
-    #: row whose answer column is null is an excluded measurement. Decided on
-    #: the client, so the run indexes and never masks — a mean is a mean, and
-    #: a NaN is still a bug rather than a convention.
-    rows: tuple[int, ...] | None = None
-
-
-@dataclass(frozen=True)
 class FeaturizerOp:
     """One parameter set. `d` is derived from (model, site) here on the client,
     because the block may not decide anything from a tensor — including how wide
@@ -212,20 +186,14 @@ class FeaturizerOp:
 
 @dataclass(frozen=True)
 class SaveFile:
+    """One file a step writes. A metric's table takes the rest of what it
+    says — its read, its layers, its unit, which rows were scored — from
+    the `Metric` it sits on."""
+
     file_path: str
     value: str  # the result this file holds, by name, from this plan's subtree
+    #: A metric table's row labels, one per row of its dataset.
     example_ids: ExampleIds = ()
-    #: Per example id, whether the metric was computed for it. Empty: all.
-    #: The result holds one value per *eligible* row, in order. This is the
-    #: *column* half, decided from the data; a run that anchored a position
-    #: to text reports the intersection with what it could place, and the
-    #: table prefers that.
-    eligible: tuple[bool, ...] = ()
-    #: The read a metric scored, so the table can say which token each row's
-    #: number came from. Empty for a save that is not a metric.
-    of: str = ""
-    unit: str = ""
-    estimand_version: str = ""
     produced_by: str = ""
     #: For a `.safetensors` bundle: the ArtifactIdentity stamped into its
     #: header. Empty for a metric table.
@@ -259,47 +227,126 @@ class Featurizers(Step):
 
 
 @dataclass(frozen=True, kw_only=True)
-class Observe(Step):
-    """One execution of the forwards, and the metrics over what they read."""
+class Forward(Step):
+    """One model call over one set of rows, with its taps applied. What it
+    reads is published under each read's name; what the call itself returns
+    — its logits — under the step's own."""
 
-    forwards: tuple[Forward, ...]
-    metrics: tuple[MetricOp, ...]
-    #: What this pass publishes to its later siblings. Ephemeral: it lives in
-    #: the walk's state and dies with the plan, unless a save on this step
-    #: names it too.
-    outputs: tuple[OutputOp, ...] = ()
+    #: Which rows these are: the dataset they came from.
+    input: str
+    input_ids: TokenRows
+    attention_mask: TokenRows
+    taps: tuple[Tap, ...]
+    #: What row 0's ids say, according to the tokenizer that encoded them.
+    #: The run decodes the same row with its own and compares before it
+    #: looks for any text in it. One row is a sample, not a proof.
+    sample: str = ""
+    #: Per row, the character span of each run the *frame* located in this
+    #: prompt — a chat turn, by its own role. Empty for a prompt that is a
+    #: plain string, which is most of them. They are the client's because
+    #: only the client knows the conversation the template rendered; they
+    #: are in the frame's own coordinates, so the run attaches them and
+    #: `locate` reads them exactly as it reads `eos` in the continuation.
+    segments: tuple[dict[str, tuple[int, int]], ...] = ()
+
+    @property
+    def keep(self) -> tuple[str, ...]:
+        """What of this call a save names — a read, or the step's own result
+        by the step's name: that, and only that, comes home in `results`."""
+        return tuple(save.value for save in self.saves)
+
+    @property
+    def dynamic(self) -> bool:
+        """Whether this call has a position the document does not already fix.
+
+        A text anchor is one — which rows carry a word is data — and so is any
+        cut of the continuation, because the continuation is what the decode
+        turned out to produce. A call with neither resolves the same integers
+        on every row and every run, and the document already says so: it
+        needs no character map and reports nothing, and its tables say
+        nothing of where.
+        """
+        return any(
+            op.at.where is not None
+            and (op.at.where.scope is not None or op.at.where.frame == "generated")
+            for tap in self.taps
+            for op in (*tap.reads, *tap.writes)
+        )
+
+
+@dataclass(frozen=True, kw_only=True)
+class Generate(Forward):
+    """A model call that decodes: the prefill, then up to `max_new_tokens`
+    steps, and a tap in the continuation frame names one of them. Its own
+    result is the ids it generated, prompt stripped."""
+
+    max_new_tokens: int
+    #: Everything else the generate call is given, verbatim — whether it
+    #: samples, whether EOS is held off. JSON scalars, so the plan stays data.
+    generation: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class Metric(Step):
+    """A score of one read, one number per row that is scored."""
+
+    kind: str
+    of: str  # the read it binds to
+    ids: tuple[TokenIds, ...]  # one vocabulary id per scored row, per operand
+    #: The rows this metric is computed for, when that is not all of them: a
+    #: row whose answer column is null is an excluded measurement. Decided on
+    #: the client, so the run indexes and never masks — a mean is a mean, and
+    #: a NaN is still a bug rather than a convention. The run intersects it
+    #: with the rows it could place the read at.
+    rows: tuple[int, ...] | None = None
+    #: Whether the read came back flat — one entry per row it *found* —
+    #: rather than as a rectangle. Known from the read's form, here.
+    flat: bool = False
+    #: For a read at every layer, the layers its first axis holds: the
+    #: metric scores each, and is one row of scores per layer.
+    layers: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True, kw_only=True)
+class Reduce(Step):
+    """One read reduced over its rows: `"mean"` averages them away; `"pca"`
+    reduces them to their top-k principal directions, a `(d, k)` basis."""
+
+    of: str
+    reduce: str
+    k: int | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
 class Fit(Step):
-    """The same pass, N times, with an optimizer between.
+    """The same steps, once per minibatch, with an optimizer between, and
+    once more over the held-out rows each epoch.
 
     `epochs` is already shuffled: the seed covers data order, and data order
     decides which rows share a padded batch, which is a tokenizer question and
     therefore a client-side one. The *parameter* seed travels as data and is
     drawn where the parameter is built.
+
+    What a fit produces is its own results: `train`, its record — `loss`
+    per update and `eval` per epoch — and each parameter it trained, under
+    its name. A save names either, as it names any result.
     """
 
-    epochs: tuple[tuple[Observe, ...], ...]
-    evaluation: Observe
+    epochs: tuple[tuple["Plan", ...], ...]
+    evaluation: "Plan"
     objective: tuple[tuple[float, str], ...]
     params: tuple[str, ...]
-    lr: float
-    weight_decay: float
-    eval_metrics: tuple[str, ...]
+    #: One of `torch.optim`'s, by the document's name for it, and what it is
+    #: constructed with beside the parameters: `lr`, `weight_decay`, and
+    #: `betas` or `momentum` where the document gives one.
+    optimizer: str
+    optimizer_args: dict[str, Any]
     early_stop: str
     patience: int
     mode: str
     #: `(gate, first, last)`: the temperature of a gate's soft mask, annealed
     #: geometrically across the fit's updates.
     anneal: tuple[tuple[str, float, float], ...] = ()
-
-
-@dataclass(frozen=True, kw_only=True)
-class Weights(Step):
-    """The fitted parameters, as results, so they can be saved."""
-
-    names: tuple[str, ...]
 
 
 S = TypeVar("S", bound=Step)
@@ -326,10 +373,10 @@ class Plan(Step):
     def step(self, name: str, kind: type[S] = Step) -> S:  # type: ignore[assignment]
         """The step called `name`, checked to be the kind you expected.
 
-        `plan.steps["observe"]` is a `Step` as far as a type checker knows, so
-        reading `.forwards` off it is unchecked. `plan.step("observe",
-        Observe)` is the same lookup with the kind stated, which a checker can
-        follow and a wrong document shape trips on immediately.
+        `plan.steps["patched"]` is a `Step` as far as a type checker knows, so
+        reading `.taps` off it is unchecked. `plan.step("patched", Forward)`
+        is the same lookup with the kind stated, which a checker can follow
+        and a wrong document shape trips on immediately.
         """
         found = self.steps[name]
         if not isinstance(found, kind):
@@ -342,10 +389,10 @@ class Plan(Step):
         """The one result called `name` in this subtree.
 
         The search descends through **steps** and stops at them: a `Fit`'s own
-        results are found, the hundreds of per-update passes inside it are not,
+        results are found, the hundreds of per-update plans inside it are not,
         or every fitted document would have an ambiguous `iia`. Those are still
         there to read, by attribute, where they happened —
-        `root.steps["fit"].epochs[0][0].results["iia"]`.
+        `root.step("fit", Fit).epochs[0][0].result("iia")`.
 
         Result names come from the document and are unique within a plan; a
         sweep repeats them across its points, and naming the point
@@ -368,10 +415,7 @@ class Plan(Step):
         of what it produced. A sweep repeats them and this refuses; ask a point
         (`root.steps["seed=0"].all_results()`) instead.
         """
-        found: dict[str, Any] = {}
-        for name in _names(self):
-            found[name] = self.result(name)
-        return found
+        return {name: self.result(name) for name in _names(self)}
 
     def write(self, out_dir: str | Path) -> list[Path]:
         """Write this plan's save manifest, and its children's below it."""
@@ -382,7 +426,7 @@ class Plan(Step):
 
 def steps_of(step: Step) -> tuple[Step, ...]:
     """The steps one step contains, for a *name* lookup: what a plan
-    declares, and nothing else. A `Fit`'s passes are its own workings rather
+    declares, and nothing else. A `Fit`'s updates are its own workings rather
     than steps of the plan, so a name search stops there — see
     `Plan.result`. `children` is the wider walk, for writing.
     """
@@ -393,8 +437,8 @@ def children(step: Step) -> tuple[tuple[str, Step], ...]:
     """Every step inside this one, named, for a walk that is about *places*
     rather than names: writing files, or reading what a run produced.
 
-    Unlike `steps_of` this descends into a fit, because a fit's eval pass is
-    a place a save may sit. It stops at the per-update passes, which are the
+    Unlike `steps_of` this descends into a fit, because a fit's evaluation is
+    a place a save may sit. It stops at the per-update plans, which are the
     fit's own workings and carry no saves.
     """
     if isinstance(step, Plan):
@@ -407,9 +451,9 @@ def children(step: Step) -> tuple[tuple[str, Step], ...]:
 def results_of(step: Step, path: str = "") -> dict[str, dict[str, Any]]:
     """Everything a run produced, as `{step path: {name: value}}` — plain
     strings and tensors, with none of this package's classes in it. That is
-    what may cross back from a server: the plan went out by value, so the
-    server can *use* its classes but cannot pickle an instance of one home.
-    The client still has the plan; only what filled it in has to travel."""
+    what crosses back from a server, by design rather than by limit: the
+    server has these classes (they resolve by import, FINDINGS §24), but the
+    client still holds the plan, so only what filled it in has to travel."""
     found = {path: dict(step.results)} if step.results else {}
     for name, child in children(step):
         found.update(results_of(child, f"{path}/{name}" if path else name))

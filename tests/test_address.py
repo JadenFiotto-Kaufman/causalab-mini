@@ -10,10 +10,9 @@ from causalab_mini.address import Address, AddressError
 def test_an_address_is_the_documents_words_and_pickles_as_such():
     one = Address("block_output", 0)
     assert pickle.loads(pickle.dumps(one)) == one
-    assert Address("attention_query", 0).path == "attentions.0"  # an interior: mini's own row
-    # a boundary is a nnterp accessor, whose module the checkpoint spells —
+    # every place is a nnterp accessor, whose module the checkpoint spells —
     # which the document's words alone cannot say
-    for bare in (one, Address("lm_head")):
+    for bare in (one, Address("lm_head"), Address("attention_query", 0)):
         with pytest.raises(AddressError, match="engine.locate"):
             bare.path
     assert Address("lm_head", module="lm_head").path == "lm_head"
@@ -23,12 +22,12 @@ def test_an_address_is_the_documents_words_and_pickles_as_such():
 
 def test_addresses_sort_into_forward_order(model_engine):
     """Depth first, then position inside the block, then everything after the
-    stack. An interior is not a module boundary, so it needs the middle rank.
+    stack. The query is inside the attention, so it comes before the block's
+    output at its layer.
 
     The rank is nnterp's — `internals.rank`, stamped by `locate` — because a
     family may build its block differently and mini keeping a second
-    numbering beside nnterp's is how the two drift. Only the interiors, which
-    nnterp does not address, are ranked by mini's own row."""
+    numbering beside nnterp's is how the two drift."""
     stack = [
         model_engine.locate("lm_head"),
         model_engine.locate("block_output", 1),
@@ -43,11 +42,6 @@ def test_addresses_sort_into_forward_order(model_engine):
         ("block_output", 1),
         ("lm_head", None),
     ]
-
-
-def test_a_module_boundary_cannot_carry_an_operation():
-    with pytest.raises(AddressError, match="module boundary"):
-        Address("block_output", 0, "attention_interface_1")
 
 
 def test_a_component_neither_table_has_is_refused_by_name(model_engine):

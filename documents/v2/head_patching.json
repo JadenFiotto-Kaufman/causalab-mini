@@ -1,114 +1,57 @@
 {
   "header": {
-    "description": "Head-by-head activation patching: the interchange of patching.json, but of ONE attention head's result at a time, swept over the four heads of layer 0. The site is `attention_premix` \u2014 the output projection's input, which is every head's result side by side \u2014 so this runs on the hooks engine too; `attention_z` is the same tensor held as (heads, head_dim) and gives the same numbers bit for bit on nnterp."
+    "description": "Head-by-head activation patching: the interchange of patching.json, but of ONE attention head's result at a time, swept over the four heads of layer 0. The site is `attention_premix` — the output projection's input, which is every head's result side by side — so this runs on the hooks engine too; `attention_z` is the same tensor held as (heads, head_dim) and gives the same numbers bit for bit on nnterp."
   },
   "model": {
     "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
     "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
     "dtype": "fp32"
   },
-  "roles": {
-    "base": {
-      "field": "input"
-    },
-    "counterfactual": {
-      "field": "counterfactual_inputs[0]"
-    }
-  },
+  "data": {"pairs": {"path": "weekdays/train"}},
   "sites": {
     "target": {
       "component": "attention_premix",
-      "layers": [
-        0
-      ],
-      "heads": {
-        "sweep": [
-          [
-            0
-          ],
-          [
-            1
-          ],
-          [
-            2
-          ],
-          [
-            3
-          ]
-        ]
-      }
+      "layers": 0,
+      "heads": {"sweep": [[0], [1], [2], [3]]}
     },
-    "head": {
-      "component": "lm_head"
-    }
-  },
-  "interventions": {
-    "patching": {
-      "reads": {
-        "v_cf": {
-          "site": "target",
-          "pos": -1,
-          "model": "original",
-          "input": "counterfactual"
-        },
-        "logits": {
-          "site": "head",
-          "pos": -1,
-          "model": "patched",
-          "input": "base"
-        }
-      },
-      "writes": {
-        "patch": {
-          "site": "target",
-          "pos": -1,
-          "mechanism": "swap",
-          "operand": "v_cf"
-        }
-      },
-      "models": {
-        "patched": {
-          "input": "base",
-          "writes": [
-            "patch"
-          ]
-        }
-      },
-      "metrics": {
-        "iia": {
-          "kind": "match",
-          "of": "logits",
-          "expected": "cf_answer",
-          "token_form": "space_prefixed"
-        },
-        "logit_diff": {
-          "kind": "logit_diff",
-          "of": "logits",
-          "a": "cf_answer",
-          "b": "base_answer",
-          "token_form": "space_prefixed"
-        }
-      }
-    }
+    "head": {"component": "lm_head"}
   },
   "steps": {
-    "score": {
-      "kind": "observe",
-      "interventions": "patching",
-      "rows": {
-        "base": "weekdays/train",
-        "counterfactual": "weekdays/train"
-      },
-      "saves": [
-        {
-          "value": "iia",
-          "file_path": "iia.json"
-        },
-        {
-          "value": "logit_diff",
-          "file_path": "logit_diff.json"
+    "counterfactual": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "counterfactual_inputs[0]",
+      "reads": {"v_cf": {"site": "target", "pos": -1}}
+    },
+    "patched": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "input",
+      "interventions": {
+        "writes": {
+          "patch": {
+            "site": "target",
+            "pos": -1,
+            "mechanism": "swap",
+            "operand": "counterfactual.v_cf"
+          }
         }
-      ]
-    }
+      },
+      "reads": {"logits": {"site": "head", "pos": -1}}
+    },
+    "iia": {
+      "kind": "metric",
+      "metric": "match",
+      "of": "patched.logits",
+      "expected": "pairs.cf_answer"
+    },
+    "logit_diff": {
+      "kind": "metric",
+      "metric": "logit_diff",
+      "of": "patched.logits",
+      "a": "pairs.cf_answer",
+      "b": "pairs.base_answer"
+    },
+    "saves": {"iia": "iia.json", "logit_diff": "logit_diff.json"}
   }
 }

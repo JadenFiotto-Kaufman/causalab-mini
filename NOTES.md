@@ -1,5 +1,13 @@
 # causalab-mini — ground truth for the design
 
+> The documents this file reads were in causalab's protocol format, which
+> mini no longer reads: they and their reader are gone from the repository.
+> What they say is still the ground truth this reading records, and each
+> has a steps-first twin in `documents/v2/` pinned to the same numbers —
+> `minimal_cpu.json` is `patching.json`, `das_cpu_reduction.json` is
+> `das.json`, `attention_query_cpu.json` is `attention_query.json`,
+> `gpt2_cpu.json` is `gpt2_reach.json`.
+
 This file is the reading I did of causalab before any design exists. It walks
 the three documents copied into `documents/` field by field, states exactly
 what a runtime must do about each field, and lists — as explicitly as it can —
@@ -837,9 +845,9 @@ surface that **nothing** in `documents/` needs.
 > a `variable`, a `segment`, or both), and one of `index` / `span` / `last`
 > / `all`. `{"variable": "x"}` is `{"scope": {"variable": "x"}}` and binds
 > by the protocol's own rule — the `<column>_variables` sibling of the
-> role's field, then a top-level column. `{"all": true}` and `{"span": [a,
+> field a forward reads, then a top-level column. `{"all": true}` and `{"span": [a,
 > b)}` are cuts of whatever run the scope names. The continuation frame is
-> `{"frame": "generated", …}`, greedy, cut per row at its first stop token,
+> `{"frame": "generated", …}` of a generate step, cut per row at its first stop token,
 > with `{"segment": "eos"}` naming where a row stopped. The ragged write
 > policy is `refuse`, at the write. The reason codes `alignment_missing` and
 > `alignment_ambiguous` are reported per row, with `out_of_range` added for
@@ -850,7 +858,7 @@ surface that **nothing** in `documents/` needs.
   the sibling rule reaches both, so there is one anchor and not two.
 - `segments` as a *named table* on the document. A turn is named by its own
   role — `{"segment": "user"}`, `{"segment": "user[1]"}` for the second of
-  two — because the conversation already says the names, and a role whose
+  two — because the conversation already says the names, and a forward whose
   field holds a list of `{"role", "content"}` messages is rendered through
   the checkpoint's template at compile time. What is not here is a table of
   spans an author writes by hand.
@@ -859,7 +867,8 @@ surface that **nothing** in `documents/` needs.
   window of the run it cuts, and `[a, 0]` is empty for every `a` because
   `0` is the run's start however it is signed.
 - `{"generated": {"max_new_tokens": n}}` as a *position's* own key: the
-  budget is `decode` on the intervention, and the position names the frame.
+  budget is a generate step's `max_new_tokens`, and the position names the
+  frame.
 - Per-step metric rows with a `step` column, and `matched: false`.
 - **Span algebra**: `indices`, `union`, `intersection`, `before`, `after`,
   `between`, `atomic`.

@@ -1,0 +1,90 @@
+{
+  "header": {
+    "description": "The matched-k control for a DAS result: three untrained rank-4 subspaces at one cell, one per seed, scored exactly as a fit's would be \u2014 the spread across draws is the null a trained rotation has to beat. No fit at all: the featurizer is declared, drawn from its seed where the run runs, and used."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "data": {
+    "pairs": {
+      "path": "weekdays/train"
+    }
+  },
+  "sites": {
+    "target": {
+      "component": "block_output",
+      "layers": 0
+    }
+  },
+  "steps": {
+    "counterfactual": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "counterfactual_inputs[0]",
+      "reads": {
+        "v_cf": {
+          "site": "target",
+          "pos": -1,
+          "featurizer": "rot"
+        }
+      }
+    },
+    "patched": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "input",
+      "interventions": {
+        "writes": {
+          "patch": {
+            "site": "target",
+            "pos": -1,
+            "mechanism": "swap",
+            "operand": "counterfactual.v_cf",
+            "featurizer": "rot"
+          }
+        }
+      },
+      "reads": {
+        "logits": {
+          "site": {
+            "component": "lm_head"
+          },
+          "pos": -1
+        }
+      }
+    },
+    "iia": {
+      "kind": "metric",
+      "metric": "match",
+      "of": "patched.logits",
+      "expected": "pairs.cf_answer"
+    },
+    "logit_diff": {
+      "kind": "metric",
+      "metric": "logit_diff",
+      "of": "patched.logits",
+      "a": "pairs.cf_answer",
+      "b": "pairs.base_answer"
+    },
+    "saves": {
+      "iia": "iia.json",
+      "logit_diff": "logit_diff.json"
+    }
+  },
+  "featurizers": {
+    "rot": {
+      "kind": "subspace",
+      "k": 4,
+      "parametrization": "cayley",
+      "seed": {
+        "sweep": [
+          0,
+          1,
+          2
+        ]
+      }
+    }
+  }
+}

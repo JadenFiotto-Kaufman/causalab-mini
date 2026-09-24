@@ -7,67 +7,27 @@
     "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
     "dtype": "fp32"
   },
-  "roles": {
-    "base": {
-      "field": "input"
-    }
-  },
-  "sites": {
-    "resid": {
-      "component": "block_output",
-      "layers": {
-        "sweep": [
-          [
-            0
-          ],
-          [
-            1
-          ]
-        ]
-      }
-    }
-  },
-  "interventions": {
-    "lens": {
-      "reads": {
-        "lens": {
-          "site": "resid",
-          "pos": -1,
-          "input": "base",
-          "view": "logits"
-        }
-      },
-      "metrics": {
-        "p_answer": {
-          "kind": "token_prob",
-          "of": "lens",
-          "token": "base_answer"
-        },
-        "top1": {
-          "kind": "match",
-          "of": "lens",
-          "expected": "base_answer"
-        }
-      }
-    }
-  },
+  "data": {"prompts": {"path": "weekdays/train"}},
+  "sites": {"resid": {"component": "block_output", "layers": {"sweep": [0, 1]}}},
   "steps": {
     "lens": {
-      "kind": "observe",
-      "interventions": "lens",
-      "rows": {
-        "base": "weekdays/train"
-      },
-      "saves": [
-        {
-          "value": "p_answer",
-          "file_path": "p_answer.json"
-        },
-        {
-          "value": "top1",
-          "file_path": "top1.json"
-        }
-      ]
-    }
+      "kind": "forward",
+      "data": "prompts",
+      "field": "input",
+      "reads": {"logits": {"site": "resid", "pos": -1, "view": "logits"}}
+    },
+    "p_answer": {
+      "kind": "metric",
+      "metric": "token_prob",
+      "of": "lens.logits",
+      "token": "prompts.base_answer"
+    },
+    "top1": {
+      "kind": "metric",
+      "metric": "match",
+      "of": "lens.logits",
+      "expected": "prompts.base_answer"
+    },
+    "saves": {"p_answer": "p_answer.json", "top1": "top1.json"}
   }
 }

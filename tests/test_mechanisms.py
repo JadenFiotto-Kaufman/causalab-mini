@@ -10,8 +10,8 @@ import pathlib
 
 import pytest
 import torch
-from conftest import same_numbers
 from pydantic import ValidationError
+from conftest import same_numbers
 
 from causalab_mini import ops, plan
 from causalab_mini.engine.engines.hooks import HooksEngine
@@ -70,10 +70,8 @@ def test_an_operand_is_a_name_a_number_or_nothing():
 
 def test_zero_ablation_runs_and_moves_the_logits(zero_raw, data_root, model_engine):
     executed = model_engine.execute(plan.build_request(zero_raw, data_root, model_engine))
-    clean = executed.step("clean", plan.Observe).results["logit_diff"]
-    zeroed = executed.step("zeroed", plan.Observe).results["logit_diff"]
-    assert not torch.equal(clean, zeroed)
-    p = executed.step("zeroed", plan.Observe).results["p_answer"]
+    assert not torch.equal(executed.result("clean_ld"), executed.result("zeroed_ld"))
+    p = executed.result("p_answer")
     assert ((p > 0) & (p < 1)).all()
 
 
@@ -81,20 +79,16 @@ def test_the_two_engines_agree_on_zero_ablation(zero_raw, data_root, model_engin
     hooks = HooksEngine.load(Spec.model_validate(zero_raw).model, device_map="cpu")
     traced = model_engine.execute(plan.build_request(zero_raw, data_root, model_engine))
     hooked = hooks.execute(plan.build_request(zero_raw, data_root, hooks))
-    for name in ("logit_diff", "p_answer"):
-        assert same_numbers(
-            traced.step("zeroed", plan.Observe).results[name],
-            hooked.step("zeroed", plan.Observe).results[name],
-        ), name
+    for name in ("zeroed_ld", "p_answer"):
+        assert same_numbers(traced.result(name), hooked.result(name)), name
 
 
 def test_a_literal_operand_orders_no_forward(zero_raw, data_root, model_engine):
-    """A write whose operand is a number depends on no read, so its model is
-    scheduled like an un-intervened one: one forward, no source pass."""
+    """A write whose operand is a number depends on no read: the zeroed
+    forward is one step, and nothing runs to feed it."""
     built = plan.build_request(zero_raw, data_root, model_engine)
-    forwards = built.step("zeroed", plan.Observe).forwards
-    assert [f.name for f in forwards] == ["zeroed"]
-    write = forwards[0].taps[0].writes[0]
+    assert list(built.steps) == ["clean", "clean_ld", "zeroed", "zeroed_ld", "p_answer"]
+    (write,) = [op for tap in built.step("zeroed", plan.Forward).taps for op in tap.writes]
     assert write.operand == 0.0 and write.mechanism == "swap"
 
 
@@ -116,7 +110,7 @@ def test_a_literal_operand_orders_no_forward(zero_raw, data_root, model_engine):
          "swap without an operand", "swap with a scale"],
 )
 def test_a_mechanism_and_its_numbers_must_agree(zero_raw, edit, message):
-    edit(zero_raw["interventions"]["zeroed"]["writes"]["zero"])
+    edit(zero_raw["steps"]["zeroed"]["interventions"]["writes"]["zero"])
     with pytest.raises(ValidationError, match=message):
         Spec.model_validate(zero_raw)
 
@@ -127,7 +121,7 @@ def test_a_fit_may_early_stop_on_a_minimized_metric(data_root, model_engine):
     raw = json.loads((REPO / "documents" / "v2" / "das.json").read_text())
     raw["steps"]["fit"]["early_stop"] = {"metric": "ce", "mode": "min", "patience": 3}
     executed = model_engine.execute(plan.build_request(raw, data_root, model_engine))
-    curve = executed.step("fit", plan.Fit).results["train/eval"].squeeze(-1)
+    curve = executed.step("fit", plan.Fit).results["train"]["eval"].squeeze(-1)
     assert curve.shape[0] >= 1
 
 
@@ -166,46 +160,45 @@ def test_clamping_to_zero_is_zero_ablation(zero_raw, data_root, model_engine):
     """The new mechanism checked against an old one: `lo = hi = 0` is the
     literal-zero swap, bit for bit."""
     zeroed = model_engine.execute(plan.build_request(zero_raw, data_root, model_engine))
-    write = zero_raw["interventions"]["zeroed"]["writes"]["zero"]
+    write = zero_raw["steps"]["zeroed"]["interventions"]["writes"]["zero"]
     write.update(mechanism="clamp", params={"lo": 0.0, "hi": 0.0})
     del write["operand"]
     clamped = model_engine.execute(plan.build_request(zero_raw, data_root, model_engine))
-    for name in ("logit_diff", "p_answer"):
-        assert torch.equal(
-            zeroed.step("zeroed", plan.Observe).results[name],
-            clamped.step("zeroed", plan.Observe).results[name],
-        ), name
+    for name in ("zeroed_ld", "p_answer"):
+        assert torch.equal(zeroed.result(name), clamped.result(name)), name
 
 
 @pytest.mark.parametrize("engine_name", ["nnterp", "hooks"])
 def test_steering_then_renormalizing_on_the_model(engine_name, data_root, model_engine):
     """The read at the site sees the model's writes, so the document can
     measure its own claim: the steered activation is longer than the
-    original, the renormalized one is exactly as long, and the two models
+    original, the renormalized one is exactly as long, and the two forwards
     answer differently."""
     raw = json.loads(STEER.read_text())
     engine = model_engine if engine_name == "nnterp" else HooksEngine.load(Spec.model_validate(raw).model, device_map="cpu")
-    results = engine.execute(plan.build_request(raw, data_root, engine)).step("steer", plan.Observe).results
+    results = engine.execute(plan.build_request(raw, data_root, engine)).all_results()
 
-    before, after, raw_after = (results[name].norm(dim=-1) for name in ("norm_before", "norm_after", "norm_steered"))
+    before, after, raw_after = (
+        results[name].norm(dim=-1) for name in ("base.resid", "steered_renormed.resid", "steered.resid")
+    )
     assert torch.allclose(after, before, rtol=1e-5)
     assert (raw_after > before).all()
-    assert not torch.equal(results["logit_diff"], results["logit_diff_raw"])
+    assert not torch.equal(results["renormed_ld"], results["steered_ld"])
 
 
 @pytest.mark.parametrize(
     "edit, message",
     [
-        (lambda one: one["models"]["steered_renormed"].update(writes=["restore", "steer"]), "last among them"),
-        (lambda one: one["models"]["steered_renormed"].update(writes=["restore"]), "it is the identity"),
-        (lambda one: one["writes"]["restore"].update(operand=0.0), "takes no operand"),
-        (lambda one: one["writes"]["steer"].update(mechanism="clamp", params={}), "takes no operand"),
-        (lambda one: one["writes"]["restore"].update(mechanism="clamp"), "needs a bound"),
+        (lambda raw: raw["steps"]["steered_renormed"].update(interventions=["restore", "steer"]), "last among them"),
+        (lambda raw: raw["steps"]["steered_renormed"].update(interventions=["restore"]), "it is the identity"),
+        (lambda raw: raw["interventions"]["restore"]["writes"]["restore"].update(operand=0.0), "takes no operand"),
+        (lambda raw: raw["interventions"]["steer"]["writes"]["steer"].update(mechanism="clamp", params={}), "takes no operand"),
+        (lambda raw: raw["interventions"]["restore"]["writes"]["restore"].update(mechanism="clamp"), "needs a bound"),
     ],
     ids=["renormalize first", "renormalize alone", "renormalize with an operand", "clamp with an operand", "clamp with no bound"],
 )
 def test_what_clamp_and_renormalize_may_not_say(edit, message):
     raw = json.loads(STEER.read_text())
-    edit(raw["interventions"]["steer"])
+    edit(raw)
     with pytest.raises(ValidationError, match=message):
         Spec.model_validate(raw)

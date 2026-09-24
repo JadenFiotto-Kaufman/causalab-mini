@@ -1,27 +1,38 @@
 """What each step means — the part no engine gets to have an opinion about.
 
 Every function here takes the engine as its first argument and calls it for
-exactly one thing: running a forward. It never touches the model — the engine
-holds that, and what kind of object it is, is the engine's business. The dispatch, the order, the optimizer,
-the early stop, the metrics and the results are the same on every runtime, so
-they are written once, here, as plain functions.
+exactly one thing: running a model. It never touches the model — the engine
+holds that, and what kind of object it is, is the engine's business. The
+dispatch, the order, the optimizer, the early stop, the metrics and the
+results are the same on every runtime, so they are written once, here, as
+plain functions.
 
-Two rules hold throughout:
+The walk is: for each step, run it. Three rules hold throughout:
 
-* **a step writes its own results.** Every `Observe` records what it scored,
+* **a step writes its own results.** Every step records what it produced,
   including the ones inside a fit, so a run is navigable at any depth
-  (`root.steps["fit"].epochs[0][1].results["iia"]`). On a long fit that is a
-  real amount of small tensors coming home; it is worth it here and would be
-  worth a `record` flag there.
+  (`root.steps["fit"].epochs[0][1].steps["iia"].results["iia"]`). On a long
+  fit that is a real amount of small tensors coming home; it is worth it here
+  and would be worth a `record` flag there.
 * **what crosses steps is one `State`, scoped to a `steps` list.** Its
   `featurizers` are the live parameter sets, shared so a fit trains the
-  rotation a later step scores with; its `outputs` are what earlier siblings
-  published — a harvested activation, a mean — for a later step to reference.
-  A nested plan (a sweep point) gets its own `outputs`, so points cannot see
-  each other's. The state is a local of the walk: never saved, never shipped,
-  gone with the plan. `values` — the activations a write's operand names —
-  still live inside one `Observe`, seeded from `outputs` so an operand may be
-  either a read of this pass or a published value from before it.
+  rotation a later step scores with; its `values` are what the steps before
+  produced — reads, a model call's own result, metrics, reductions — by
+  name, so a write's operand is simply the name of an earlier value. A nested
+  plan (a sweep point) gets a copy, so points cannot see each other's. The
+  state is a local of the walk: never saved, never shipped, gone with the
+  plan.
+* **what a model call makes is held and shipped only when it is named.** A
+  call makes its reads and its own result — a forward's logits, a generate's
+  ids — and each is held in the state only when a step of the plan takes it
+  (an operand, a metric's or a reduction's `of`) or a save keeps it, and
+  comes home in `results` only when a save keeps it. A forward's logits over
+  a real vocabulary and a thousand rows are gigabytes, and nothing asked for
+  them.
+* **a value keeps its graph until it leaves the run.** What a step
+  publishes is kept as it is, so a fit's objective can be differentiated
+  through its update's steps with nothing special about a fit; what comes
+  home in `results` is detached, which is the one place a value leaves.
 """
 
 from __future__ import annotations
@@ -34,7 +45,7 @@ import torch
 
 from ..ops import featurizer as featurizer_module, intervene, locate, metrics
 from ..ops.locate import Frame
-from ..plan import Featurizers, Fit, Forward, Observe, Plan, PlanError, Step, Weights
+from ..plan import Featurizers, Fit, Forward, Generate, Metric, Plan, PlanError, Reduce, Step
 from ..plan import plan as plan_module
 from ..shapes import Positions, Selection
 
@@ -49,46 +60,100 @@ Record = dict[str, dict[str, Any]]
 class State:
     """What one `steps` list shares, for as long as it runs."""
 
+    #: The live parameter sets, by the name the document declared.
     featurizers: dict[str, Any] = field(default_factory=dict)
-    outputs: dict[str, Any] = field(default_factory=dict)
-    #: For an output that still has its rows: the positions it was read over,
-    #: which say where each row is in it. Absent for one reduced over rows.
-    layout: dict[str, Any] = field(default_factory=dict)
+    #: Every value the steps so far produced, by name.
+    values: dict[str, Any] = field(default_factory=dict)
+    #: For a value that still has its rows, whether it came back flat — one
+    #: entry per position found, where its record's windows say — or as a
+    #: rectangle, a row per row. Absent for a value with no row axis: a mean,
+    #: a basis, a metric, a read stacked over every layer.
+    flat: dict[str, bool] = field(default_factory=dict)
+    #: Where each op acted, per row — the whole of a run's `Record`.
+    records: Record = field(default_factory=dict)
+    #: The ops whose record comes home: those of a step with a position the
+    #: document does not already fix (`Forward.dynamic`).
+    reported: set[str] = field(default_factory=set)
     #: How many rows one model call may hold. None: all of them. A property
     #: of the run and not of the experiment — it bounds memory and moves the
     #: last bit, nothing else — so it arrives with `execute`, not the plan.
     batch_size: int | None = None
+    #: Every value some step of the plan takes or some save keeps
+    #: (`named`): what a model call makes is held only if it is here.
+    named: frozenset[str] = frozenset()
 
     def child(self) -> "State":
-        """A nested plan's state: the same live featurizers, and the outputs
-        published before it as a copy — it reads what an earlier step
-        published, and what it publishes stays its own."""
-        return State(
-            featurizers=self.featurizers,
-            outputs=dict(self.outputs),
-            layout=dict(self.layout),
-            batch_size=self.batch_size,
+        """A nested scope: the same live featurizers, and what was produced
+        before it as a copy — it reads what came earlier, and what it
+        produces stays its own."""
+        return replace(
+            self, values=dict(self.values), flat=dict(self.flat), records=dict(self.records), reported=set(self.reported)
         )
 
+    def publish(self, name: str, value: Any, flat: bool | None = None) -> None:
+        """Keep a value for the steps after this one; `flat` as the field
+        says, None for a value with no rows."""
+        # TODO: the compiler should decide which values keep their graph —
+        # only those a later step asks a gradient of (a fit's objective, a
+        # future attribution or grad step) — by the same named-consumer rule
+        # that decides what is held at all. Until then every published value
+        # keeps its graph, which costs memory across a long run but blocks
+        # nothing.
+        self.values[name] = value
+        if flat is not None:
+            self.flat[name] = flat
 
-def run(engine: Any, step: Step, state: State | None = None, batch_size: int | None = None) -> None:
-    """Execute one step. A `Plan` is a step, so this is the whole walk."""
-    if state is None:
-        # The stateless featurizers exist before any document declares
-        # anything: `identity` is what a read or a write with no `featurizer`
-        # names, and it is never declared.
-        state = State(featurizers=dict(intervene.FEATURIZERS), batch_size=batch_size)
+    def window(self, name: str, start: int, stop: int) -> Any:
+        """Rows `start:stop` of a value, as a window of rows needs it: sliced
+        by its own form, or whole if it has no rows to slice."""
+        value = self.values[name]
+        if name not in self.flat:
+            return value
+        return intervene.rows(value, self.records[name]["rows"] if self.flat[name] else None, start, stop)
+
+
+def start(plan: Plan, batch_size: int | None = None) -> State:
+    """The state a run of `plan` starts from: nothing produced yet, and
+    what the plan names."""
+    return State(batch_size=batch_size, named=frozenset(named(plan)))
+
+
+def named(step: Step) -> set[str]:
+    """Every value a step of this tree takes — a write's operand, a metric's
+    or a reduction's `of` — or a save of it keeps, a fit's updates and
+    held-out run included."""
+    if isinstance(step, Forward):
+        return set(step.keep) | _operands(step)
+    if isinstance(step, (Metric, Reduce)):
+        return {step.of}
+    inner = [*step.steps.values()] if isinstance(step, Plan) else []
+    if isinstance(step, Fit):
+        inner = [*(update for epoch in step.epochs for update in epoch), step.evaluation]
+    return set().union(*map(named, inner))
+
+
+def _operands(step: Forward) -> set[str]:
+    """The earlier values this call's writes take, by name."""
+    return {op.operand for tap in step.taps for op in tap.writes if isinstance(op.operand, str)}
+
+
+def run(engine: Any, step: Step, state: State, name: str = "") -> None:
+    """Execute one step. A `Plan` is a step, so this is the whole walk; `name`
+    is the key a step has in its plan, which is what it publishes under. An
+    engine starts it with `start(plan, batch_size)`."""
     if isinstance(step, Plan):
-        for child in step.steps.values():
-            run(engine, child, state.child() if isinstance(child, Plan) else state)
+        for key, child in step.steps.items():
+            run(engine, child, state.child() if isinstance(child, Plan) else state, name=key)
     elif isinstance(step, Featurizers):
         build(step, state)
-    elif isinstance(step, Observe):
-        observe(engine, step, state)
+    elif isinstance(step, Forward):
+        call(engine, name, step, state)
+    elif isinstance(step, Metric):
+        metric(name, step, state)
+    elif isinstance(step, Reduce):
+        reduce(name, step, state)
     elif isinstance(step, Fit):
         fit(engine, step, state)
-    elif isinstance(step, Weights):
-        weights(step, state)
     else:
         raise TypeError(f"{type(step).__name__} is not a step this engine runs")
 
@@ -113,192 +178,158 @@ def build(step: Featurizers, state: State) -> None:
         state.featurizers[spec.name] = featurizer_module.KINDS[spec.kind](**tensors)
 
 
-def observe(engine: Any, step: Observe, state: State) -> dict[str, Any]:
-    """One pass: the forwards in order, then the metrics over what they read.
+def call(engine: Any, name: str, step: Forward, state: State) -> None:
+    """One model call over every row, `batch_size` rows at a time.
 
-    Returns the metrics live, because a fit differentiates them; records them
-    detached, because what comes home should not carry a graph.
+    A window of rows is the same call over a slice of them, with each
+    operand sliced the same way — a read that still has its rows is cut by
+    its own layout, so a write in this step meets the operand of *its* row
+    whichever earlier step read it, and a mean, which has no rows, is handed
+    whole. An engine is handed a step that is merely shorter and cannot tell;
+    what the windows read is concatenated back in row order, and every step
+    after this one sees one call. With no `batch_size` there is one window,
+    which is the step exactly as compiled.
 
-    `values` starts as a copy of the state's outputs, so a write's operand may
-    name either a read of this pass or something an earlier step published —
-    the engine cannot tell the difference and does not need to. What this
-    pass declares as its own outputs is published at the end.
+    Positions are resolved once, over every row, before any window runs:
+    they are absolute indices into the padded width the client fixed, so a
+    window of them is a slice (`plan.window`), and a write that cannot land
+    is refused before the first model call. What a smaller batch does change
+    is the last bit: a GEMM over fewer rows rounds differently (FINDINGS §8).
     """
-    values, positions = passes(engine, step, state)
-    rows = len(step.forwards[0].input_ids) if step.forwards else 0
-    # A metric's rows are the intersection of two halves: the column half,
-    # which the client decided from the data, and the position half, which
-    # only the run can know. Neither is authoritative alone.
-    eligible = {
-        metric.name: tuple(
-            (metric.rows is None or row in metric.rows)
-            and bool(positions[metric.of]["rows"][row])
-            for row in range(rows)
-        )
-        for metric in step.metrics
+    ready, record = located(engine, step, step.dynamic)
+    _writes_land(ready, {**state.records, **record})
+    operands = _operands(step)
+    model_call = engine.generate if isinstance(step, Generate) else engine.forward
+    # what a window makes that is kept past it: what the plan names — a
+    # read's part by the stack or the layers it belongs to — and a decode's
+    # ids, which the continuation is cut against; so a window's unnamed
+    # logits go with the window, and `batch_size` bounds them
+    kept = ({name} if isinstance(step, Generate) else {name} & state.named) | {
+        op.name for tap in step.taps for op in tap.reads if (op.stack or op.layered or op.name) in state.named
     }
-    scored = {
-        metric.name: metrics.compute(
-            metric.kind,
-            *_measured(step, metric, values[metric.of], eligible[metric.name], positions[metric.of]["rows"], rows),
-        )
-        for metric in step.metrics
+    rows = len(step.input_ids)
+    size = state.batch_size or rows
+    produced: list[dict[str, Any]] = []
+    for start in range(0, rows, size):
+        stop = min(start + size, rows)
+        values = {one: state.window(one, start, stop) for one in operands}
+        values[name] = model_call(plan_module.window(ready, start, stop), values, state.featurizers)
+        produced.append({one: value for one, value in values.items() if one in kept})
+    made = {
+        one: produced[0][one] if len(produced) == 1 else torch.cat([part[one] for part in produced])
+        for one in produced[0]
     }
-    step.results.update({name: value.detach().cpu() for name, value in scored.items()})
-    if positions and _dynamic(step):
-        # Where this pass read and wrote, and which rows it could score.
-        # Plain tuples of integers and strings, so they come home in the plan
-        # like a metric does and a table can print them beside a number.
-        step.results["positions"] = positions
-        if eligible:
-            step.results["eligible"] = eligible
-    # a decoding forward leaves its generated ids in `values`; they are a
-    # result of the pass like a metric is
-    step.results.update(
-        {name: value.detach().cpu() for name, value in values.items() if name.endswith(".generated")}
-    )
-    for output in step.outputs:
-        tensor = values[output.read]
-        if output.reduce == "mean":
-            # over rows for a rectangle, keeping the window; over every
-            # position for a ragged read, which has no window axis to keep
-            tensor = tensor.mean(dim=0)
-        elif output.reduce == "pca":
-            assert output.k is not None
-            tensor = featurizer_module.pca(tensor, output.k)
-        state.outputs[output.name] = tensor.detach()
-        if output.reduce == "none":
-            state.layout[output.name] = positions[output.read]["rows"]
-        step.results[output.name] = tensor.detach().cpu()
-    return scored
+    if isinstance(step, Generate):
+        record.update(_continuation(engine, ready, made, made[name]))
+    _stack_layers(step, made, record)
+    state.records.update(record)
+    # a read has its own form; a call's own result is a rectangle; a read at
+    # every layer has the layers first, and no rows a later window could take
+    forms = {op.stack or op.name: op.flat for tap in step.taps for op in tap.reads if not op.layered}
+    for one, whole in made.items():
+        if one in state.named:
+            state.publish(one, whole, forms.get(one, False if one == name else None))
+    step.results.update({one: made[one].detach().cpu() for one in step.keep})
+    if step.dynamic:
+        # Where this step read and wrote, and what it decoded to. Plain
+        # tuples of integers and strings, so they come home in the plan like
+        # a metric does and a table can print them beside a number.
+        step.results["positions"] = record
+        state.reported |= set(record)
 
 
-def _dynamic(step: Observe) -> bool:
-    """Whether this pass has a position the document does not already fix.
+def _stack_layers(step: Forward, made: dict[str, Any], record: Record) -> None:
+    """A read at several layers, as the one value it is: its per-layer reads
+    stacked in the order the document listed the layers, the layer axis
+    first. Every layer read the same positions, so one record says where."""
+    parts = [(tap.address.layer, op) for tap in step.taps for op in tap.reads if op.layered]
+    for stacked in dict.fromkeys(op.layered for _, op in parts):
+        # taps come in forward order; the stack is in the listed one
+        mine = {layer: op for layer, op in parts if op.layered == stacked}
+        names = [mine[layer].name for layer in next(iter(mine.values())).layers]
+        if names[0] in made:  # the plan names it
+            made[stacked] = torch.stack([made.pop(one) for one in names])
+        record[stacked] = record[names[0]]
+        for one in names:
+            del record[one]
 
-    A text anchor is one — which rows carry a word is data — and so is any
-    cut of the continuation, because the continuation is what the decode
-    turned out to produce. A pass with neither resolves the same integers on
-    every row and every run, and the document already says so: it needs no
-    character map and reports nothing, so a plan compiled before any of this
-    existed still writes the table it used to.
+
+def metric(name: str, step: Metric, state: State) -> None:
+    """One score per scored row of one read.
+
+    A metric's rows are the intersection of two halves: the column half,
+    which the client decided from the data, and the position half, which
+    only the run can know. Neither is authoritative alone. When the read's
+    step reported where it acted, the metric carries the intersection and
+    that record too, so the table it is saved to can say which token each
+    number came from.
     """
-    return any(
-        op.at.where is not None
-        and (op.at.where.scope is not None or op.at.where.frame == "generated")
-        for forward in step.forwards
-        for tap in forward.taps
-        for op in (*tap.reads, *tap.writes)
+    located_rows = state.records[step.of]["rows"]
+    eligible = tuple(
+        (step.rows is None or row in step.rows) and bool(one) for row, one in enumerate(located_rows)
     )
+    value = state.values[step.of]
+    # a read at every layer is scored layer by layer, a row of scores each
+    scores = [
+        metrics.compute(step.kind, *_measured(name, step, one, eligible, located_rows))
+        for one in (value if step.layers else [value])
+    ]
+    state.publish(name, torch.stack(scores) if step.layers else scores[0])
+    step.results[name] = state.values[name].detach().cpu()
+    if step.of in state.reported:
+        step.results["eligible"] = {name: eligible}
+        step.results["positions"] = {step.of: state.records[step.of]}
 
 
 def _measured(
-    step: Observe,
-    metric: Any,
+    name: str,
+    step: Metric,
     value: Any,
     eligible: tuple[bool, ...],
-    located: Positions,
-    rows: int,
+    located_rows: Positions,
 ) -> tuple[Any, tuple[Any, ...]]:
     """What this metric scores: the read's eligible rows, and their token ids.
 
     A metric reads one position per row — the compiler refused anything else
     — so a rectangular read's `(rows, 1, vocab)` is `(rows, vocab)` with the
-    unit window off. A text-anchored read gathered flat instead, one row per
-    row it *found*, so the eligible rows are indexed by their place among
-    those. The ids came compiled for the *column*-eligible rows, and the
-    position half may drop more, so they are indexed the same way. Either
-    side holds one entry per eligible row, in row order, and the mean
-    downstream needs no mask.
+    unit window off. A read gathered flat instead has one row per row it
+    *found*, so the eligible rows are indexed by their place among those.
+    The ids came compiled for the *column*-eligible rows, and the position
+    half may drop more, so they are indexed the same way. Either side holds
+    one entry per eligible row, in row order, and the mean downstream needs
+    no mask.
     """
     keep = [row for row, one in enumerate(eligible) if one]
     if not keep:
         raise PlanError(
-            f"metric {metric.name!r}: none of these {len(eligible)} row(s) is both in the "
+            f"metric {name!r}: none of these {len(eligible)} row(s) is both in the "
             f"metric's columns and at a position the run could resolve; a metric of "
             "nothing has no mean"
         )
-    scored = metric.rows if metric.rows is not None else range(rows)
+    scored = step.rows if step.rows is not None else range(len(eligible))
     place = {row: index for index, row in enumerate(scored)}
-    ids = tuple(tuple(one[place[row]] for row in keep) for one in metric.ids)
-    if not _gathered_flat(step, metric.of):
+    ids = tuple(tuple(one[place[row]] for row in keep) for one in step.ids)
+    if not step.flat:
         return value[keep, 0], ids
-    found = {row: index for index, row in enumerate(row for row, one in enumerate(located) if one)}
+    found = {row: index for index, row in enumerate(row for row, one in enumerate(located_rows) if one)}
     return value[[found[row] for row in keep]], ids
 
 
-def _gathered_flat(step: Observe, name: str) -> bool:
-    """Whether the value called `name` came back flat — one row per row that
-    resolved — rather than as a rectangle.
-
-    The op that produced it is the read of that name, or, for a read the run
-    cut out of the continuation, any one of the per-step ops that made it.
-    For a read of the prompt the selection answers; for one cut out of the
-    continuation the spec does, because the cut happened over the steps and
-    not at the tap.
-    """
-    op = next(
-        one
-        for forward in step.forwards
-        for tap in forward.taps
-        for one in tap.reads
-        if name in (one.name, one.stack)
-    )
-    if not op.stack:
-        return op.at.flat
-    return op.at.where is not None and op.at.where.ragged
+def reduce(name: str, step: Reduce, state: State) -> None:
+    """One read, reduced over its rows: over rows for a rectangle, keeping
+    the window; over every position for a ragged read, which has no window
+    axis to keep. What is left has no rows, so every window shares it."""
+    value = state.values[step.of]
+    if step.reduce == "mean":
+        value = value.mean(dim=0)
+    else:
+        assert step.k is not None
+        value = featurizer_module.pca(value, step.k)
+    state.publish(name, value)
+    step.results[name] = state.values[name].detach().cpu()
 
 
-def passes(engine: Any, step: Observe, state: State) -> tuple[dict[str, Any], Record]:
-    """Every forward of a pass, over every row, `batch_size` rows at a time.
-
-    A window of rows is a whole small pass: the same forwards in the same
-    order over a slice of the rows, with the published values it reads
-    sliced the same way — so a write still meets the operand of *its* row.
-    An engine is handed a forward that is merely shorter and cannot tell;
-    what the windows read is concatenated back in row order, and everything
-    after this function sees one pass. With no `batch_size` there is one
-    window, which is the pass exactly as compiled.
-
-    Rows were padded to one width on the client, so a window's positions are
-    already right. What a smaller batch does change is the last bit: a GEMM
-    over fewer rows rounds differently (FINDINGS §8).
-    """
-    count = len(step.forwards[0].input_ids) if step.forwards else 0
-    size = state.batch_size or count or 1
-    text = _dynamic(step)
-    parts: list[dict[str, Any]] = []
-    windows: list[Record] = []
-    for start in range(0, count, size):
-        stop = min(start + size, count)
-        values = {
-            name: intervene.rows(tensor, state.layout.get(name), start, stop)
-            for name, tensor in state.outputs.items()
-        }
-        published = set(values)
-        found: Record = {}
-        for forward in step.forwards:
-            ready, resolved = located(engine, plan_module.window(forward, start, stop), start, text)
-            found.update(resolved)
-            _writes_land(ready, found, start)
-            engine.forward(ready, values, state.featurizers)
-            found.update(_continuation(engine, ready, values))
-        parts.append({name: value for name, value in values.items() if name not in published})
-        windows.append(found)
-    merged = dict(state.outputs)
-    for name in parts[0] if parts else ():
-        merged[name] = parts[0][name] if len(parts) == 1 else torch.cat([part[name] for part in parts])
-    # each window resolved its own rows; in row order they are the pass's
-    return merged, {
-        name: {
-            key: tuple(one for part in windows for one in part[name][key])
-            for key in ("rows", "reason", "tokens")
-        }
-        for name in (windows[0] if windows else {})
-    }
-
-
-def located(engine: Any, forward: Forward, start: int = 0, text: bool = True) -> tuple[Forward, Record]:
+def located(engine: Any, forward: Forward, text: bool = True) -> tuple[Forward, Record]:
     """`forward` with every op's positions resolved, and what each one got.
 
     This is where a spec becomes integers, and it happens here — in the
@@ -306,8 +337,8 @@ def located(engine: Any, forward: Forward, start: int = 0, text: bool = True) ->
     the client, so that a text anchor is looked for in the text the model
     will actually see. One `Frame` is built per forward and every tap shares
     it; building one per tap is the one place this could be slow. `text` is
-    the character map, which is the expensive half and which only a pass
-    that reports where it acted has any use for — see `_dynamic`.
+    the character map, which is the expensive half and which only a step
+    that reports where it acted has any use for — see `Forward.dynamic`.
 
     What comes back beside the forward is what the run reports: per op, each
     row's `rows` window, the `reason` it is empty when it is, and the
@@ -330,18 +361,12 @@ def located(engine: Any, forward: Forward, start: int = 0, text: bool = True) ->
     rows = len(forward.input_ids)
     found: Record = {}
 
-    def resolve(kind: str, op: Any) -> Any:
+    def resolve(op: Any) -> Any:
         where = op.at.where
         if where is None or where.frame == "generated":
             return replace(op, at=replace(op.at, positions=((0,),) * rows))
         windows, reasons = locate.locate(frame, where, op.at.anchors)
-        if not where.ragged:
-            _fits_every_row(kind, op, windows, reasons, start)
-        found[op.name] = {
-            "rows": windows,
-            "reason": reasons,
-            "tokens": tuple(locate.tokens_of(frame, one, row) for row, one in enumerate(windows)),
-        }
+        found[op.name] = _record(frame, windows, reasons)
         return replace(op, at=replace(op.at, positions=windows))
 
     return (
@@ -350,8 +375,8 @@ def located(engine: Any, forward: Forward, start: int = 0, text: bool = True) ->
             taps=tuple(
                 replace(
                     tap,
-                    writes=tuple(resolve("write", op) for op in tap.writes),
-                    reads=tuple(resolve("read", op) for op in tap.reads),
+                    writes=tuple(resolve(op) for op in tap.writes),
+                    reads=tuple(resolve(op) for op in tap.reads),
                 )
                 for tap in forward.taps
             ),
@@ -360,7 +385,7 @@ def located(engine: Any, forward: Forward, start: int = 0, text: bool = True) ->
     )
 
 
-def _continuation(engine: Any, forward: Forward, values: dict[str, Any]) -> Record:
+def _continuation(engine: Any, forward: Forward, values: dict[str, Any], generated_ids: Any) -> Record:
     """What the continuation frame's taps did, once there is a continuation.
 
     Two jobs, and they need the same `Frame`: the ids the decode produced,
@@ -379,62 +404,35 @@ def _continuation(engine: Any, forward: Forward, values: dict[str, Any]) -> Reco
     prompt — so the prompt frame has nothing true to say about it, and this
     is the only place that does.
     """
-    generated = values.get(f"{forward.name}.generated")
-    in_frame = [
-        (tap.step, op)
-        for tap in forward.taps
-        for op in (*tap.reads, *tap.writes)
-        if op.at.where is not None and op.at.where.frame == "generated"
-    ]
-    if not in_frame or generated is None:
+    def generated(op: Any) -> bool:
+        return op.at.where is not None and op.at.where.frame == "generated"
+
+    # a read cut out of the continuation is its decode steps' reads, which
+    # share one spec and come in step order (`build._forward`); every other
+    # op in the frame is one
+    ops: dict[str, Any] = {op.stack or op.name: op for tap in forward.taps for op in tap.reads if generated(op)}
+    ops |= {op.name: op for tap in forward.taps for op in tap.writes if generated(op)}
+    if not ops:
         return {}
-    frame = locate.continuation(
-        engine.tokenizer, tuple(tuple(int(one) for one in row) for row in generated)
-    )
+    frame = locate.continuation(engine.tokenizer, tuple(tuple(int(one) for one in row) for row in generated_ids))
     found: Record = {}
-    for name in dict.fromkeys(getattr(op, "stack", "") or op.name for _, op in in_frame):
-        parts = [op for _, op in sorted(in_frame, key=_by_step) if (getattr(op, "stack", "") or op.name) == name]
-        where = parts[0].at.where
-        assert where is not None
-        windows, reasons = locate.locate(frame, where, parts[0].at.anchors)
-        if getattr(parts[0], "stack", ""):
-            steps = [values.pop(op.name) for op in parts]
+    for name, op in ops.items():
+        where = op.at.where
+        windows, reasons = locate.locate(frame, where, op.at.anchors)
+        parts = [one.name for tap in forward.taps for one in tap.reads if one.stack == name]
+        if parts and parts[0] in values:  # a stack of decode steps the plan names
             # (rows, steps, width): each step read the one position it processed
-            whole = torch.stack(steps, dim=1).squeeze(2)
-            values[name] = intervene.gather(
-                whole, Selection(positions=windows, flat=where.ragged), seq_axis=1
-            )
-        found[name] = {
-            "rows": windows,
-            "reason": reasons,
-            "tokens": tuple(locate.tokens_of(frame, one, row) for row, one in enumerate(windows)),
-        }
+            whole = torch.stack([values.pop(one) for one in parts], dim=1).squeeze(2)
+            values[name] = intervene.gather(whole, Selection(positions=windows, flat=where.ragged), seq_axis=1)
+        found[name] = _record(frame, windows, reasons)
     return found
 
 
-def _by_step(one: tuple[Any, Any]) -> int:
-    """A stack's parts in decode order. A tap at every step (`"all"`) is not
-    one of them, and sorts first."""
-    return one[0] if isinstance(one[0], int) else -1
-
-
-def _fits_every_row(kind: str, op: Any, windows: Positions, reasons: tuple[str, ...], start: int) -> None:
-    """A fixed-width cut that does not fit a row is an authoring error.
-
-    `{"last": 12}` on a nine-token row, `{"index": 40}` on any of these —
-    the form names the same number of tokens on every row, so a row it does
-    not fit is a document that is wrong about its own prompts, not a row
-    with nothing to say. An anchored cut is the other case and is reported
-    per row instead: which rows carry a word is data.
-    """
-    missed = {start + row: reasons[row] for row, window in enumerate(windows) if not window}
-    if missed:
-        raise PlanError(
-            f"{kind} {op.name!r} at {op.at.where.spelling()} has no position on row(s) "
-            f"{missed}. A position of a fixed width names the same number of tokens on "
-            "every row, so a row it does not fit is refused rather than skipped; a "
-            "position anchored to the row's own text may skip a row, and says why"
-        )
+def _record(frame: Frame, windows: Positions, reasons: tuple[str, ...]) -> dict[str, Any]:
+    """What a run reports of one op: each row's window, why it is empty when
+    it is, and what it decoded to in `frame`."""
+    tokens = tuple(locate.tokens_of(frame, one, row) for row, one in enumerate(windows))
+    return {"rows": windows, "reason": reasons, "tokens": tokens}
 
 
 def _same_text(forward: Forward, frame: Frame) -> None:
@@ -462,7 +460,7 @@ def _same_text(forward: Forward, frame: Frame) -> None:
         )
 
 
-def _writes_land(forward: Forward, record: Record, start: int) -> None:
+def _writes_land(forward: Forward, record: Record) -> None:
     """The ragged write policy, and it is `refuse`.
 
     A read may have an empty window on a row — the anchor's text was not in
@@ -473,17 +471,12 @@ def _writes_land(forward: Forward, record: Record, start: int) -> None:
     landing policies are not implemented.
 
     Both are checked here, at the write, because here is where the positions
-    are. `start` puts the row numbers back in the pass's own terms, so a
-    batched run names the row an author would count to.
+    are — once per step, over every row, before any window runs.
     """
     for tap in forward.taps:
         for write in tap.writes:
-            reasons = record.get(write.name, {}).get("reason", ())
-            missed = {
-                start + row: (reasons[row] if row < len(reasons) else "") or "out_of_range"
-                for row, window in enumerate(write.at.positions)
-                if not window
-            }
+            # an empty window was resolved here, so it has a record and a reason
+            missed = {row: record[write.name]["reason"][row] for row, window in enumerate(write.at.positions) if not window}
             if missed:
                 raise PlanError(
                     f"write {write.name!r} has nothing to write on row(s) {missed}. A read "
@@ -495,7 +488,7 @@ def _writes_land(forward: Forward, record: Record, start: int) -> None:
             if isinstance(write.operand, str) and write.operand in record:
                 have = [len(window) for window in record[write.operand]["rows"]]
                 want = [len(window) for window in write.at.positions]
-                mismatched = [start + row for row, (a, b) in enumerate(zip(have, want)) if a != b]
+                mismatched = [row for row, (a, b) in enumerate(zip(have, want)) if a != b]
                 if mismatched:
                     raise PlanError(
                         f"write {write.name!r} covers {want} positions per row but its "
@@ -506,20 +499,23 @@ def _writes_land(forward: Forward, record: Record, start: int) -> None:
                     )
 
 
-def fit(engine: Any, step: Fit, state: State) -> None:
-    """The same pass, N times, with an optimizer between.
+#: A document's name for an optimizer, and `torch.optim`'s.
+OPTIMIZERS = {"adamw": "AdamW", "adam": "Adam", "sgd": "SGD", "rmsprop": "RMSprop"}
 
-    Nothing about this loop is a second engine: an update is `observe` over one
-    minibatch's rows, and the only things that happen between updates are an
-    optimizer step and an eval pass. `step.params` is the protocol's only
+
+def fit(engine: Any, step: Fit, state: State) -> None:
+    """The same steps, once per minibatch, with an optimizer between.
+
+    Nothing about this loop is a second engine: an update is the walk over
+    one minibatch's steps, in a scope whose values keep their graph, and the
+    only things that happen between updates are an optimizer step and an
+    evaluation over the held-out rows. `step.params` is the protocol's only
     trainability declaration, so the optimizer's parameter list *is* it — the
     model is frozen and nothing else in the run carries a gradient.
     """
     featurizers = state.featurizers
-    optimizer = torch.optim.AdamW(
-        [featurizers[name].weight for name in step.params],
-        lr=step.lr,
-        weight_decay=step.weight_decay,
+    optimizer = getattr(torch.optim, OPTIMIZERS[step.optimizer])(
+        [featurizers[name].weight for name in step.params], **step.optimizer_args
     )
     # A gate's mask is a term the objective may name (`<name>.mask`, its mean
     # is the L1 penalty) and a column of the eval record (the fraction kept).
@@ -528,28 +524,30 @@ def fit(engine: Any, step: Fit, state: State) -> None:
     losses, scores = [], []
     best, waited = None, 0
     for epoch in step.epochs:
-        _training(featurizers, step.params, True)
+        for name in step.params:
+            featurizers[name].training = True  # a gate is soft while it is updated
         for update in epoch:
             for name, first, last in step.anneal:
                 # geometric, from `first` on the first update to `last` on the last
                 featurizers[name].temperature = first * (last / first) ** (done / max(total - 1, 1))
             done += 1
-            scored = dict(observe(engine, update, state))
-            scored.update({f"{name}.mask": gate.mask for name, gate in gates.items()})
+            scored = _scored(engine, update, state, gates)
             loss = objective(step.objective, scored)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             losses.append(loss.detach().cpu())
-        # The eval pass runs in eval mode: no gradients, and on rows the fit
+        # The evaluation runs in eval mode: no gradients, and on rows the fit
         # never saw.
-        _training(featurizers, step.params, False)
+        for name in step.params:
+            featurizers[name].training = False  # and hard whenever it is scored
         with torch.no_grad():
-            evaluated = dict(observe(engine, step.evaluation, state))
-            evaluated.update({f"{name}.mask": gate.mask for name, gate in gates.items()})
+            evaluated = _scored(engine, step.evaluation, state, gates)
         # each on the CPU first: a metric is wherever the model is, a gate's mask
         # wherever its parameter is, and a record is neither's
-        scores.append(torch.stack([evaluated[name].mean().cpu() for name in step.eval_metrics]))
+        # the watched metric, then the fraction each trained gate keeps
+        watched_and_kept = (step.early_stop, *(f"{name}.mask" for name in gates))
+        scores.append(torch.stack([evaluated[name].mean().cpu() for name in watched_and_kept]))
         watched = float(evaluated[step.early_stop].mean())
         improved = best is None or (watched > best if step.mode == "max" else watched < best)
         if improved:
@@ -558,30 +556,22 @@ def fit(engine: Any, step: Fit, state: State) -> None:
             waited += 1
             if waited >= step.patience:
                 break
-    step.results["train/loss"] = torch.stack(losses).cpu()
-    step.results["train/eval"] = torch.stack(scores).cpu()
+    # the fit's own results: its record, and each parameter as it trained it
+    step.results["train"] = {"loss": torch.stack(losses).cpu(), "eval": torch.stack(scores).cpu()}
+    step.results.update({name: featurizers[name].weight.detach().cpu() for name in step.params})
 
 
-def _training(featurizers: dict[str, Any], names: tuple[str, ...], on: bool) -> None:
-    """The one piece of mode: a gate is soft while it is being updated and
-    hard whenever it is scored. A rotation has no use for the flag."""
-    for name in names:
-        featurizers[name].training = on
-
-
-def weights(step: Weights, state: State) -> None:
-    """The fitted parameters, as results. This is the step that makes a
-    rotation something a save entry can name."""
-    for name in step.names:
-        step.results[name] = state.featurizers[name].weight.detach().cpu()
+def _scored(engine: Any, steps: Plan, state: State, gates: dict[str, Any]) -> dict[str, Any]:
+    """Every value a fit's subtree produced, live — the metrics its objective
+    and its early stop name are among them, still attached to their graph —
+    and each gate's mask, as `<name>.mask`."""
+    inner = state.child()
+    run(engine, steps, inner)
+    return inner.values | {f"{name}.mask": gate.mask for name, gate in gates.items()}
 
 
 def objective(terms: tuple[tuple[float, str], ...], scored: dict[str, Any]) -> Any:
     """Σ wᵢ · termᵢ, minimized. The sign of the weight is the direction — a
     positive weight on a cross-entropy minimizes it, a −1 on a logit_diff
     maximizes the margin — and there is no `maximize` flag anywhere."""
-    total = None
-    for weight, name in terms:
-        term = weight * scored[name].mean()
-        total = term if total is None else total + term
-    return total
+    return sum(weight * scored[name].mean() for weight, name in terms)

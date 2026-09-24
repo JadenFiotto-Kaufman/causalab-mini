@@ -12,24 +12,24 @@ import pathlib
 
 import pytest
 import torch
+from conftest import model_block, of_kind
 
 from causalab_mini import ops, plan
 from causalab_mini.data import tokens
 
 from causalab_mini.address import Address
 from causalab_mini.engine import steps
-from causalab_mini.plan import document
 from causalab_mini.engine import NNterpEngine
 from causalab_mini.engine.engines.nnterp import engine as nnterp
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-DOCUMENT = REPO / "documents" / "gpt2_cpu.json"
+DOCUMENT = REPO / "documents" / "v2" / "gpt2_reach.json"
 
 
 @pytest.fixture(scope="session")
 def gpt2_engine():
     """An nnterp engine holding the tiny random GPT-2 the document pins."""
-    return NNterpEngine.load(document.Document.load(DOCUMENT).model, device_map="cpu")
+    return NNterpEngine.load(model_block(DOCUMENT), device_map="cpu")
 
 
 @pytest.fixture(scope="session")
@@ -51,23 +51,20 @@ def _at(raw, component, layer):
     raw = copy.deepcopy(raw)
     site = {"component": component}
     if layer is not None:
-        site["layers"] = [layer]
-    raw["method"]["sites"]["target"] = site
+        site["layers"] = layer
+    raw["sites"]["target"] = site
     return raw
 
 
 def _no_write(raw):
     raw = copy.deepcopy(raw)
-    del raw["method"]["reads"]["v_cf"], raw["method"]["writes"], raw["method"]["intervened_models"]
-    raw["method"]["reads"]["logits"]["model"] = "original"
-    for entry in raw["method"]["save"]:
-        entry["model"] = "original"
+    del raw["steps"]["patched"]["interventions"]
     return raw
 
 
 def _identity_write(raw):
     raw = copy.deepcopy(raw)
-    raw["method"]["reads"]["v_cf"]["input"] = "base"
+    raw["steps"]["counterfactual"]["field"] = "input"
     return raw
 
 
@@ -77,10 +74,11 @@ def _identity_write(raw):
 
 
 def test_one_address_serves_both_families(model_engine, gpt2_engine, model, gpt2):
-    """The same `Address` — the same component, layer and resolved operation —
-    reaches both models, although the modules it lands on share no path."""
+    """The same accessor, layer and side reach both models, although the
+    modules they land on share no path."""
     for component, layer in (("block_output", 0), ("lm_head", None), ("attention_query", 0)):
-        assert model_engine.locate(component, layer).where == gpt2_engine.locate(component, layer).where
+        one, other = model_engine.locate(component, layer), gpt2_engine.locate(component, layer)
+        assert (one.accessor, one.layer, one.io, one.inside) == (other.accessor, other.layer, other.io, other.inside)
 
     # What nnterp is absorbing on our behalf, spelled out: these are the real
     # paths, and nothing in the project mentions either of them.
@@ -95,9 +93,10 @@ def test_the_interior_operation_is_the_same_call_on_both_families(model_engine, 
     forwards' dispatch identically — not by luck of an occurrence count: on
     GPT-2 the call sits in an `else` branch, under two more assignments and a
     second candidate implementation, and the suffix still lands on 1 because a
-    call-op suffix counts calls of one symbol."""
-    assert gpt2_engine.locate("attention_query", 0).op == "attention_interface_1"
-    assert model_engine.locate("attention_query", 0).op == "attention_interface_1"
+    call-op suffix counts calls of one symbol. nnterp's one row serves both."""
+    for one in (model, gpt2):
+        assert "attention_interface_1" in set(one.attentions[0].source.names)
+        assert one.internals["attention_queries"].address.op == ("attention_interface_1",)
     gpt2_ops = set(gpt2.attentions[0].source.names)
     assert "self__upcast_and_reordered_attn_0" in gpt2_ops  # the branch Llama has not
     assert "self__upcast_and_reordered_attn_0" not in set(model.attentions[0].source.names)
@@ -133,7 +132,7 @@ def test_a_swap_at_the_head_makes_the_patched_run_score_the_counterfactual(gpt2_
 
     # The same run with no write, over the counterfactual prompts as its base.
     counterfactual = _no_write(gpt2_raw)
-    counterfactual["data"]["base"]["field"] = counterfactual["data"]["counterfactual"]["field"]
+    counterfactual["steps"]["patched"]["field"] = counterfactual["steps"]["counterfactual"]["field"]
     reference = gpt2_engine.execute(_build(counterfactual, data_root, gpt2_engine))
 
     assert torch.equal(swapped.result("logit_diff"), reference.result("logit_diff"))
@@ -146,7 +145,7 @@ def test_the_engines_head_read_is_the_models_own_logits_here_too(gpt2, gpt2_raw,
     built = _build(gpt2_raw, data_root, gpt2_engine)
     results = gpt2_engine.execute(built)
 
-    source, patched = built.step("observe", plan.Observe).forwards
+    source, patched = of_kind(built, plan.Forward)
     with gpt2.trace(nnterp.batch(source)):
         v_cf = gpt2.layers_output[2][:, -1, :].clone().save()
     with gpt2.trace(nnterp.batch(patched)):
@@ -154,7 +153,7 @@ def test_the_engines_head_read_is_the_models_own_logits_here_too(gpt2, gpt2_raw,
         logits = gpt2.logits[:, -1, :].clone().save()
 
     rows = torch.arange(4)
-    a, b = built.step("observe", plan.Observe).metrics[0].ids
+    a, b = of_kind(built, plan.Metric)[0].ids
     assert torch.equal(
         results.result("logit_diff"), logits[rows, torch.tensor(a)] - logits[rows, torch.tensor(b)]
     )
@@ -178,7 +177,7 @@ def test_the_shipped_weekdays_answers_are_not_single_tokens_here(gpt2_engine, gp
     rows."""
     assert gpt2.tokenizer.encode(" Friday", add_special_tokens=False) == [304, 82, 271, 288]
     with pytest.raises(tokens.TokenError, match="is 4 tokens"):
-        plan.build(document.Document.from_json(minimal_raw), data_root, gpt2_engine)
+        plan.build_request(minimal_raw, data_root, gpt2_engine)
 
 
 def test_token_form_is_load_bearing_on_this_tokenizer_and_inert_on_the_llamas(gpt2, model):
@@ -207,7 +206,7 @@ def test_the_query_at_layer_0_carries_nothing_a_prompt_pair_differs_in(gpt2_engi
     assert torch.equal(swapped.result("logit_diff"), clean.result("logit_diff"))
 
     built = _build(raw, data_root, gpt2_engine)
-    source, _ = steps.located(gpt2_engine, built.step("observe", plan.Observe).forwards[0])
+    source, _ = steps.located(gpt2_engine, of_kind(built, plan.Forward)[0])
     tap = source.taps[0]
     with gpt2.trace(nnterp.batch(source)):
         query = ops.gather(

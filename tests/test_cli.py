@@ -15,7 +15,7 @@ from causalab_mini import cli
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 DAS = str(REPO / "documents" / "v2" / "das.json")
-PATCHING = str(REPO / "documents" / "minimal_cpu.json")
+PATCHING = str(REPO / "documents" / "v2" / "patching.json")
 DATA = str(REPO / "documents" / "data")
 TINY = "hf-internal-testing/tiny-random-LlamaForCausalLM"
 REVISION = "9fb191250dd56d0ba7ec9785a025ed29c03d5998"
@@ -27,9 +27,12 @@ def _json(capsys, argv):
 
 
 def test_schema_is_the_models_own(capsys):
+    from causalab_mini.plan.spec import Spec
+
     out = _json(capsys, ["schema"])
-    assert out["schema"]["required"] == ["model", "roles", "sites", "interventions", "steps"]
-    assert "Fit" in out["schema"]["$defs"]
+    assert out["schema"] == Spec.model_json_schema()
+    assert out["schema"]["required"] == ["model", "steps"]
+    assert {"Forward", "Generate", "Reduce", "Fit"} <= set(out["schema"]["$defs"])
 
 
 def test_vocab_is_the_tables_not_a_description_of_them(capsys):
@@ -37,10 +40,12 @@ def test_vocab_is_the_tables_not_a_description_of_them(capsys):
     from causalab_mini.ops import intervene
 
     out = _json(capsys, ["vocab"])
+    assert set(out["step_kinds"]) == {"forward", "generate", "metric", "reduce", "fit"}
+    assert out["reductions"] == ["mean", "pca"]
     assert set(out["components"]) == set(address.describe())
     assert out["mechanisms"] == sorted(intervene.MECHANISMS)
     assert out["metric_kinds"]["logit_diff"] == ["a", "b"]
-    assert out["components"]["attention_query"]["interior"] is True
+    assert out["components"]["attention_query"]["accessor"] == "attention_queries"
     assert out["components"]["block_output"]["width"] == "hidden_size"
 
 
@@ -51,12 +56,12 @@ def test_model_answers_without_weights(capsys):
     # one band per run of layers that answer alike, so a model whose layers
     # are all the same says so in one entry
     assert out["components"]["block_output"] == [
-        {"layers": "0-1", "resolves": True, "width": 16, "op": None}
+        {"layers": "0-1", "resolves": True, "width": 16, "inside": False}
     ]
     assert out["components"]["lm_head"] == [
-        {"layers": None, "resolves": True, "width": 32000, "op": None}
+        {"layers": None, "resolves": True, "width": 32000, "inside": False}
     ]
-    assert out["components"]["attention_query"][0]["op"] == "attention_interface_1"
+    assert out["components"]["attention_query"][0]["inside"] is True
 
 
 def test_model_takes_the_model_blocks_own_fields(capsys):
@@ -74,12 +79,12 @@ def test_model_takes_the_model_blocks_own_fields(capsys):
 
 
 def test_model_reports_what_an_engine_refuses(capsys):
-    """The hooks engine cannot reach an interior, and `model --engine hooks`
+    """The hooks engine cannot reach inside a forward, and `model --engine hooks`
     says so per component rather than failing whole."""
     out = _json(capsys, ["model", TINY, "--revision", REVISION, "--engine", "hooks"])
     assert out["components"]["block_output"][0]["resolves"] is True
     assert out["components"]["attention_query"][0]["resolves"] is False
-    assert "interior" in out["components"]["attention_query"][0]["why"]
+    assert "inside a module's forward" in out["components"]["attention_query"][0]["why"]
     assert out["components"]["logits"][0]["resolves"] is True, "it reaches this one now"
 
 
@@ -99,25 +104,35 @@ def test_data_describes_a_ref(capsys):
     assert out["sample"][0]["input"].startswith("If today is")
 
 
-def test_validate_reads_both_formats(capsys):
-    assert _json(capsys, ["validate", DAS])["format"] == "plan-shaped"
-    assert _json(capsys, ["validate", PATCHING])["format"] == "protocol"
+def test_validate_says_a_document_is_valid(capsys):
+    out = _json(capsys, ["validate", DAS])
+    assert out["ok"] is True and "fit" in out["steps"]
+
+
+def test_a_protocol_document_is_refused_by_its_key(tmp_path, capsys):
+    """The protocol's `method` shape has no reader any more: a document in it
+    is refused as a document, naming the key it does not have."""
+    old = {"header": {"protocol_version": "3"}, "model": json.loads(pathlib.Path(DAS).read_text())["model"], "method": {}}
+    path = tmp_path / "old.json"
+    path.write_text(json.dumps(old))
+    assert cli.main(["validate", str(path), "--data-root", DATA]) == 1
+    assert "method" in capsys.readouterr().err
 
 
 def test_validate_refuses_with_a_path(tmp_path, capsys):
     """A refusal is a message, not a traceback: the entry point catches this
     package's own error types, prints what they say, and exits 1."""
     broken = json.loads(pathlib.Path(DAS).read_text())
-    broken["interventions"]["das"]["reads"]["v_cf"]["shuffle"] = {"seed": 1}
+    broken["interventions"]["cf_read"]["reads"]["v_cf"]["shuffle"] = {"seed": 1}
     path = tmp_path / "broken.json"
     path.write_text(json.dumps(broken))
 
     assert cli.main(["validate", str(path), "--data-root", DATA]) == 1
     said = capsys.readouterr()
-    assert "interventions.das.reads.v_cf.shuffle" in said.err
+    assert "interventions.cf_read.reads.v_cf.shuffle" in said.err
     assert "Traceback" not in said.err and said.out == ""
 
-    with pytest.raises(Exception, match="interventions.das.reads.v_cf.shuffle"):
+    with pytest.raises(Exception, match="interventions.cf_read.reads.v_cf.shuffle"):
         cli.main(["--traceback", "validate", str(path), "--data-root", DATA])
 
 
@@ -136,13 +151,15 @@ def test_validate_compiles_so_a_misspelled_component_fails_there(tmp_path, capsy
 
 def test_explain_prints_the_compiled_plan_without_weights(capsys):
     out = _json(capsys, ["explain", DAS, "--data-root", DATA])
-    assert out["steps"] == ["featurizers", "fit", "score", "weights"]
+    assert out["steps"] == ["featurizers", "fit", "counterfactual", "patched", "iia", "ce"]
     text = out["text"]
     assert "rot: subspace k=8 d=16" in text  # d derived, never authored
     # the spec, not the rows: every pass of this document reads at the last
     # token, and the integer that is differs between passes of different width
     assert "pos={index:-1}" in text and "pos=(" not in text
     assert "saves=['held_out_iia.json']" in text
+    # a step is its document's, and a forward says which rows it runs over
+    assert "patched: forward on 'train'  (2 rows" in text
 
 
 def test_run_is_the_same_pipeline_with_weights(tmp_path, capsys):

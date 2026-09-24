@@ -1,186 +1,82 @@
 {
   "header": {
-    "description": "Two experiments over the same rows, as one step, and a baseline written in place. `interventions` declares interchange patching and mean ablation at the last position of layer 0; nothing there runs. `clean` is an intervention with no writes, written inline on its step: it reads the original model, scores it, and publishes the mean activation at the site. `compare` lists both declared experiments, so each runs over its rows: `ablation` swaps in the mean `clean` published, `iia` belongs to patching alone and is saved by its bare name, and `logit_diff`, which both produce, is saved qualified. Tiny CPU Llama, so the numbers demonstrate the mechanism and nothing else."
+    "description": "Two experiments at one site over the same rows, and the baseline they share. `interventions` declares interchange patching and mean ablation at the last position of layer 0; nothing there runs until a step lists it. `clean` runs the un-intervened model, scores it, and reads the activation `mean` averages. `patched` lists `patching`, whose operand is `counterfactual.v_cf`; `ablated` lists `ablation`, whose operand is `mean`, the step before it. Each metric is a step with its own name, and the save paths put the two experiments' tables in compare/patching/ and compare/ablation/. Tiny CPU Llama, so the numbers demonstrate the mechanism and nothing else."
   },
   "model": {
     "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
     "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
     "dtype": "fp32"
   },
-  "roles": {
-    "base": {
-      "field": "input"
-    },
-    "counterfactual": {
-      "field": "counterfactual_inputs[0]"
-    }
-  },
+  "data": {"pairs": {"path": "weekdays/train"}},
   "sites": {
-    "target": {
-      "component": "block_output",
-      "layers": [
-        0
-      ]
-    },
-    "head": {
-      "component": "lm_head"
-    }
+    "target": {"component": "block_output", "layers": 0},
+    "head": {"component": "lm_head"}
   },
   "interventions": {
     "patching": {
-      "reads": {
-        "v_cf": {
-          "site": "target",
-          "pos": -1,
-          "model": "original",
-          "input": "counterfactual"
-        },
-        "logits": {
-          "site": "head",
-          "pos": -1,
-          "model": "patched",
-          "input": "base"
-        }
-      },
       "writes": {
         "patch": {
           "site": "target",
           "pos": -1,
           "mechanism": "swap",
-          "operand": "v_cf"
+          "operand": "counterfactual.v_cf"
         }
       },
-      "models": {
-        "patched": {
-          "input": "base",
-          "writes": [
-            "patch"
-          ]
-        }
-      },
-      "metrics": {
-        "iia": {
-          "kind": "match",
-          "of": "logits",
-          "expected": "cf_answer",
-          "token_form": "space_prefixed"
-        },
-        "logit_diff": {
-          "kind": "logit_diff",
-          "of": "logits",
-          "a": "cf_answer",
-          "b": "base_answer",
-          "token_form": "space_prefixed"
-        }
-      }
+      "reads": {"logits": {"site": "head", "pos": -1}}
     },
     "ablation": {
-      "reads": {
-        "logits": {
-          "site": "head",
-          "pos": -1,
-          "model": "ablated",
-          "input": "base"
-        }
-      },
-      "writes": {
-        "ablate": {
-          "site": "target",
-          "pos": -1,
-          "mechanism": "swap",
-          "operand": {
-            "ref": "mean"
-          }
-        }
-      },
-      "models": {
-        "ablated": {
-          "input": "base",
-          "writes": [
-            "ablate"
-          ]
-        }
-      },
-      "metrics": {
-        "logit_diff": {
-          "kind": "logit_diff",
-          "of": "logits",
-          "a": "cf_answer",
-          "b": "base_answer",
-          "token_form": "space_prefixed"
-        }
-      }
+      "writes": {"ablate": {"site": "target", "pos": -1, "mechanism": "swap", "operand": "mean"}},
+      "reads": {"logits": {"site": "head", "pos": -1}}
     }
   },
   "steps": {
     "clean": {
-      "kind": "observe",
-      "interventions": {
-        "reads": {
-          "acts": {
-            "site": "target",
-            "pos": -1,
-            "model": "original",
-            "input": "base"
-          },
-          "logits": {
-            "site": "head",
-            "pos": -1,
-            "model": "original",
-            "input": "base"
-          }
-        },
-        "metrics": {
-          "logit_diff": {
-            "kind": "logit_diff",
-            "of": "logits",
-            "a": "cf_answer",
-            "b": "base_answer",
-            "token_form": "space_prefixed"
-          }
-        }
-      },
-      "rows": {
-        "base": "weekdays/train",
-        "counterfactual": "weekdays/train"
-      },
-      "outputs": {
-        "mean": {
-          "read": "acts",
-          "reduce": "mean"
-        }
-      },
-      "saves": [
-        {
-          "value": "logit_diff",
-          "file_path": "clean.json"
-        }
-      ]
+      "kind": "forward",
+      "data": "pairs",
+      "field": "input",
+      "reads": {"acts": {"site": "target", "pos": -1}, "logits": {"site": "head", "pos": -1}}
     },
-    "compare": {
-      "kind": "observe",
-      "interventions": [
-        "patching",
-        "ablation"
-      ],
-      "rows": {
-        "base": "weekdays/train",
-        "counterfactual": "weekdays/train"
-      },
-      "saves": [
-        {
-          "value": "iia",
-          "file_path": "iia.json"
-        },
-        {
-          "value": "patching/logit_diff",
-          "file_path": "logit_diff.json"
-        },
-        {
-          "value": "ablation/logit_diff",
-          "file_path": "logit_diff.json"
-        }
-      ]
+    "clean_ld": {
+      "kind": "metric",
+      "metric": "logit_diff",
+      "of": "clean.logits",
+      "a": "pairs.cf_answer",
+      "b": "pairs.base_answer"
+    },
+    "mean": {"kind": "reduce", "reduce": "mean", "of": "clean.acts"},
+    "counterfactual": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "counterfactual_inputs[0]",
+      "reads": {"v_cf": {"site": "target", "pos": -1}}
+    },
+    "patched": {"kind": "forward", "data": "pairs", "field": "input", "interventions": "patching"},
+    "iia": {
+      "kind": "metric",
+      "metric": "match",
+      "of": "patched.logits",
+      "expected": "pairs.cf_answer"
+    },
+    "patching_ld": {
+      "kind": "metric",
+      "metric": "logit_diff",
+      "of": "patched.logits",
+      "a": "pairs.cf_answer",
+      "b": "pairs.base_answer"
+    },
+    "ablated": {"kind": "forward", "data": "pairs", "field": "input", "interventions": "ablation"},
+    "ablation_ld": {
+      "kind": "metric",
+      "metric": "logit_diff",
+      "of": "ablated.logits",
+      "a": "pairs.cf_answer",
+      "b": "pairs.base_answer"
+    },
+    "saves": {
+      "clean_ld": "clean.json",
+      "iia": "compare/patching/iia.json",
+      "patching_ld": "compare/patching/logit_diff.json",
+      "ablation_ld": "compare/ablation/logit_diff.json"
     }
   }
 }

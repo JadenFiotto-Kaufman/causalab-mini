@@ -1,100 +1,54 @@
 {
   "header": {
-    "description": "Generation: the interchange at layer 0 of the prompt, then three greedy tokens, with the head read at each decode step \u2014 {'frame': 'generated', 'index': k} is the continuation frame, swept here so each step is a point. Does the patch, made once at the prefill, still move what the model says two tokens later? It reaches the continuation only through the cache. The generated ids come home as a result too."
+    "description": "Generation: the interchange at layer 0 of the prompt, then three greedy tokens, with the head read at each decode step — {'frame': 'generated', 'index': k}, swept so each step is a point. Does a patch made once at the prefill still move what the model says two tokens later? It reaches the continuation only through the cache. `patched` — the step itself — is the ids it generated, saved beside the metric."
   },
   "model": {
     "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
     "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
     "dtype": "fp32"
   },
-  "roles": {
-    "base": {
-      "field": "input"
-    },
-    "counterfactual": {
-      "field": "counterfactual_inputs[0]"
-    }
-  },
+  "data": {"pairs": {"path": "weekdays/train"}},
   "sites": {
-    "target": {
-      "component": "block_output",
-      "layers": [
-        0
-      ]
-    },
-    "head": {
-      "component": "lm_head"
-    }
-  },
-  "interventions": {
-    "generate": {
-      "reads": {
-        "v_cf": {
-          "site": "target",
-          "pos": -1,
-          "model": "original",
-          "input": "counterfactual"
-        },
-        "logits": {
-          "site": "head",
-          "pos": {
-            "frame": "generated",
-            "index": {
-              "sweep": [
-                0,
-                1,
-                2
-              ]
-            }
-          },
-          "model": "patched",
-          "input": "base"
-        }
-      },
-      "writes": {
-        "patch": {
-          "site": "target",
-          "pos": -1,
-          "mechanism": "swap",
-          "operand": "v_cf"
-        }
-      },
-      "models": {
-        "patched": {
-          "input": "base",
-          "writes": [
-            "patch"
-          ]
-        }
-      },
-      "metrics": {
-        "p_answer": {
-          "kind": "token_prob",
-          "of": "logits",
-          "token": "cf_answer"
-        }
-      },
-      "decode": 3
-    }
+    "target": {"component": "block_output", "layers": 0},
+    "head": {"component": "lm_head"}
   },
   "steps": {
-    "score": {
-      "kind": "observe",
-      "interventions": "generate",
-      "rows": {
-        "base": "weekdays/train",
-        "counterfactual": "weekdays/train"
-      },
-      "saves": [
-        {
-          "value": "p_answer",
-          "file_path": "p_answer.json"
-        },
-        {
-          "value": "patched.generated",
-          "file_path": "generated.safetensors"
+    "counterfactual": {
+      "kind": "generate",
+      "data": "pairs",
+      "field": "counterfactual_inputs[0]",
+      "max_new_tokens": 3,
+      "min_new_tokens": 3,
+      "do_sample": false,
+      "reads": {"v_cf": {"site": "target", "pos": -1}}
+    },
+    "patched": {
+      "kind": "generate",
+      "data": "pairs",
+      "field": "input",
+      "max_new_tokens": 3,
+      "min_new_tokens": 3,
+      "do_sample": false,
+      "interventions": {
+        "writes": {
+          "patch": {
+            "site": "target",
+            "pos": -1,
+            "mechanism": "swap",
+            "operand": "counterfactual.v_cf"
+          }
         }
-      ]
-    }
+      },
+      "reads": {
+        "logits": {"site": "head", "pos": {"frame": "generated", "index": {"sweep": [0, 1, 2]}}}
+      }
+    },
+    "p_answer": {
+      "kind": "metric",
+      "metric": "token_prob",
+      "of": "patched.logits",
+      "token": "pairs.cf_answer"
+    },
+    "saves": {"p_answer": "p_answer.json", "patched": "generated.safetensors"}
   }
 }

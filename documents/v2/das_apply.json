@@ -1,30 +1,16 @@
 {
   "header": {
-    "description": "The apply half of a fit: the rotation documents/v2/das.json trained, loaded from the bundle it wrote, scored on the held-out split \u2014 no train block, no weights step. The bundle's header is checked against this document key by key before anything runs; a rotation from another model, layer or width is refused naming the key. Run das.json with --out documents/artifacts first; this loads what it wrote."
+    "description": "The apply half of a fit: the rotation documents/v2/das.json trained and saved as `fit.rot`, loaded from the bundle it wrote and scored on the held-out split. Nothing here trains it, so it is named by its declared name. The bundle's header is checked against this document key by key before anything runs; a rotation from another model, layer or width is refused naming the key. Run das.json with --out documents/artifacts first; this loads what it wrote."
   },
   "model": {
     "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
     "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
     "dtype": "fp32"
   },
-  "roles": {
-    "base": {
-      "field": "input"
-    },
-    "counterfactual": {
-      "field": "counterfactual_inputs[0]"
-    }
-  },
+  "data": {"test": {"path": "weekdays/data#test"}},
   "sites": {
-    "target": {
-      "component": "block_output",
-      "layers": [
-        0
-      ]
-    },
-    "head": {
-      "component": "lm_head"
-    }
+    "target": {"component": "block_output", "layers": 0},
+    "head": {"component": "lm_head"}
   },
   "featurizers": {
     "rot": {
@@ -34,75 +20,43 @@
       "file_path": "documents/artifacts/rot.safetensors"
     }
   },
-  "interventions": {
-    "das": {
-      "reads": {
-        "v_cf": {
-          "site": "target",
-          "pos": -1,
-          "model": "original",
-          "input": "counterfactual",
-          "featurizer": "rot"
-        },
-        "logits": {
-          "site": "head",
-          "pos": -1,
-          "model": "patched",
-          "input": "base"
-        }
-      },
-      "writes": {
-        "patch": {
-          "site": "target",
-          "pos": -1,
-          "featurizer": "rot",
-          "mechanism": "swap",
-          "operand": "v_cf"
-        }
-      },
-      "models": {
-        "patched": {
-          "input": "base",
-          "writes": [
-            "patch"
-          ]
-        }
-      },
-      "metrics": {
-        "iia": {
-          "kind": "logit_diff",
-          "of": "logits",
-          "a": "cf_answer",
-          "b": "base_answer",
-          "token_form": "space_prefixed"
-        },
-        "ce": {
-          "kind": "cross_entropy",
-          "of": "logits",
-          "target": "cf_answer",
-          "token_form": "space_prefixed"
-        }
-      }
-    }
-  },
   "steps": {
-    "apply": {
-      "kind": "observe",
-      "interventions": "das",
-      "rows": {
-        "base": "weekdays/data#test",
-        "counterfactual": "weekdays/data#test"
-      },
-      "saves": [
-        {
-          "value": "iia",
-          "file_path": "iia.json"
-        },
-        {
-          "value": "ce",
-          "file_path": "ce.json"
+    "counterfactual": {
+      "kind": "forward",
+      "data": "test",
+      "field": "counterfactual_inputs[0]",
+      "reads": {"v_cf": {"site": "target", "pos": -1, "featurizer": "rot"}}
+    },
+    "patched": {
+      "kind": "forward",
+      "data": "test",
+      "field": "input",
+      "interventions": {
+        "writes": {
+          "patch": {
+            "site": "target",
+            "pos": -1,
+            "mechanism": "swap",
+            "operand": "counterfactual.v_cf",
+            "featurizer": "rot"
+          }
         }
-      ]
-    }
+      },
+      "reads": {"logits": {"site": "head", "pos": -1}}
+    },
+    "iia": {
+      "kind": "metric",
+      "metric": "logit_diff",
+      "of": "patched.logits",
+      "a": "test.cf_answer",
+      "b": "test.base_answer"
+    },
+    "ce": {
+      "kind": "metric",
+      "metric": "cross_entropy",
+      "of": "patched.logits",
+      "target": "test.cf_answer"
+    },
+    "saves": {"iia": "iia.json", "ce": "ce.json"}
   }
 }

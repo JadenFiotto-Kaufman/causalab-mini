@@ -6,23 +6,25 @@ engine beside it. No session, no envoys, no tracing, no remote: one
 hook does the reading and the writing on the way out.
 
 What it costs to not be standardized is `loading.standardized`, and what it
-costs to not be nnsight is the interior: a forward hook sees a module's
-boundary and nothing between, so `attention_query` is refused by name rather
-than approximated. Everything else — the walk over steps, the fit loop, the
+costs to not be nnsight is the inside of a forward: a hook sees a module's
+boundary and nothing between, so `attention_query` — an operation inside the
+attention's forward — is refused by name at compile time rather than
+approximated. Everything else — the walk over steps, the fit loop, the
 metrics, the write algebra — is the shared code in `engine/steps.py` and
 `ops/`, unchanged, which is the claim this engine was written to test.
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable
+import contextlib
+from typing import Any, Callable, Iterator
 
 import torch
 
 from .... import address as address_module
 from ....address import Address, AddressError
 from ....ops import intervene
-from ....plan import Forward, Plan, Tap
+from ....plan import Forward, Generate, Plan, Tap
 from ... import provenance, steps
 from ...base import Engine, EngineError
 from .loading import HooksEngineError, load, standardized
@@ -65,24 +67,26 @@ class HooksEngine(Engine):
     def locate(self, component: str, layer: int | None = None) -> Address:
         """The address of `(component, layer)`, or a refusal.
 
-        A hook fires at a module boundary, so an interior is not reachable at
-        all: nnsight recompiles the forward (`.source`) and hooks have no
-        equivalent. The two ways to build one would both be a different
-        engine — patch the module's `forward` to expose the tensor, or hook
-        the `q_proj` submodule and reimplement here the reshape and the rotary
-        embedding that the address says have already happened by the time the
-        query is the query.
+        The same nnterp row the other engine reads — module path, side, and
+        where in the value the tensor is — so what a hook reaches is what an
+        accessor reaches. A row that names an operation inside a module's
+        forward is the exception, and it is refused here, at compile time: a
+        hook fires at a module boundary, and nnsight reaches inside by
+        recompiling the forward (`.source`), which hooks have no equivalent
+        of. Building one would be a different engine — patch the module's
+        `forward` to expose the tensor, or hook `q_proj` and reimplement the
+        reshape and the rotary embedding the query has had by the time it is
+        the query.
         """
-        # The child's spelling is a fact about the checkpoint that nnterp
-        # knows; this engine has no nnterp handle, so it asks the shell.
+        # The row is a fact about the checkpoint that nnterp knows; this
+        # engine's model is not an nnterp one, so it asks the shell.
         address = address_module.locate(self._shell, component, layer)
-        if address.interior:
+        if address.inside:
             raise AddressError(
-                f"component {component!r} is an interior — one argument of one call "
-                "inside a module's forward — and a forward hook only sees the "
-                "module's boundary. It is addressed through nnsight's `.source`, "
-                "which has no hooks equivalent; run this document on the nnterp "
-                "engine."
+                f"component {component!r} is an operation inside a module's forward — "
+                "one argument or result of one call — and a forward hook only sees the "
+                "module's boundary. nnsight reaches it through `.source`, which has no "
+                "hooks equivalent; the nnterp engine reaches it."
             )
         return address
 
@@ -111,15 +115,10 @@ class HooksEngine(Engine):
                 "the nnterp engine's, where the whole request is one nnsight session."
             )
         plan.provenance.update(provenance.record(self, remote, batch_size))
-        steps.run(self, plan, batch_size=batch_size)
+        steps.run(self, plan, steps.start(plan, batch_size))
         return plan
 
-    def forward(
-        self,
-        forward: Forward,
-        values: dict[str, Any],
-        featurizers: dict[str, Any],
-    ) -> None:
+    def forward(self, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
         """One forward with its taps applied.
 
         The taps arrive in forward order and nothing here depends on it: a
@@ -127,30 +126,27 @@ class HooksEngine(Engine):
         is removed — a leaked hook would intervene on the *next* forward,
         which is a silently wrong number rather than an error.
         """
-        # The decode step, shared by every hook of this forward: a hook on
-        # the root fires once per pass and counts. None for a plain forward.
-        clock = {"step": 0 if forward.decode else None}
-        handles = [
-            _install(self._names, tap, values, featurizers, clock) for tap in forward.taps
-        ]
-        if forward.decode:
-            handles.append(self.model.register_forward_hook(lambda *_: _tick(clock)))
-        try:
-            if not forward.decode:
-                self.model(**batch(forward, self.model.get_input_embeddings().weight.device))
-            else:
-                prompt = len(forward.input_ids[0])
+        with _hooked(self._names, forward, values, featurizers, {"step": None}):
+            output = self.model(**batch(forward, self.model.get_input_embeddings().weight.device))
+        return output.logits
+
+    def generate(self, step: Generate, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
+        """One decode with its taps applied at their steps. A hook on the root
+        fires once per model pass and counts the step every tap shares."""
+        clock = {"step": 0}
+        with _hooked(self._names, step, values, featurizers, clock):
+            ticking = self.model.register_forward_hook(lambda *_: _tick(clock))
+            try:
                 ids = self.model.generate(
-                    **batch(forward, self.model.get_input_embeddings().weight.device),
-                    max_new_tokens=forward.decode,
-                    min_new_tokens=forward.decode,
-                    do_sample=False,
-                    pad_token_id=self._tokenizer.pad_token_id,
+                    **batch(step, self.model.get_input_embeddings().weight.device),
+                    max_new_tokens=step.max_new_tokens,
+                    # nnsight passes the tokenizer's pad id for its engine;
+                    # here nothing does, unless the document said one
+                    **{"pad_token_id": self._tokenizer.pad_token_id, **step.generation},
                 )
-                values[f"{forward.name}.generated"] = ids[:, prompt:].clone()
-        finally:
-            for handle in handles:
-                handle.remove()
+            finally:
+                ticking.remove()
+        return ids[:, len(step.input_ids[0]) :].clone()
 
 
 def batch(forward: Forward, device: Any = None) -> dict[str, Any]:
@@ -163,6 +159,18 @@ def batch(forward: Forward, device: Any = None) -> dict[str, Any]:
     }
 
 
+@contextlib.contextmanager
+def _hooked(names: Any, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any], clock: dict[str, Any]) -> Iterator[None]:
+    """Every tap of `forward` hooked for as long as the block runs, and every
+    handle removed however it ends."""
+    handles = [_install(names, tap, values, featurizers, clock) for tap in forward.taps]
+    try:
+        yield
+    finally:
+        for handle in handles:
+            handle.remove()
+
+
 def _tick(clock: dict[str, Any]) -> None:
     """One more decode step has run."""
     clock["step"] = int(clock["step"] or 0) + 1
@@ -173,7 +181,7 @@ def _install(
 ) -> Any:
     """Hook one address, on the side it is addressed on."""
     module = resolve(tap.address, names)
-    if tap.address.side == "output":
+    if tap.address.io == "output":
         return module.register_forward_hook(intervene_at(tap, values, featurizers, names, clock))
     return module.register_forward_pre_hook(
         intervene_before(tap, values, featurizers, names, clock), with_kwargs=True
@@ -256,7 +264,7 @@ def _apply(
             intervene.at_step(write.at, activation, tap.address.seq_axis, tap.step, step),
             intervene.resolve_operand(values, write.operand),
             write.mechanism,
-            featurizers[write.featurizer],
+            None if write.featurizer is None else featurizers[write.featurizer],
             tap.address.seq_axis,
             write.params,
             original,
@@ -270,8 +278,10 @@ def _apply(
         )
         if read.view == "logits":
             gathered = intervene.softcap(names.lm_head(names.ln_final(gathered)), names.softcap)
-        with intervene.exact(gathered):
-            values[read.name] = featurizers[read.featurizer].featurize(gathered)[0].clone()
+        if read.featurizer is not None:
+            with intervene.exact(gathered):
+                gathered = featurizers[read.featurizer].featurize(gathered)[0]
+        values[read.name] = gathered.clone()
     return activation
 
 
@@ -315,6 +325,4 @@ def selection(address: Address, names: Any) -> Any:
     the same weightless shell this engine asks for a module's spelling and
     for every width — so there is no second table here and no third spelling
     of "the first element of a tuple"."""
-    if address.accessor is None:
-        return None
     return names.shell.internals[address.accessor].address.select

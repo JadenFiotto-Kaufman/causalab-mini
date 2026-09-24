@@ -16,7 +16,7 @@ from dataclasses import replace
 
 import pytest
 import torch
-from conftest import same_numbers
+from conftest import model_block, of_kind, same_numbers, tensors
 
 from causalab_mini import plan
 from causalab_mini.address import AddressError
@@ -24,11 +24,11 @@ from causalab_mini.engine import HooksEngine, NNterpEngine, steps
 from causalab_mini.engine.engines.hooks import HooksEngineError
 from causalab_mini.engine.engines.hooks import engine as hooks
 from causalab_mini.engine.engines.hooks.loading import standardized
-from causalab_mini.ops import intervene
-from causalab_mini.plan import Observe, ReadOp, document
+from causalab_mini.plan import ReadOp
+from causalab_mini.plan.spec import Spec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-GPT2_DOCUMENT = REPO / "documents" / "gpt2_cpu.json"
+GPT2_DOCUMENT = REPO / "documents" / "v2" / "gpt2_reach.json"
 
 
 @pytest.fixture(scope="session")
@@ -36,7 +36,7 @@ def hooks_engine():
     """A hooks engine holding the same tiny Llama `model_engine` holds, loaded
     the way this engine loads: `AutoModelForCausalLM` and `AutoTokenizer`."""
     return HooksEngine.load(
-        document.Document.load(REPO / "documents" / "minimal_cpu.json").model,
+        model_block(REPO / "documents" / "v2" / "patching.json"),
         device_map="cpu",
     )
 
@@ -84,16 +84,17 @@ def test_the_two_engines_fit_the_same_rotation(das_raw, data_root):
     AdamW updates, a backward through each engine's own intervention path,
     early stopping — and the fitted `(16, 8)` rotation comes out equal to the
     bit, not just the metrics over it."""
-    spec = document.Document.from_json(das_raw).model
+    spec = Spec.model_validate(das_raw).model
     traced = NNterpEngine.load(spec, device_map="cpu")
     hooked = HooksEngine.load(spec, device_map="cpu")
 
     fitted = traced.execute(_build(das_raw, data_root, traced))
     hooks = hooked.execute(_build(das_raw, data_root, hooked))
 
-    assert set(fitted.all_results()) == set(hooks.all_results())
-    for name, values in fitted.all_results().items():
-        assert same_numbers(values, hooks.result(name), atol=1e-4), name  # through ten AdamW updates
+    fitted, hooks = tensors(fitted.all_results()), tensors(hooks.all_results())
+    assert set(fitted) == set(hooks)
+    for name, values in fitted.items():
+        assert same_numbers(values, hooks[name], atol=1e-4), name  # through ten AdamW updates
 
 
 # --------------------------------------------------------------------- #
@@ -111,7 +112,7 @@ def test_a_swap_lands_the_source_read_bit_for_bit(hooks_engine, minimal_raw, dat
     """
     compiled = _build(minimal_raw, data_root, hooks_engine)
     source, patched = (
-        steps.located(hooks_engine, one)[0] for one in compiled.step("observe", Observe).forwards
+        steps.located(hooks_engine, one)[0] for one in of_kind(compiled, plan.Forward)
     )
     tap = patched.taps[0]
     watched = replace(
@@ -123,24 +124,23 @@ def test_a_swap_lands_the_source_read_bit_for_bit(hooks_engine, minimal_raw, dat
     )
 
     values: dict[str, torch.Tensor] = {}
-    featurizers = dict(intervene.FEATURIZERS)
-    hooks_engine.forward(source, values, featurizers)
-    hooks_engine.forward(watched, values, featurizers)
+    hooks_engine.forward(source, values, {})
+    hooks_engine.forward(watched, values, {})
 
     assert values["landed"].shape == (4, 1, hooks_engine.model.config.hidden_size)
-    assert torch.equal(values["landed"], values["v_cf"])
+    assert torch.equal(values["landed"], values["counterfactual.v_cf"])
 
 
 def test_a_forward_leaves_no_hook_behind(hooks_engine, minimal_raw, data_root):
     """A leaked handle would intervene on the next forward — a wrong number,
     not an error — so the count is asserted rather than trusted."""
     compiled = _build(minimal_raw, data_root, hooks_engine)
-    source, _ = compiled.step("observe", Observe).forwards
+    source, _ = of_kind(compiled, plan.Forward)
     source, _ = steps.located(hooks_engine, source)
     layer = hooks.resolve(hooks_engine.locate("block_output", 0), standardized(hooks_engine.model))
 
     before = len(layer._forward_hooks)
-    hooks_engine.forward(source, {}, dict(intervene.FEATURIZERS))
+    hooks_engine.forward(source, {}, {})
     assert len(layer._forward_hooks) == before
 
 
@@ -153,14 +153,14 @@ def test_the_interior_is_refused_by_name(hooks_engine):
     """`attention_query` is one argument of one call inside a forward. A hook
     fires at the boundary, so this engine says so instead of reaching for
     something nearby."""
-    with pytest.raises(AddressError, match="interior"):
+    with pytest.raises(AddressError, match="the nnterp engine reaches it"):
         hooks_engine.locate("attention_query", 0)
 
 
 def test_a_document_that_names_the_interior_fails_at_compile_time(data_root, hooks_engine):
     """And it fails where every other unsupported document fails: on the
     client, while the plan is being built."""
-    raw = json.loads((REPO / "documents" / "attention_query_cpu.json").read_text())
+    raw = json.loads((REPO / "documents" / "v2" / "attention_query.json").read_text())
     with pytest.raises(AddressError, match="attention_query"):
         _build(raw, data_root, hooks_engine)
 
@@ -185,7 +185,7 @@ def test_the_engine_specific_surface_is_exactly_the_contract():
     still added no member of its own to the contract."""
     overridden = {name for name in vars(HooksEngine) if not name.startswith("_")}
     assert overridden == {"load", "tokenizer", "num_layers", "locate", "width", "heads",
-                          "execute", "forward"}
+                          "execute", "forward", "generate"}
 
 
 def test_the_standardized_names_reach_a_second_family(data_root):
@@ -193,7 +193,7 @@ def test_the_standardized_names_reach_a_second_family(data_root):
     on a tree that shares no path segment with the Llama's: GPT-2's stack is
     `transformer.h`, not `model.layers`, and the same two addresses resolve to
     the right modules on both without a family table."""
-    engine = HooksEngine.load(document.Document.load(GPT2_DOCUMENT).model, device_map="cpu")
+    engine = HooksEngine.load(model_block(GPT2_DOCUMENT), device_map="cpu")
     model = engine.model
 
     assert engine.num_layers == len(model.transformer.h)

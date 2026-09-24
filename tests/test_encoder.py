@@ -16,9 +16,9 @@ import pathlib
 
 import pytest
 import torch
-from conftest import same_numbers
 from pydantic import ValidationError
 from safetensors.torch import load_file, save_file
+from conftest import same_numbers
 
 from causalab_mini import ops, plan
 from causalab_mini.engine.engines.hooks import HooksEngine
@@ -115,9 +115,9 @@ def test_ablating_a_latent_on_the_model(remote, raw, data_root, model_engine):
     changes nothing, and the error term has carried everything the
     dictionary does not explain — so those rows are the un-intervened model
     (to rounding: decode(f) + (x − decode(f)) is x only to the last bit)."""
-    write = raw["interventions"]["ablate"]["writes"]["ablate"]
+    write = raw["steps"]["zeroed"]["interventions"]["writes"]["ablate"]
     first = model_engine.execute(plan.build_request(raw, data_root, model_engine), remote=remote)
-    active = first.step("ablate", plan.Observe).results["active"][:, 0, :] > 0
+    active = first.result("base.latents")[:, 0, :] > 0
     assert active.shape == (4, 32)
     counts = active.sum(dim=0)
     mixed = ((counts > 0) & (counts < 4)).nonzero().flatten()
@@ -125,7 +125,7 @@ def test_ablating_a_latent_on_the_model(remote, raw, data_root, model_engine):
 
     write["features"] = [latent]
     ablated = model_engine.execute(plan.build_request(raw, data_root, model_engine), remote=remote)
-    raw["interventions"]["ablate"]["models"]["zeroed"]["writes"] = []
+    del raw["steps"]["zeroed"]["interventions"]
     clean = model_engine.execute(plan.build_request(raw, data_root, model_engine))
 
     moved = (ablated.result("logit_diff") - clean.result("logit_diff")).abs() > 1e-6
@@ -143,9 +143,13 @@ def test_the_hooks_engine_agrees(raw, data_root, model_engine):
 
 def test_features_of_a_rotation_swap_part_of_a_subspace(data_root, model_engine):
     """Nothing about `features` is an SAE's: two of a rotation's eight
-    directions, instead of all of them."""
+    directions, instead of all of them. The fit is dropped, so the score
+    runs on the rotation as drawn."""
     das = json.loads((REPO / "documents" / "v2" / "das.json").read_text())
-    das["steps"] = {"score": das["steps"]["score"]}
+    del das["steps"]["fit"]
+    das["steps"]["saves"] = {}
+    das["interventions"]["cf_read"]["reads"]["v_cf"]["featurizer"] = "rot"
+    das["interventions"]["das"]["writes"]["patch"]["featurizer"] = "rot"
     whole = model_engine.execute(plan.build_request(das, data_root, model_engine)).result("ce")
     das["interventions"]["das"]["writes"]["patch"]["features"] = [0, 1]
     part = model_engine.execute(plan.build_request(das, data_root, model_engine)).result("ce")
@@ -186,10 +190,10 @@ def test_what_a_document_may_not_ask_of_a_dictionary(raw, data_root, model_engin
         Spec.model_validate(bad)
 
     bad = json.loads(json.dumps(raw))
-    bad["steps"]["keep"] = {"kind": "weights", "names": ["dictionary"]}
-    with pytest.raises(ValidationError, match="no fitted weight to publish"):
+    bad["steps"]["saves"]["dictionary"] = "dictionary.safetensors"
+    with pytest.raises(ValidationError, match="'dictionary' is nothing this document produces"):
         Spec.model_validate(bad)
 
-    raw["interventions"]["ablate"]["writes"]["ablate"]["features"] = [32]
+    raw["steps"]["zeroed"]["interventions"]["writes"]["ablate"]["features"] = [32]
     with pytest.raises(plan.PlanError, match="features \\[32\\] of a 32-dimensional feature space"):
         plan.build_request(raw, data_root, model_engine)

@@ -30,11 +30,10 @@ from .engine.base import EngineError
 from .engine.engines.hooks import HooksEngine
 from .ops import featurizer, intervene, metrics
 from .ops.locate import LocateError
-from .plan import document, sweep
-from .plan.document import DocumentError
+from .plan import sweep
 from .plan.explain import explain
 from .plan.plan import PlanError
-from .plan.spec import METRIC_COLUMNS, Model, Spec
+from .plan.spec import METRIC_COLUMNS, Model, Optimizer, Reduce, Spec
 from .shapes import Where
 
 #: What `--engine` means: the class, how it is loaded to *run*, and where it
@@ -50,18 +49,17 @@ SHAPE_ONLY = {"dispatch": False}
 
 #: What this package raises when it means "no". Every one carries a message
 #: written for the person who wrote the document, so the entry point prints
-#: that and nothing else. `ValidationError` is pydantic's and is how the
-#: plan-shaped format refuses; `RenamingError` is nnterp's, which mini
+#: that and nothing else. `ValidationError` is pydantic's and is how a
+#: document refuses; `RenamingError` is nnterp's, which mini
 #: forwards wherever a place is a family's to have or not have.
 REFUSALS: tuple[type[Exception], ...] = (
     PlanError,          # the compiler, and the run's own refusals
-    DocumentError,      # the protocol format
     AddressError,       # a component, a layer, an attention implementation
     TokenError,         # a prompt, a conversation, an answer column
     LocateError,        # a frame the resolver cannot build
     DataError,          # a dataset ref, a column, a row
     EngineError,        # a runtime asked for something it does not have
-    ValidationError,    # the plan-shaped format
+    ValidationError,    # the document
     RenamingError,      # nnterp, where a place is not this family's
 )
 
@@ -75,8 +73,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="verb", required=True)
 
-    sub.add_parser("schema", help="the JSON Schema of a plan-shaped document")
-    sub.add_parser("vocab", help="components, mechanisms, featurizer kinds, metric kinds, position forms")
+    sub.add_parser("schema", help="the JSON Schema of a document")
+    sub.add_parser("vocab", help="step kinds, components, mechanisms, featurizer kinds, metric kinds, position forms")
 
     one = sub.add_parser("model", help="what a model looks like: layers, widths, which components resolve")
     one.add_argument("key")
@@ -103,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         ("run", "execute a document and write its outputs"),
     ):
         one = sub.add_parser(verb, help=help_text)
-        one.add_argument("document", help="a plan-shaped document (it has `steps`), or a protocol_version 3 one")
+        one.add_argument("document", help="a document")
         one.add_argument("--data-root", default="documents/data")
         one.add_argument("--engine", default="nnterp", choices=list(ENGINES))
         if verb == "run":
@@ -142,23 +140,31 @@ def schema(args: argparse.Namespace) -> dict[str, Any]:
 
 def vocab(args: argparse.Namespace) -> dict[str, Any]:
     payload = {
+        "step_kinds": _step_kinds(),
+        "reductions": list(get_args(Reduce.model_fields["reduce"].annotation)),
         "components": address.describe(),
         "mechanisms": sorted(intervene.MECHANISMS),
         "featurizer_kinds": sorted(featurizer.KINDS),
+        "optimizers": list(get_args(Optimizer.model_fields["name"].annotation)),
         "metric_kinds": {kind: list(columns) for kind, columns in METRIC_COLUMNS.items()},
         "position_forms": Where.forms(),
+        "layers": "a site's `layers`: an int is one layer; a list is those layers — a read there is one "
+        "value stacked in the listed order, layer axis first, and a write writes at each; \"all\" is every layer",
+        "saves": "{reference: file}, or a list of references — a listed one, or one mapped to null, "
+        "is written as itself: a metric's table to <reference>.json, a tensor to <reference>.safetensors",
         "units": {kind: {"unit": unit, "estimand_version": version} for kind, (unit, version) in metrics.UNITS.items()},
     }
-    lines = ["components:"]
+    lines = [f"step kinds:       {', '.join(payload['step_kinds'])}; a reduce is {' or '.join(payload['reductions'])}"]
+    lines.append("components:")
     for name, entry in payload["components"].items():
-        kind = "interior" if entry["interior"] else (
-            f"nnterp {entry['accessor']}" if entry["accessor"] else f"{entry['side']} of {entry['path']}"
-        )
-        lines.append(f"  {name:22s} {kind}{'  (read-only)' if entry['read_only'] else ''}"
+        lines.append(f"  {name:22s} nnterp {entry['accessor']}{'  (read-only)' if entry['read_only'] else ''}"
                      f"{'  [heads]' if entry['heads'] else ''}"
                      f"{'  needs ' + entry['needs'] + ' attention' if entry['needs'] else ''}")
     lines.append(f"mechanisms:       {', '.join(payload['mechanisms'])}")
-    lines.append(f"featurizer kinds: {', '.join(payload['featurizer_kinds'])} (plus 'identity', never declared)")
+    lines.append(f"layers:           {payload['layers']}")
+    lines.append(f"saves:            {payload['saves']}")
+    lines.append(f"featurizer kinds: {', '.join(payload['featurizer_kinds'])}")
+    lines.append(f"optimizers:       {', '.join(payload['optimizers'])} (betas for the Adams, momentum for sgd and rmsprop)")
     lines.append("metric kinds:     " + ", ".join(f"{k}({', '.join(v)})" for k, v in payload["metric_kinds"].items()))
     forms = payload["position_forms"]
     lines.append("position forms:   exactly one cut: "
@@ -166,6 +172,13 @@ def vocab(args: argparse.Namespace) -> dict[str, Any]:
     lines.append("                  scope: " + ", ".join(f"{k}={v}" for k, v in forms["scope"].items()))
     lines.append(f"                  frame: {forms['frame']}; {forms['sugar']}")
     return {"text": "\n".join(lines), **payload}
+
+
+def _step_kinds() -> list[str]:
+    """The kinds a step may be, off the document's own schema — so the list
+    and what validates cannot come to disagree."""
+    steps = Spec.model_json_schema()["$defs"]["Steps"]["additionalProperties"]
+    return list(steps["discriminator"]["mapping"])
 
 
 def model(args: argparse.Namespace) -> dict[str, Any]:
@@ -208,7 +221,7 @@ def model(args: argparse.Namespace) -> dict[str, Any]:
             at = "" if band["layers"] is None or len(bands) == 1 else f"layers {band['layers']}  "
             if band["resolves"]:
                 width = f"width={band['width']}" if band["width"] is not None else "no width (no featurizer here)"
-                said = f"ok   {at}{width}" + (f"  op={band['op']}" if band["op"] else "")
+                said = f"ok   {at}{width}" + ("  inside a forward" if band["inside"] else "")
             else:
                 said = f"--   {at}{band['why']}"
             lines.append(f"  {name if index == 0 else '':18s} {said}")
@@ -236,7 +249,7 @@ def _resolves(engine: Any, name: str, layer: int | None) -> dict[str, Any]:
         width: Any = engine.width(located)
     except REFUSALS:
         width = None
-    return {"resolves": True, "width": width, "op": located.op}
+    return {"resolves": True, "width": width, "inside": located.inside}
 
 
 def _choices(field: str) -> tuple[str, ...]:
@@ -296,13 +309,10 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
     nothing downloaded but the config and the tokenizer, so there is no
     reason for a cheaper check that passes documents `explain` refuses.
     """
-    raw = _read(args.document)
-    shape = "plan-shaped" if "steps" in raw else "protocol"
     _, built = _compile(args, **SHAPE_ONLY)
     return {
-        "text": f"ok: {args.document} is a valid {shape} document, {_plural(len(built.steps), 'step')}",
+        "text": f"ok: {args.document} is a valid document, {_plural(len(built.steps), 'step')}",
         "ok": True,
-        "format": shape,
         "steps": list(built.steps),
     }
 
@@ -311,10 +321,8 @@ def _compile(args: argparse.Namespace, **options: Any) -> tuple[Any, Any]:
     raw = _read(args.document)
     engine_class = ENGINES[args.engine][0]
     # The model is the same at every point of a sweep — a sweep may not touch
-    # it — so the first point says what to load, in either format.
-    first = sweep.points(raw)[0][1]
-    model_block = Spec.model_validate(first).model if "steps" in raw else document.Document.from_json(first).model
-    engine = engine_class.load(model_block, **options)
+    # it — so the first point says what to load.
+    engine = engine_class.load(Model.model_validate(sweep.points(raw)[0][1].get("model")), **options)
     return engine, plan_module.build_request(raw, args.data_root, engine)
 
 

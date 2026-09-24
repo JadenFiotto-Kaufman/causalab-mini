@@ -48,7 +48,7 @@ def load(spec: Any, device_map: str = "cpu", dispatch: bool = True) -> tuple[Any
         config = AutoConfig.from_pretrained(spec.key, revision=spec.revision)
         with torch.device("meta"):
             model = AutoModelForCausalLM.from_config(config, dtype=DTYPES[spec.dtype])
-    # an instrument, not a parameter: see the nnterp loader's `freeze`
+    # an instrument, not a parameter: see the nnterp loader's `load`
     model.eval()
     model.requires_grad_(False)
     tokenizer = AutoTokenizer.from_pretrained(spec.key, revision=spec.revision)

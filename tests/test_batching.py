@@ -2,9 +2,9 @@
 
 It is a property of the run, not of the experiment, so it arrives with
 `execute` and is absent from the plan. The shared walk does the windowing —
-a window of rows is a whole small pass, handed to an unchanged
-`engine.forward` — so every engine gets it, and everything after the
-forwards (metrics, outputs, saves, a fit's loss) sees one pass.
+a window of rows is the same model call over fewer rows, handed to an
+unchanged `engine.forward` — so every engine gets it, and every step after
+the call (metrics, reduces, saves, a fit's loss) sees all its rows.
 """
 
 import json
@@ -12,6 +12,7 @@ import pathlib
 
 import pytest
 import torch
+from conftest import of_kind
 
 from causalab_mini import plan
 from causalab_mini.engine.engines.hooks import HooksEngine
@@ -61,7 +62,7 @@ def _agree(a, b):
 
 def test_a_window_of_a_forward_is_the_same_taps_over_fewer_rows(data_root, model_engine):
     built = plan.build_request(_point("window_patch.json"), data_root, model_engine)
-    forward = built.step("score", plan.Observe).forwards[-1]
+    forward = of_kind(built, plan.Forward)[-1]
     small = plan.window(forward, 1, 3)
 
     assert small.input_ids == forward.input_ids[1:3]
@@ -73,21 +74,22 @@ def test_a_window_of_a_forward_is_the_same_taps_over_fewer_rows(data_root, model
     assert plan.window(forward, 0, len(forward.input_ids)) == forward
 
 
-def test_rows_of_a_value_follow_its_layout():
+def test_rows_of_a_value_follow_its_form():
     rectangle = torch.arange(24.0).reshape(4, 2, 3)
-    assert torch.equal(intervene.rows(rectangle, ((0, 1),) * 4, 1, 3), rectangle[1:3])
+    assert torch.equal(intervene.rows(rectangle, None, 1, 3), rectangle[1:3])
 
     ragged = ((0, 1), (), (2,), (0, 1, 2))  # 2 + 0 + 1 + 3 positions, flat
     flat = torch.arange(18.0).reshape(6, 3)
     assert torch.equal(intervene.rows(flat, ragged, 1, 3), flat[2:3])
     assert torch.equal(intervene.rows(flat, ragged, 3, 4), flat[3:6])
 
-    mean = torch.ones(3)
-    assert intervene.rows(mean, None, 1, 3) is mean, "a value with no rows is shared whole"
+    # flat and one width on every row is still flat: three entries a row
+    even = ((4, 5, 6),) * 4
+    assert torch.equal(intervene.rows(torch.arange(36.0).reshape(12, 3), even, 1, 2), torch.arange(9.0, 18.0).reshape(3, 3))
 
 
 # --------------------------------------------------------------------- #
-# every kind of pass, windowed
+# every kind of step, windowed
 # --------------------------------------------------------------------- #
 
 
@@ -127,6 +129,30 @@ def test_the_hooks_engine_is_windowed_by_the_same_walk(data_root):
 # --------------------------------------------------------------------- #
 
 
+def test_a_windows_unnamed_logits_go_with_the_window(data_root, model_engine, monkeypatch):
+    """`batch_size` bounds memory only if a window's result nothing names is
+    let go when the window is done: here no step's own logits are named, so
+    when each window starts, every earlier window's logits are gone."""
+    import gc
+    import weakref
+
+    alive, made = [], []
+    forward = type(model_engine).forward
+
+    def watched(self, step, *rest):
+        gc.collect()
+        alive.append(sum(one() is not None for one in made))
+        logits = forward(self, step, *rest)
+        made.append(weakref.ref(logits))
+        return logits
+
+    # on the class: the engine is shared by the session, and patching the
+    # instance would leave an attribute behind
+    monkeypatch.setattr(type(model_engine), "forward", watched)
+    model_engine.execute(plan.build_request(_point("patching.json"), data_root, model_engine), batch_size=1)
+    assert len(alive) == 8 and alive == [0] * 8
+
+
 def test_a_published_mean_is_shared_by_every_window(data_root, model_engine):
     raw = _point("mean_ablation.json")
     whole = model_engine.execute(plan.build_request(raw, data_root, model_engine))
@@ -141,28 +167,82 @@ def test_a_ragged_harvest_is_concatenated_in_row_order(data_root, model_engine):
     _same_everywhere(whole, windowed)
 
 
-def test_a_per_row_output_reaches_the_window_of_its_own_rows(data_root, model_engine):
-    """The case a careless windowing gets wrong: step one publishes a value
-    that still has its rows, step two swaps it in. Window k of step two must
-    be handed rows k of it — were it handed the whole thing, or window 0's,
-    the patch would land on the wrong examples and still have the right
-    shape."""
+def test_a_per_row_value_reaches_the_window_of_its_own_rows(data_root, model_engine):
+    """The case a careless windowing gets wrong: one step reads a value that
+    still has its rows, a later step swaps it in, and each step is windowed
+    on its own. Window k of the later step must be handed rows k of it —
+    were it handed the whole thing, or window 0's, the patch would land on
+    the wrong examples and still have the right shape. In `patching.json`
+    that value is `counterfactual.v_cf`, taken by `patched`, and one row at
+    a time is the whole run's numbers."""
     raw = _point("patching.json")
-    one = raw["interventions"]["patching"]
-    raw["interventions"] = {
-        "harvest": {"reads": {"v_cf": one["reads"]["v_cf"]}, "writes": {}, "models": {}, "metrics": {}},
-        "apply": {**one, "reads": {"logits": one["reads"]["logits"]},
-                  "writes": {"patch": {**one["writes"]["patch"], "operand": {"ref": "kept"}}}},
-    }
-    score = raw["steps"].pop("score")
-    raw["steps"] = {
-        "harvest": {"kind": "observe", "interventions": "harvest", "rows": score["rows"],
-                    "outputs": {"kept": {"read": "v_cf"}}},
-        "score": {**score, "interventions": "apply"},
-    }
-    direct = model_engine.execute(plan.build_request(_point("patching.json"), data_root, model_engine))
-    chained = model_engine.execute(plan.build_request(raw, data_root, model_engine), batch_size=1)
-    assert _agree(direct.result("logit_diff"), chained.step("score", plan.Observe).results["logit_diff"])
+    whole = model_engine.execute(plan.build_request(raw, data_root, model_engine))
+    one_by_one = model_engine.execute(plan.build_request(raw, data_root, model_engine), batch_size=1)
+    assert _agree(whole.result("logit_diff"), one_by_one.result("logit_diff"))
+
+
+def _even(read, write=None, rows="weekdays_even/train"):
+    """An interchange over rows whose entities are all three tokens long: an
+    anchored read there is flat, and one width on every row."""
+    raw = _point("patching.json")
+    raw["data"]["pairs"]["path"] = rows
+    raw["steps"]["counterfactual"]["reads"]["v_cf"]["pos"] = read
+    raw["steps"]["patched"]["interventions"]["writes"]["patch"]["pos"] = write or read
+    return raw
+
+
+ENTITY = {"all": True, "scope": {"variable": "entity"}}
+
+
+@pytest.mark.parametrize("batch_size", [None, 1, 2, 4])
+def test_a_flat_value_of_one_width_is_still_flat(batch_size, data_root, model_engine):
+    """A text anchor three tokens long on every row comes back flat — three
+    entries a row — though its windows happen to be one width, and a later
+    step's windows take three entries a row of it. The same patch spelled as
+    the rectangle those windows are, `{"span": [3, 6]}`, is the check, to the
+    bit, windowed alike."""
+    anchored = model_engine.execute(plan.build_request(_even(ENTITY), data_root, model_engine), batch_size=batch_size)
+    rectangle = model_engine.execute(plan.build_request(_even({"span": [3, 6]}), data_root, model_engine), batch_size=batch_size)
+    assert anchored.step("counterfactual", plan.Forward).results["positions"]["counterfactual.v_cf"]["rows"] == ((4, 5, 6),) * 6
+    assert torch.equal(anchored.result("logit_diff"), rectangle.result("logit_diff"))
+
+
+def test_a_one_row_minibatch_takes_its_flat_operand_whole(data_root, model_engine):
+    """A fit of one row per update: every update's steps are one row, and a
+    flat operand of one width is three entries of it, not one. The rotation
+    it trains is the rectangle's, to the bit."""
+    def fitted(read):
+        raw = _point("das.json")
+        raw["data"] = {"train": {"path": "weekdays_even/train"}}
+        raw["interventions"]["cf_read"]["reads"]["v_cf"]["pos"] = read
+        raw["interventions"]["das"]["writes"]["patch"]["pos"] = read
+        raw["steps"]["fit"].update(batch_size=1, epochs=2, eval={"data": {"train": "train"}})
+        for name in ("iia", "ce"):
+            for column in ("a", "b", "target"):
+                for one in (raw["steps"][name], raw["steps"]["fit"]["steps"][name]):
+                    if column in one:
+                        one[column] = one[column].replace("test.", "train.")
+        return model_engine.execute(plan.build_request(raw, data_root, model_engine))
+
+    anchored, rectangle = fitted(ENTITY), fitted({"span": [3, 6]})
+    assert torch.equal(anchored.result("train")["loss"], rectangle.result("train")["loss"])
+    assert torch.equal(anchored.result("rot"), rectangle.result("rot"))
+
+
+def test_a_read_stacked_over_the_decode_is_flat_too(data_root, model_engine):
+    """A read of every decode step is cut out of the continuation: flat by
+    its form, and one width on every row because the decode runs to its
+    bound. Taken by a later step, it is the rectangle `{"span": [0, 3]}` of
+    the same steps, to the bit, whole and one row at a time."""
+    def run(read, write, batch_size):
+        raw = _even(read, write)
+        raw["steps"]["counterfactual"].update(kind="generate", max_new_tokens=3, min_new_tokens=3, do_sample=False)
+        return model_engine.execute(plan.build_request(raw, data_root, model_engine), batch_size=batch_size)
+
+    for batch_size in (None, 1):
+        stacked = run({"frame": "generated", "all": True}, ENTITY, batch_size).result("logit_diff")
+        rectangle = run({"frame": "generated", "span": [0, 3]}, {"span": [3, 6]}, batch_size).result("logit_diff")
+        assert torch.equal(stacked, rectangle), batch_size
 
 
 # --------------------------------------------------------------------- #
@@ -170,10 +250,11 @@ def test_a_per_row_output_reaches_the_window_of_its_own_rows(data_root, model_en
 # --------------------------------------------------------------------- #
 
 
-def test_a_fit_still_trains_when_its_passes_are_windowed(data_root, model_engine):
+def test_a_fit_still_trains_when_its_updates_are_windowed(data_root, model_engine):
     """The loss is the mean over the concatenated rows, so the gradient is
     the whole minibatch's. (That also means windowing frees no memory inside
-    an update: a fit's memory knob is `pairs`. It does bound the eval pass.)"""
+    an update: a fit's memory knob is its own `batch_size`. It does bound the
+    evaluation.)"""
     raw = _point("das.json")
     whole = model_engine.execute(plan.build_request(raw, data_root, model_engine))
     windowed = model_engine.execute(plan.build_request(raw, data_root, model_engine), batch_size=1)

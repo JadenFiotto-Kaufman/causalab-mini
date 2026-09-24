@@ -4,10 +4,10 @@ import dataclasses
 import pickle
 
 import pytest
+from conftest import of_kind
 
 from causalab_mini import plan
 from causalab_mini.data import tokens
-from causalab_mini.plan import document
 
 
 @pytest.fixture
@@ -83,32 +83,26 @@ def test_a_plan_pickles_with_plain_pickle(any_plan):
 
 
 def test_the_schedule_is_two_forwards_counterfactual_then_base(minimal_plan):
-    assert [(f.name, f.input) for f in minimal_plan.step("observe", plan.Observe).forwards] == [
-        ("original", "counterfactual"),
-        ("patched", "base"),
-    ]
+    """Each step of the document is a step of the plan, under its own name,
+    in the order the document wrote them."""
+    assert list(minimal_plan.steps) == ["counterfactual", "patched", "iia", "logit_diff"]
+    assert [f.input for f in of_kind(minimal_plan, plan.Forward)] == ["pairs", "pairs"]
 
-    original, patched = minimal_plan.step("observe", plan.Observe).forwards
-    assert [(tap.address.path, tap.address.side) for tap in original.taps] == [
+    original, patched = of_kind(minimal_plan, plan.Forward)
+    assert [(tap.address.path, tap.address.io) for tap in original.taps] == [
         ("layers.0", "output")
     ]
-    assert [read.name for read in original.taps[0].reads] == ["v_cf"]
+    assert [read.name for read in original.taps[0].reads] == ["counterfactual.v_cf"]
     assert original.taps[0].writes == ()
 
     # forward order: the write at layer 0 goes above the read at the head.
-    assert [(tap.address.path, tap.address.side) for tap in patched.taps] == [
+    assert [(tap.address.path, tap.address.io) for tap in patched.taps] == [
         ("layers.0", "output"),
         ("lm_head", "output"),
     ]
-    assert [write.name for write in patched.taps[0].writes] == ["patch"]
-    assert patched.taps[0].writes[0].operand == "v_cf"
-    assert [read.name for read in patched.taps[1].reads] == ["logits"]
-
-
-def test_a_write_whose_operand_is_read_in_its_own_model_is_a_cycle(minimal_raw, data_root, model_engine):
-    minimal_raw["method"]["reads"]["v_cf"].update(model="patched", input="base")
-    with pytest.raises(plan.PlanError, match="cycle"):
-        plan.build_request(minimal_raw, data_root, model_engine)
+    assert [write.name for write in patched.taps[0].writes] == ["patched.patch"]
+    assert patched.taps[0].writes[0].operand == "counterfactual.v_cf"
+    assert [read.name for read in patched.taps[1].reads] == ["patched.logits"]
 
 
 # --------------------------------------------------------------------- #
@@ -134,8 +128,8 @@ def test_the_metric_columns_resolved_to_the_token_ids_notes_measured(minimal_pla
     # NOTES.md §9.1: on this sentencepiece tokenizer " Friday" and "Friday" are
     # the same id, so the space-prefixed form is the bare one.
     assert model.tokenizer.encode(" Friday", add_special_tokens=False) == [28728]
-    iia, logit_diff = minimal_plan.step("observe", plan.Observe).metrics
-    assert (iia.name, iia.kind, iia.of) == ("iia", "match", "logits")
+    iia, logit_diff = of_kind(minimal_plan, plan.Metric)
+    assert (iia.kind, iia.of) == ("match", "patched.logits")
     # row 0's cf_answer is " Sunday", row 2's is " Friday" (documents/data/weekdays/train.json)
     assert iia.ids == ((16340, 27822, 28728, 24211),)
     assert logit_diff.ids[0] == iia.ids[0]  # `a` is cf_answer too
@@ -148,6 +142,6 @@ def test_a_multi_token_answer_is_refused(model):
 
 
 def test_a_layer_the_model_does_not_have_is_a_load_error(minimal_raw, data_root, model_engine):
-    minimal_raw["method"]["sites"]["target"]["layers"] = [17]
+    minimal_raw["sites"]["target"]["layers"] = 17
     with pytest.raises(plan.PlanError, match="outside the model's 2 layers"):
         plan.build_request(minimal_raw, data_root, model_engine)

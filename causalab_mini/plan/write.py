@@ -20,7 +20,7 @@ no table to live in: it is in the returned plan, at
 one that never gets there, because a write that could not land refuses the run
 and names the rows and the reason. Letting a save name `positions` would give
 it a file through the mechanism that already exists; it is not built, because
-a pass with no dynamic position records nothing and the save would then be a
+a step with no dynamic position records nothing and the save would then be a
 refusal the document could not have predicted.
 """
 
@@ -29,19 +29,22 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+from typing import Any
 
 from safetensors.torch import save_file
 
-from .plan import Plan, SaveFile, Step, children
+from ..ops.metrics import UNITS
+from .plan import Metric, Plan, SaveFile, Step, children
 
 
 def write(step: Step, out_dir: str | Path) -> list[Path]:
     """Every save in this subtree, written.
 
-    A **plan** gets a directory of its own, so a swept point's files land
-    under `pos=-1/`. Any other step writes into its enclosing plan's
-    directory: a fit's eval pass is a place, not a place*s*, and giving it a
-    folder would say otherwise.
+    A **plan** in a plan gets a directory of its own, so a swept point's
+    files land under `pos=-1/`. Any other step writes into its enclosing
+    plan's directory — a fit's evaluation too, though it is a plan of steps:
+    it is where the fit's held-out numbers are, and giving it a folder would
+    say they were somewhere else.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -54,7 +57,7 @@ def write(step: Step, out_dir: str | Path) -> list[Path]:
         if step.provenance:
             written.append(_json(out / "run.json", step.provenance))
     for name, child in children(step):
-        written.extend(write(child, out / name if isinstance(child, Plan) else out))
+        written.extend(write(child, out / name if isinstance(child, Plan) and isinstance(step, Plan) else out))
     return written
 
 
@@ -64,27 +67,53 @@ def _json(path: Path, payload: object) -> Path:
 
 
 def _file(step: Step, save: SaveFile, out: Path) -> Path:
+    """Write one save of `step`. A tensor save is a `.safetensors` file in
+    one of three forms: a tensor is one slot, `weight`; a dict of tensors a
+    slot each, by its own keys; a list of tensors a slot each, by its index
+    (`"0"`, `"1"`, …), whatever their shapes. A metric's is a `.json` table."""
     path = out / save.file_path
     path.parent.mkdir(parents=True, exist_ok=True)
     # A save names a result of the step it sits on. No search, so no
     # ambiguity: two steps may both produce `iia` and each saves its own.
     value = step.results[save.value]
     if save.file_path.endswith(".safetensors"):
-        # One auto-declared slot per featurizer, named `<featurizer>.weight`.
-        save_file({"weight": value.contiguous()}, str(path), metadata=save.identity)
+        # `weight` is the key a featurizer's bundle is loaded by
+        if isinstance(value, dict):
+            tensors = value
+        elif isinstance(value, list):
+            tensors = {str(index): one for index, one in enumerate(value)}
+        else:
+            tensors = {"weight": value}
+        save_file({key: one.contiguous() for key, one in tensors.items()}, str(path), metadata=save.identity)
         return path
     # The result holds one value per eligible row; an excluded measurement
     # is still a row of the table, with no value and `eligible: false` — so
     # it can never be read as a zero, or silently shorten a denominator.
     #
-    # Which rows those are has two halves. The compiled `eligible` is the
+    # Which rows those are has two halves. The compiled `rows` is the
     # column half — whether the data had an answer to score. A run that
     # anchored a position to text also reports which rows it could place,
     # and that list is already the intersection, so it wins where it exists.
+    assert isinstance(step, Metric), "a .json save is a metric's table"
     run = step.results.get("eligible", {}).get(save.value)
-    eligible = run or save.eligible or (True,) * len(save.example_ids)
-    where = step.results.get("positions", {}).get(save.of, {})
-    numbers = iter(value.tolist())
+    eligible = run or tuple(step.rows is None or row in step.rows for row in range(len(save.example_ids)))
+    where = step.results.get("positions", {}).get(step.of, {})
+    unit, version = UNITS[step.kind]
+    labels = {"unit": unit, "estimand_version": version, "produced_by": save.produced_by}
+    rows = []
+    # a metric of a read at every layer is a row of scores per layer, and a
+    # table row per layer and example, which says its layer
+    for layer, scores in zip(step.layers or (None,), value if step.layers else [value]):
+        rows += _rows(save, scores, eligible, where, {} if layer is None else {"layer": layer}, labels)
+    path.write_text(json.dumps(rows, indent=1) + "\n")
+    return path
+
+
+def _rows(
+    save: SaveFile, scores: Any, eligible: tuple[bool, ...], where: dict[str, Any], layer: dict[str, int], labels: dict[str, str]
+) -> list[dict[str, Any]]:
+    """One table row per example: its number when it was scored, and where."""
+    numbers = iter(scores.tolist())
     rows = []
     for index, (example_id, included) in enumerate(zip(save.example_ids, eligible)):
         number = next(numbers) if included else None
@@ -92,6 +121,7 @@ def _file(step: Step, save: SaveFile, out: Path) -> Path:
             {
                 "example_id": example_id,
                 "metric": save.value,
+                **layer,
                 # JSON has no NaN or Infinity: `json.dumps` would emit a bare
                 # `NaN`, which Python reads back and a strict parser refuses.
                 "value": float(number) if number is not None and math.isfinite(number) else None,
@@ -102,10 +132,7 @@ def _file(step: Step, save: SaveFile, out: Path) -> Path:
                 "positions": list(where["rows"][index]) if where else None,
                 "reason": where["reason"][index] if where else "",
                 "tokens": where["tokens"][index] if where else "",
-                "unit": save.unit,
-                "estimand_version": save.estimand_version,
-                "produced_by": save.produced_by,
+                **labels,
             }
         )
-    path.write_text(json.dumps(rows, indent=1) + "\n")
-    return path
+    return rows

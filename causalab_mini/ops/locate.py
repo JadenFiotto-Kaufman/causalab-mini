@@ -87,8 +87,8 @@ def frame_of(tokenizer: Any, ids: TokenRows, mask: TokenRows, text: bool = True)
     the mask, and a position that names no anchor is index arithmetic over
     them — while the character map is O(L) decode calls of O(L) work per
     row, which is 840 ms for 64 rows of 260 tokens and is built once per
-    forward per pass. A fit whose every position is a bare `-1` would spend
-    all of that on a map nothing reads.
+    forward. A fit whose every position is a bare `-1` would spend all of
+    that on a map nothing reads.
     """
     prefix = _special_prefix(tokenizer)
     starts, ends, texts, offsets = [], [], [], []

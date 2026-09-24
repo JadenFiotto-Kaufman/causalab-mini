@@ -1,6 +1,6 @@
 {
   "header": {
-    "description": "Attention knockout, and the pattern it knocks out. Under eager attention the softmax's return is a tensor: `attention_probs`, (batch, head, query, key). This reads the last query position's pattern for every head, publishes it, and in the patched model zeroes ONE head's pattern at that position \u2014 the head then contributes nothing there \u2014 swept over heads. `attn_implementation: eager` is in the model block because sdpa never materializes the pattern."
+    "description": "Attention knockout, and the pattern it knocks out. Under eager attention the softmax's return is a tensor: `attention_probs`, (batch, head, query, key). `clean` reads the last query position's pattern for every head, which is saved; `patched` zeroes ONE head's pattern at that position — the head then contributes nothing there — swept over heads. `attn_implementation: eager` is in the model block because sdpa never materializes the pattern."
   },
   "model": {
     "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
@@ -8,123 +8,49 @@
     "dtype": "fp32",
     "attn_implementation": "eager"
   },
-  "roles": {
-    "base": {
-      "field": "input"
-    },
-    "counterfactual": {
-      "field": "counterfactual_inputs[0]"
-    }
-  },
+  "data": {"pairs": {"path": "weekdays/train"}},
   "sites": {
-    "pattern": {
-      "component": "attention_probs",
-      "layers": [
-        0
-      ]
-    },
+    "pattern": {"component": "attention_probs", "layers": 0},
     "one_head": {
       "component": "attention_probs",
-      "layers": [
-        0
-      ],
-      "heads": {
-        "sweep": [
-          [
-            0
-          ],
-          [
-            1
-          ],
-          [
-            2
-          ],
-          [
-            3
-          ]
-        ]
-      }
+      "layers": 0,
+      "heads": {"sweep": [[0], [1], [2], [3]]}
     },
-    "head": {
-      "component": "lm_head"
-    }
-  },
-  "interventions": {
-    "knockout": {
-      "reads": {
-        "pattern": {
-          "site": "pattern",
-          "pos": -1,
-          "model": "original",
-          "input": "base"
-        },
-        "logits": {
-          "site": "head",
-          "pos": -1,
-          "model": "patched",
-          "input": "base"
-        }
-      },
-      "writes": {
-        "zero": {
-          "site": "one_head",
-          "pos": -1,
-          "mechanism": "swap",
-          "operand": 0.0
-        }
-      },
-      "models": {
-        "patched": {
-          "input": "base",
-          "writes": [
-            "zero"
-          ]
-        }
-      },
-      "metrics": {
-        "iia": {
-          "kind": "match",
-          "of": "logits",
-          "expected": "cf_answer",
-          "token_form": "space_prefixed"
-        },
-        "logit_diff": {
-          "kind": "logit_diff",
-          "of": "logits",
-          "a": "cf_answer",
-          "b": "base_answer",
-          "token_form": "space_prefixed"
-        }
-      }
-    }
+    "head": {"component": "lm_head"}
   },
   "steps": {
-    "score": {
-      "kind": "observe",
-      "interventions": "knockout",
-      "rows": {
-        "base": "weekdays/train",
-        "counterfactual": "weekdays/train"
+    "clean": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "input",
+      "reads": {"pattern": {"site": "pattern", "pos": -1}}
+    },
+    "patched": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "input",
+      "interventions": {
+        "writes": {"zero": {"site": "one_head", "pos": -1, "mechanism": "swap", "operand": 0.0}}
       },
-      "saves": [
-        {
-          "value": "iia",
-          "file_path": "iia.json"
-        },
-        {
-          "value": "logit_diff",
-          "file_path": "logit_diff.json"
-        },
-        {
-          "value": "last_pattern",
-          "file_path": "pattern.safetensors"
-        }
-      ],
-      "outputs": {
-        "last_pattern": {
-          "read": "pattern"
-        }
-      }
+      "reads": {"logits": {"site": "head", "pos": -1}}
+    },
+    "iia": {
+      "kind": "metric",
+      "metric": "match",
+      "of": "patched.logits",
+      "expected": "pairs.cf_answer"
+    },
+    "logit_diff": {
+      "kind": "metric",
+      "metric": "logit_diff",
+      "of": "patched.logits",
+      "a": "pairs.cf_answer",
+      "b": "pairs.base_answer"
+    },
+    "saves": {
+      "iia": "iia.json",
+      "logit_diff": "logit_diff.json",
+      "clean.pattern": "pattern.safetensors"
     }
   }
 }

@@ -18,6 +18,7 @@ import pathlib
 import pytest
 import torch
 from pydantic import ValidationError
+from conftest import model_block, of_kind
 
 from causalab_mini import plan
 from causalab_mini.address import AddressError
@@ -36,7 +37,7 @@ DAS = REPO / "documents" / "v2" / "das.json"
 
 def _at(component, heads=None):
     raw = json.loads(PATCHING.read_text())
-    raw["sites"]["target"] = {"component": component, "layers": [0]}
+    raw["sites"]["target"] = {"component": component, "layers": 0}
     if heads is not None:
         raw["sites"]["target"]["heads"] = heads
     return raw
@@ -109,14 +110,14 @@ def test_two_sites_of_disjoint_heads_are_one_tap_and_add_up(data_root, model_eng
     """Heads are a slice of a place, like positions are — not a different
     place. Two sites at one component share its address, hence its tap."""
     raw = _at("attention_z", [0, 1])
-    raw["sites"]["rest"] = {"component": "attention_z", "layers": [0], "heads": [2, 3]}
-    one = raw["interventions"]["patching"]
-    one["reads"]["v_rest"] = {**one["reads"]["v_cf"], "site": "rest"}
-    one["writes"]["patch_rest"] = {**one["writes"]["patch"], "site": "rest", "operand": "v_rest"}
-    one["models"]["patched"]["writes"] = ["patch", "patch_rest"]
+    raw["sites"]["rest"] = {"component": "attention_z", "layers": 0, "heads": [2, 3]}
+    reads = raw["steps"]["counterfactual"]["reads"]
+    reads["v_rest"] = {**reads["v_cf"], "site": "rest"}
+    writes = raw["steps"]["patched"]["interventions"]["writes"]
+    writes["patch_rest"] = {**writes["patch"], "site": "rest", "operand": "counterfactual.v_rest"}
 
     built = plan.build_request(raw, data_root, model_engine)
-    (tap,) = [t for t in built.step("score", plan.Observe).forwards[-1].taps if t.writes]
+    (tap,) = [t for t in of_kind(built, plan.Forward)[-1].taps if t.writes]
     assert [(w.at.groups, w.at.take) for w in tap.writes] == [(4, (0, 1)), (4, (2, 3))]
     assert torch.equal(
         model_engine.execute(built).result("logit_diff"),
@@ -146,12 +147,12 @@ def test_a_rotation_over_two_heads_is_as_wide_as_two_heads(data_root, model_engi
     """The reason the slice is handed on flat: DAS inside a pair of heads
     needs nothing but a site that names them."""
     raw = json.loads(DAS.read_text())
-    raw["sites"]["target"] = {"component": "attention_z", "layers": [0], "heads": [0, 1]}
+    raw["sites"]["target"] = {"component": "attention_z", "layers": 0, "heads": [0, 1]}
     raw["featurizers"]["rot"]["k"] = 4
     built = plan.build_request(raw, data_root, model_engine)
     (spec,) = built.step("featurizers", plan.Featurizers).specs
     assert (spec.d, spec.k) == (8, 4)
-    assert torch.isfinite(model_engine.execute(built).step("fit", plan.Fit).results["train/loss"]).all()
+    assert torch.isfinite(model_engine.execute(built).step("fit", plan.Fit).results["train"]["loss"]).all()
 
     raw["featurizers"]["rot"]["k"] = 9
     with pytest.raises(plan.PlanError, match="not a subspace of the 8-wide site"):
@@ -182,7 +183,7 @@ def test_the_pattern_is_a_distribution_over_keys_per_head(data_root, eager_engin
     raw = json.loads(KNOCKOUT.read_text())
     raw["sites"]["one_head"]["heads"] = [0]
     executed = eager_engine.execute(plan.build_request(raw, data_root, eager_engine))
-    pattern = executed.step("score", plan.Observe).results["last_pattern"]
+    pattern = executed.result("clean.pattern")
 
     rows, window, flat = pattern.shape
     assert (rows, window) == (4, 1) and flat % 4 == 0
@@ -193,18 +194,16 @@ def test_the_pattern_is_a_distribution_over_keys_per_head(data_root, eager_engin
 def test_the_scores_are_what_the_softmax_turns_into_the_pattern(data_root, eager_engine):
     raw = json.loads(KNOCKOUT.read_text())
     raw["sites"]["one_head"]["heads"] = [0]
-    raw["sites"]["scores"] = {"component": "attention_scores", "layers": [0]}
-    one = raw["interventions"]["knockout"]
-    one["reads"]["scores"] = {**one["reads"]["pattern"], "site": "scores"}
-    one["models"]["patched"]["writes"] = []
-    raw["steps"]["score"]["outputs"]["last_scores"] = {"read": "scores"}
-    results = eager_engine.execute(plan.build_request(raw, data_root, eager_engine)).step(
-        "score", plan.Observe
-    ).results
+    raw["sites"]["scores"] = {"component": "attention_scores", "layers": 0}
+    reads = raw["steps"]["clean"]["reads"]
+    reads["scores"] = {**reads["pattern"], "site": "scores"}
+    del raw["steps"]["patched"]["interventions"]
+    raw["steps"]["saves"]["clean.scores"] = "scores.safetensors"
+    executed = eager_engine.execute(plan.build_request(raw, data_root, eager_engine))
 
-    rows = results["last_scores"].shape[0]
-    scores = results["last_scores"].reshape(rows, 4, -1)
-    assert torch.equal(scores.softmax(-1), results["last_pattern"].reshape(rows, 4, -1))
+    rows = executed.result("clean.scores").shape[0]
+    scores = executed.result("clean.scores").reshape(rows, 4, -1)
+    assert torch.equal(scores.softmax(-1), executed.result("clean.pattern").reshape(rows, 4, -1))
 
 
 def test_knocking_out_a_head_is_zeroing_its_z(data_root, eager_engine):
@@ -216,11 +215,11 @@ def test_knocking_out_a_head_is_zeroing_its_z(data_root, eager_engine):
     via_pattern = _score(knock, data_root, eager_engine)
 
     via_z = copy.deepcopy(knock)
-    via_z["sites"]["one_head"] = {"component": "attention_z", "layers": [0], "heads": [2]}
+    via_z["sites"]["one_head"] = {"component": "attention_z", "layers": 0, "heads": [2]}
     assert torch.allclose(via_pattern, _score(via_z, data_root, eager_engine), rtol=0, atol=1e-6)
 
     unpatched = copy.deepcopy(knock)
-    unpatched["interventions"]["knockout"]["models"]["patched"]["writes"] = []
+    del unpatched["steps"]["patched"]["interventions"]
     assert not torch.equal(via_pattern, _score(unpatched, data_root, eager_engine))
 
 
@@ -232,25 +231,25 @@ def test_the_pattern_survives_being_shipped(data_root, eager_engine):
     raw["sites"]["one_head"]["heads"] = [1]
     here = eager_engine.execute(plan.build_request(raw, data_root, eager_engine))
     shipped = eager_engine.execute(plan.build_request(raw, data_root, eager_engine), remote="local")
-    for name in ("logit_diff", "last_pattern"):
+    for name in ("logit_diff", "clean.pattern"):
         assert torch.equal(here.result(name), shipped.result(name)), name
 
 
 def test_the_pattern_is_at_the_same_address_on_gpt2(data_root):
-    from causalab_mini.plan import document
-
-    spec = document.Document.load(REPO / "documents" / "gpt2_cpu.json").model
+    
+    spec = model_block(REPO / "documents" / "v2" / "gpt2_reach.json")
     engine = NNterpEngine.load(spec, device_map="cpu", attn_implementation="eager")
     located = engine.locate("attention_probs", 0)
     # nnterp's row, which is one name over five per-family overrides, a sink
     # tag and a validator — where mini had one hardcoded operation
     assert located.accessor == "attention_probabilities"
-    assert located.interior, "it is an operation inside the attention, not a module boundary"
+    assert located.inside, "it is an operation inside the attention, not a module boundary"
     llama = NNterpEngine.load(
-        document.Document.load(REPO / "documents" / "minimal_cpu.json").model,
+        model_block(REPO / "documents" / "v2" / "patching.json"),
         device_map="cpu", attn_implementation="eager",
     )
-    assert located.where == llama.locate("attention_probs", 0).where
+    other = llama.locate("attention_probs", 0)
+    assert (located.accessor, located.io, located.inside) == (other.accessor, other.io, other.inside)
 
 
 # --------------------------------------------------------------------- #
@@ -266,7 +265,7 @@ def test_units_are_single_features_of_any_site_with_a_width(data_root, model_eng
     width = model_engine.width(model_engine.locate("mlp_activation", 0))
     raw["sites"]["target"]["units"] = [1, 5]
     built = plan.build_request(raw, data_root, model_engine)
-    (tap,) = [t for t in built.step("score", plan.Observe).forwards[-1].taps if t.writes]
+    (tap,) = [t for t in of_kind(built, plan.Forward)[-1].taps if t.writes]
     assert (tap.writes[0].at.groups, tap.writes[0].at.take) == (width, (1, 5))
     assert "features=[1, 5]/" in __import__("causalab_mini.plan.explain", fromlist=["x"]).explain(built)
 
@@ -282,9 +281,8 @@ def test_the_mlps_width_is_the_down_projections_input_on_both_families(model_eng
     None to mean four times hidden. Checked against the module the activation
     feeds rather than the config it was read from — which is what caught the
     tiny GPT-2 carrying a stray `intermediate_size: 37` beside 128-wide MLPs."""
-    from causalab_mini.plan import document
-
-    gpt2 = NNterpEngine.load(document.Document.load(REPO / "documents" / "gpt2_cpu.json").model, dispatch=False)
+    
+    gpt2 = NNterpEngine.load(model_block(REPO / "documents" / "v2" / "gpt2_reach.json"), dispatch=False)
     assert gpt2.width(gpt2.locate("mlp_activation", 0)) == gpt2.model.mlps[0].c_proj.weight.shape[0] == 128
     llama = model_engine.model.mlps[0].down_proj.in_features
     assert model_engine.width(model_engine.locate("mlp_neuron_output", 0)) == llama
@@ -295,7 +293,7 @@ def test_a_gate_over_neurons_is_a_gate_at_a_site_of_units(data_root, model_engin
     from causalab_mini.plan import sweep
 
     _, raw = sweep.points(json.loads((REPO / "documents" / "v2" / "dbm.json").read_text()))[0]
-    raw["sites"]["target"] = {"component": "mlp_activation", "layers": [0], "units": [0, 2, 4, 6]}
+    raw["sites"]["target"] = {"component": "mlp_activation", "layers": 0, "units": [0, 2, 4, 6]}
     built = plan.build_request(raw, data_root, model_engine)
     (spec,) = built.step("featurizers", plan.Featurizers).specs
     assert spec.d == 4
@@ -306,7 +304,7 @@ def test_what_a_site_of_units_may_not_say(data_root, model_engine):
     with pytest.raises(ValidationError, match="heads or units, not both"):
         Spec.model_validate({**_at("attention_z", [0]), "sites": {
             **_at("attention_z", [0])["sites"],
-            "target": {"component": "attention_z", "layers": [0], "heads": [0], "units": [1]}}})
+            "target": {"component": "attention_z", "layers": 0, "heads": [0], "units": [1]}}})
     raw = _at("block_output")
     raw["sites"]["target"]["units"] = [16]
     with pytest.raises(plan.PlanError, match="unit 16 of a 16-unit tensor"):
@@ -329,29 +327,31 @@ def _pattern_raw(heads):
 
 
 def test_the_patched_head_looks_where_it_did_on_the_counterfactual(data_root, eager_engine):
-    """Read the pattern back in the patched model — a read sees its model's
-    writes — for the patched head and for a bystander."""
+    """Read the pattern back in the patched forward — a read sees its step's
+    writes — for the patched head and for a bystander, which a clean forward
+    over the same prompts reads too."""
     raw = _pattern_raw([2])
-    raw["sites"]["bystander"] = {"component": "attention_probs", "layers": [0], "heads": [1]}
-    one = raw["interventions"]["pattern_patching"]
-    one["reads"]["ours_after"] = {"site": "one_head", "pos": -1, "model": "patched", "input": "base"}
-    one["reads"]["bystander_after"] = {"site": "bystander", "pos": -1, "model": "patched", "input": "base"}
-    one["reads"]["bystander_before"] = {"site": "bystander", "pos": -1, "model": "original", "input": "base"}
-    raw["steps"]["score"]["outputs"] = {name: {"read": read} for name, read in (
-        ("theirs", "their_pattern"), ("after", "ours_after"), ("by_after", "bystander_after"), ("by_before", "bystander_before"))}
-    got = eager_engine.execute(plan.build_request(raw, data_root, eager_engine)).step("score", plan.Observe).results
+    raw["sites"]["bystander"] = {"component": "attention_probs", "layers": 0, "heads": [1]}
+    clean = {"kind": "forward", "data": "pairs", "field": "input", "reads": {"bystander": {"site": "bystander", "pos": -1}}}
+    raw["steps"] = {"clean": clean, **raw["steps"]}
+    raw["steps"]["patched"]["reads"]["ours"] = {"site": "one_head", "pos": -1}
+    raw["steps"]["patched"]["reads"]["bystander"] = {"site": "bystander", "pos": -1}
+    for read in ("counterfactual.their_pattern", "patched.ours", "patched.bystander", "clean.bystander"):
+        raw["steps"]["saves"][read] = f"{read}.safetensors"
+    got = eager_engine.execute(plan.build_request(raw, data_root, eager_engine)).all_results()
 
-    assert torch.equal(got["after"], got["theirs"]), "head 2 now attends as it did on the counterfactual"
-    assert torch.equal(got["by_after"], got["by_before"]), "head 1 was not touched"
-    assert torch.allclose(got["after"].sum(-1), torch.ones(got["after"].shape[:2]), atol=1e-6), "still a distribution"
+    after = got["patched.ours"]
+    assert torch.equal(after, got["counterfactual.their_pattern"]), "head 2 now attends as it did on the counterfactual"
+    assert torch.equal(got["patched.bystander"], got["clean.bystander"]), "head 1 was not touched"
+    assert torch.allclose(after.sum(-1), torch.ones(after.shape[:2]), atol=1e-6), "still a distribution"
 
 
 def test_a_pattern_from_the_same_prompt_changes_nothing(data_root, eager_engine):
     raw = _pattern_raw([0, 1, 2, 3])
     patched = _score(raw, data_root, eager_engine)
-    raw["roles"]["counterfactual"]["field"] = raw["roles"]["base"]["field"]
+    raw["steps"]["counterfactual"]["field"] = raw["steps"]["patched"]["field"]
     same = _score(raw, data_root, eager_engine)
-    raw["interventions"]["pattern_patching"]["models"]["patched"]["writes"] = []
+    del raw["steps"]["patched"]["interventions"]
     clean = _score(raw, data_root, eager_engine)
     assert torch.allclose(same, clean, rtol=0, atol=1e-6)
     assert not torch.allclose(patched, clean, rtol=0, atol=1e-6)
@@ -362,19 +362,19 @@ def test_prompts_laid_out_differently_are_refused_before_any_forward(data_root, 
     counterfactual days tokenize to different lengths, so key j there is a
     different word — or a pad — here, and every shape would still be right."""
     raw = _pattern_raw([0])
-    raw["steps"]["score"]["rows"] = {"base": "weekdays/train", "counterfactual": "weekdays/train"}
+    raw["data"]["pairs"]["path"] = "weekdays/train"
     with pytest.raises(plan.PlanError, match="must tokenize to the same length, row by row"):
         plan.build_request(raw, data_root, eager_engine)
 
 
-def test_a_pattern_published_by_an_earlier_step_cannot_be_checked(data_root, eager_engine):
+def test_a_pattern_with_no_prompts_behind_it_cannot_be_checked(data_root, eager_engine):
+    """A mean of the pattern is a tensor with no prompts behind it, so there
+    is no layout to check it against, and a write that swaps it in is
+    refused."""
     raw = _pattern_raw([0])
-    one = raw["interventions"]["pattern_patching"]
-    raw["interventions"]["harvest"] = {"reads": {"their_pattern": one["reads"].pop("their_pattern")}}
-    one["writes"]["look_there"]["operand"] = {"ref": "kept"}
-    score = raw["steps"].pop("score")
-    raw["steps"] = {"harvest": {"kind": "observe", "interventions": "harvest", "rows": score["rows"],
-                                "outputs": {"kept": {"read": "their_pattern"}}},
-                    "score": {**score, "interventions": "pattern_patching"}}
-    with pytest.raises(plan.PlanError, match="swap one read in the same pass"):
+    steps = raw["steps"]
+    raw["steps"] = {"counterfactual": steps.pop("counterfactual"),
+                    "kept": {"kind": "reduce", "reduce": "mean", "of": "counterfactual.their_pattern"}, **steps}
+    steps["patched"]["interventions"]["writes"]["look_there"]["operand"] = "kept"
+    with pytest.raises(plan.PlanError, match="has no prompts to check its layout against"):
         plan.build_request(raw, data_root, eager_engine)

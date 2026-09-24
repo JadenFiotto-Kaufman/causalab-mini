@@ -14,10 +14,9 @@ import shutil
 
 import pytest
 import torch
-from conftest import same_numbers
+from conftest import of_kind, same_numbers
 
 from causalab_mini import plan
-from causalab_mini.data import rows as rows_module
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.plan import explain
 from causalab_mini.plan.spec import Spec
@@ -32,10 +31,10 @@ EXCLUDED = 1  # the row whose counterfactual answer is unknown
 def raw():
     """patching.json plus a metric that does not name the null column."""
     one = json.loads(PATCHING.read_text())
-    one["interventions"]["patching"]["metrics"]["base_logit"] = {
-        "kind": "token_logit", "of": "logits", "token": "base_answer", "token_form": "space_prefixed",
+    one["steps"]["base_logit"] = {
+        "kind": "metric", "metric": "token_logit", "of": "patched.logits", "token": "pairs.base_answer",
     }
-    one["steps"]["score"]["saves"].append({"value": "base_logit", "file_path": "base_logit.json"})
+    one["steps"]["saves"]["base_logit"] = "base_logit.json"
     return one
 
 
@@ -54,12 +53,12 @@ def holed_root(data_root, tmp_path):
 
 def test_a_null_column_takes_the_row_out_of_that_metric_only(raw, holed_root, model_engine):
     built = plan.build_request(raw, holed_root, model_engine)
-    by_name = {metric.name: metric for metric in built.step("score", plan.Observe).metrics}
+    by_name = {name: one for name, one in built.steps.items() if isinstance(one, plan.Metric)}
 
     assert by_name["logit_diff"].rows == (0, 2, 3)
     assert [len(ids) for ids in by_name["logit_diff"].ids] == [3, 3]
     assert by_name["base_logit"].rows is None, "it does not name the null column"
-    assert "logit_diff/logit_diff rows=[0, 2, 3]" in explain.explain(built)
+    assert "logit_diff: metric logit_diff(patched.logits) rows=[0, 2, 3]" in explain.explain(built)
 
 
 def test_the_other_rows_score_exactly_what_they_did(raw, data_root, holed_root, model_engine):
@@ -102,8 +101,8 @@ def test_a_metric_of_nothing_is_refused(raw, holed_root, model_engine):
 
 
 def test_a_column_no_row_has_is_a_misspelling_not_an_exclusion(raw, data_root, model_engine):
-    raw["interventions"]["patching"]["metrics"]["logit_diff"]["a"] = "cf_anwser"
-    with pytest.raises(rows_module.DataError, match="no row has a column 'cf_anwser'"):
+    raw["steps"]["logit_diff"]["a"] = "pairs.cf_anwser"
+    with pytest.raises(plan.PlanError, match="metric 'logit_diff': no row has a column 'cf_anwser'"):
         plan.build_request(raw, data_root, model_engine)
 
 
@@ -118,8 +117,8 @@ def test_a_fit_trains_and_scores_over_the_eligible_rows(holed_root, model_engine
     raw = json.loads(DAS.read_text())
     executed = model_engine.execute(plan.build_request(raw, holed_root, model_engine))
     fit = executed.step("fit", plan.Fit)
-    assert torch.isfinite(fit.results["train/loss"]).all()
-    assert torch.isfinite(fit.results["train/eval"]).all()
+    assert torch.isfinite(fit.results["train"]["loss"]).all()
+    assert torch.isfinite(fit.results["train"]["eval"]).all()
 
     executed.write(tmp_path)
     table = json.loads((tmp_path / "iia.json").read_text())
@@ -130,7 +129,7 @@ def test_a_minibatch_with_nothing_to_score_is_refused_before_anything_runs(holed
     """One pair per update makes the excluded row a whole update, whose loss
     would be the mean of nothing."""
     raw = json.loads(DAS.read_text())
-    raw["steps"]["fit"]["pairs"] = 1
+    raw["steps"]["fit"]["batch_size"] = 1
     with pytest.raises(plan.PlanError, match="a metric of nothing"):
         plan.build_request(raw, holed_root, model_engine)
 
@@ -146,10 +145,8 @@ def at_entity():
     token of the row's own entity — so which rows can be scored is a question
     about the prompts, not about the columns."""
     raw = json.loads(PATCHING.read_text())
-    one = raw["interventions"]["patching"]
-    del one["writes"], one["models"], one["reads"]["v_cf"]
-    one["reads"]["logits"]["model"] = "original"
-    one["reads"]["logits"]["pos"] = {"index": -1, "scope": {"variable": "entity"}}
+    del raw["steps"]["counterfactual"], raw["steps"]["patched"]["interventions"]
+    raw["steps"]["patched"]["reads"]["logits"]["pos"] = {"index": -1, "scope": {"variable": "entity"}}
     return raw
 
 
@@ -174,14 +171,14 @@ def test_a_row_the_run_cannot_place_is_excluded_like_a_null_column_is(
     the metric is over the intersection. The row stays a row."""
     holed = _no_entity(data_root, tmp_path, [1])
     executed = model_engine.execute(plan.build_request(at_entity, holed, model_engine))
-    score = executed.step("score", plan.Observe)
+    scored = executed.step("logit_diff", plan.Metric).results
 
-    assert score.results["eligible"]["logit_diff"] == (True, False, True, True)
-    assert score.results["positions"]["logits"]["reason"] == ("", "alignment_missing", "", "")
-    assert score.results["logit_diff"].shape == (3,)
+    assert scored["eligible"]["logit_diff"] == (True, False, True, True)
+    assert executed.step("patched", plan.Forward).results["positions"]["patched.logits"]["reason"] == ("", "alignment_missing", "", "")
+    assert scored["logit_diff"].shape == (3,)
 
     whole = model_engine.execute(plan.build_request(at_entity, data_root, model_engine))
-    assert torch.equal(score.results["logit_diff"], whole.result("logit_diff")[[0, 2, 3]])
+    assert torch.equal(scored["logit_diff"], whole.result("logit_diff")[[0, 2, 3]])
 
 
 def test_the_table_keeps_that_row_too_and_says_which_token_it_missed(

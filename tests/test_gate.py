@@ -95,9 +95,7 @@ def test_the_fit_leaves_the_gate_hard_and_annealed(dbm_raw, data_root):
     schedule's last value."""
     engine = HooksEngine.load(Spec.model_validate(dbm_raw).model, device_map="cpu")
     built = plan.build_request(dbm_raw, data_root, engine)
-    from causalab_mini.ops import intervene
-
-    state = steps.State(featurizers=dict(intervene.FEATURIZERS))
+    state = steps.start(built)
     steps.build(built.step("featurizers", plan.Featurizers), state)
     gate = state.featurizers["mask"]
     assert gate.temperature == 1.0 and not gate.training
@@ -107,7 +105,7 @@ def test_the_fit_leaves_the_gate_hard_and_annealed(dbm_raw, data_root):
     assert not gate.training
     assert gate.temperature == pytest.approx(0.05)
     # the eval record: the watched metric, then the fraction the hard mask keeps
-    record = fit.results["train/eval"]
+    record = fit.results["train"]["eval"]
     assert record.shape[1] == 2
     assert record[-1, 1] == pytest.approx(float((gate.weight > 0).float().mean()))
 
@@ -137,9 +135,14 @@ def test_the_two_engines_learn_the_same_mask(dbm_raw, data_root, model_engine):
 
 
 def _apply(dbm_raw, bundle):
+    """The document with its fit taken out: the score after it, on a mask
+    loaded from `bundle` — which nothing trains, so it is named `mask`."""
     raw = copy.deepcopy(dbm_raw)
     raw["featurizers"]["mask"]["file_path"] = str(bundle)
-    raw["steps"] = {"score": raw["steps"]["score"]}
+    raw["interventions"]["cf_read"]["reads"]["v_cf"]["featurizer"] = "mask"
+    raw["interventions"]["dbm"]["writes"]["patch"]["featurizer"] = "mask"
+    del raw["steps"]["fit"]
+    raw["steps"]["saves"] = {"iia": "iia.json"}
     return raw
 
 
@@ -150,7 +153,7 @@ def test_the_bundle_round_trip_reproduces_the_fits_own_score(dbm_raw, data_root,
     applied = model_engine.execute(
         plan.build_request(_apply(dbm_raw, tmp_path / "mask.safetensors"), data_root, model_engine)
     )
-    assert torch.equal(applied.result("iia"), executed.step("score", plan.Observe).results["iia"])
+    assert torch.equal(applied.result("iia"), executed.result("iia"))
 
 
 def test_an_all_on_gate_is_plain_patching_and_an_all_off_gate_is_nothing(
@@ -160,9 +163,9 @@ def test_an_all_on_gate_is_plain_patching_and_an_all_off_gate_is_nothing(
     interchange `patching.json` does, bit for bit; every unit off is the
     un-intervened model."""
     patching = json.loads(PATCHING.read_text())
-    patching["steps"]["score"]["rows"] = dbm_raw["steps"]["score"]["rows"]
+    patching["data"]["pairs"] = dbm_raw["data"]["train"]
     whole = model_engine.execute(plan.build_request(patching, data_root, model_engine)).result("logit_diff")
-    patching["interventions"]["patching"]["models"]["patched"]["writes"] = []
+    del patching["steps"]["patched"]["interventions"]
     nothing = model_engine.execute(plan.build_request(patching, data_root, model_engine)).result("logit_diff")
 
     scored = {}
@@ -191,6 +194,6 @@ def test_a_gate_fit_survives_being_shipped(dbm_raw, data_root, model_engine):
     shipped = model_engine.execute(plan.build_request(dbm_raw, data_root, model_engine), remote="local")
     assert torch.equal(here.result("mask"), shipped.result("mask"))
     assert torch.equal(
-        here.step("fit", plan.Fit).results["train/eval"],
-        shipped.step("fit", plan.Fit).results["train/eval"],
+        here.step("fit", plan.Fit).results["train"]["eval"],
+        shipped.step("fit", plan.Fit).results["train"]["eval"],
     )

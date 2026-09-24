@@ -114,8 +114,8 @@ class Basis:
     parametrized: what a PCA of harvested activations gives you, and the
     untrained control a DAS fit is compared against.
 
-    `weight` is the basis itself, so a `Weights` step can publish it and a
-    save can stamp it exactly as it would a rotation's parameter.
+    `weight` is the basis itself, so a save can stamp it exactly as it
+    would a rotation's parameter.
     """
 
     def __init__(self, weight: torch.Tensor) -> None:
@@ -197,7 +197,7 @@ class Gate:
         otherwise  m = [θ > 0]      hard, so the score is of a real mask
 
     `training` is a plain attribute the fit loop sets around an update and
-    clears around its eval pass; `temperature` is `T`, which the fit anneals
+    clears around its evaluation; `temperature` is `T`, which the fit anneals
     toward zero so the soft mask the optimizer sees approaches the hard one
     the score uses. A gate nobody is fitting is always hard — including one
     loaded from a file, which is a mask and nothing else.
@@ -235,10 +235,10 @@ def pca(rows: torch.Tensor, k: int) -> torch.Tensor:
     return vt[:k].T.contiguous()
 
 
-#: The featurizer kinds a document may declare. Unlike `ops.FEATURIZERS` this is
-#: a table of *constructors*, not of instances: a subspace carries a trained
-#: parameter, so one exists per run and not one per process. Each takes the
-#: one tensor it is made of — a Cayley parameter, a basis.
+#: The featurizer kinds a document may declare: a table of *constructors*, not
+#: of instances, because a subspace carries a trained parameter, so one exists
+#: per run and not one per process. Each takes the one tensor it is made of — a
+#: Cayley parameter, a basis.
 KINDS: dict[str, Any] = {
     "subspace": Subspace,
     "pca": Basis,

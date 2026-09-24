@@ -18,13 +18,13 @@ DTYPES = {"fp32": torch.float32, "bf16": torch.bfloat16}
 
 
 def load(spec: Any, **options: Any) -> StandardizedTransformer:
-    """`spec` is a model block from either authoring format: both carry
-    `key`, `revision` and `dtype`, which is all a loader needs. Everything
+    """`spec` is a document's model block: `key`, `revision` and `dtype`,
+    which is all a loader needs. Everything
     else is nnterp's and passes through — `device_map`, and `dispatch=False`
     for a meta-device shell: the module tree, the config and the tokenizer,
     nothing downloaded but those. Everything the compiler asks is answered
-    from it, including an interior's `.source`, which is the forward's
-    *code*. The same shell is what runs on NDIF.
+    from it, where every place is included. The same shell is what runs on
+    NDIF.
     """
     if options.get("dispatch") is False:
         options.setdefault("device_map", None)
@@ -45,16 +45,12 @@ def load(spec: Any, **options: Any) -> StandardizedTransformer:
     model = StandardizedTransformer(
         spec.key, revision=spec.revision, dtype=DTYPES[spec.dtype], **options
     )
-    freeze(model._module)
+    # The model is an instrument, not a parameter. Without this a fit's
+    # backward reaches every weight the patched forward touched and leaves a
+    # `.grad` the size of the model behind (FINDINGS §1.15): nothing reads it,
+    # because the optimizer holds only the featurizers, but the memory is real.
+    # `eval()` is the other half — dropout in a measurement is noise. (On NDIF
+    # the served model is the server's to freeze; this is the local one.)
+    model._module.eval()
+    model._module.requires_grad_(False)
     return model
-
-
-def freeze(module: Any) -> None:
-    """The model is an instrument, not a parameter. Without this a fit's
-    backward reaches every weight the patched forward touched and leaves a
-    `.grad` the size of the model behind (FINDINGS §1.15): nothing reads it,
-    because the optimizer holds only the featurizers, but the memory is real.
-    `eval()` is the other half — dropout in a measurement is noise. (On NDIF
-    the served model is the server's to freeze; this is the local one.)"""
-    module.eval()
-    module.requires_grad_(False)

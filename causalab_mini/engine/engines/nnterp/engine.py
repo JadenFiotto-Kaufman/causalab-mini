@@ -28,16 +28,15 @@ installed at the client's versions. A server that does not is a
 
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import Any
 
 import nnsight
 import torch
 
 from .... import address as address_module
-from ....address import Address, AddressError
+from ....address import Address
 from ....ops import intervene
-from ....plan import Forward, Plan
+from ....plan import Forward, Generate, Plan
 from ....plan import plan as plan_module
 from ... import provenance, steps
 from ...base import Engine
@@ -65,15 +64,7 @@ class NNterpEngine(Engine):
         return self.model.num_layers
 
     def locate(self, component: str, layer: int | None = None) -> Address:
-        """The address, with an interior's operation resolved here on the
-        client: it is named by the loaded checkpoint's forward, so a document
-        that cannot be addressed should fail at compile time and not inside
-        someone else's process."""
-        address = address_module.locate(self.model, component, layer)
-        if address.call_site is None:
-            return address
-        source = address.resolve(self.model).source
-        return replace(address, op=find_op(source, address.call_site))
+        return address_module.locate(self.model, component, layer)
 
     def heads(self, address: Address) -> int:
         return address_module.head_count(self.model, address)
@@ -94,7 +85,7 @@ class NNterpEngine(Engine):
             # and nothing of ours has to survive the way back. (`remote="local"`
             # never noticed: it does not serialize the way back. FINDINGS §19.)
             home = nnsight.save({})
-            steps.run(engine, plan, batch_size=batch_size)
+            steps.run(engine, plan, steps.start(plan, batch_size))
             home.update(plan_module.results_of(plan))
             # A server serves the dtype *it* chose; the document's is only a
             # request. Say what ran, where the run record is.
@@ -103,28 +94,26 @@ class NNterpEngine(Engine):
         plan_module.fill(plan, home)
         return plan
 
-    def forward(
-        self,
-        forward: Forward,
-        values: dict[str, Any],
-        featurizers: dict[str, Any],
-    ) -> None:
-        model = self.model
-        if not forward.decode:
-            with model.trace(batch(forward)):
-                apply_taps(model, forward, values, featurizers)
-            return
+    def forward(self, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
+        model, made = self.model, {}
+        with model.trace(batch(forward)) as tracer:
+            apply_interventions(model, forward, values, featurizers)
+            made["logits"] = tracer.result.logits
+        return made["logits"]
+
+    def generate(self, step: Generate, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
         # The continuation frame: one generate trace, `tracer.iter` walking
-        # the steps. Prompt-frame taps apply at step 0, the prefill; a step's
-        # taps at that step; an `"all"` write at every step. Greedy, and EOS
-        # held off so the bound holds and the loop never outruns the run.
-        decode, prompt = forward.decode, len(forward.input_ids[0])
-        with model.generate(
-            batch(forward), max_new_tokens=decode, min_new_tokens=decode, do_sample=False
-        ) as tracer:
-            for step in tracer.iter[:decode]:
-                apply_taps(model, forward, values, featurizers, step)
-            values[f"{forward.name}.generated"] = tracer.result[:, prompt:].clone()
+        # the decode steps. Prompt-frame taps apply at step 0, the prefill; a
+        # step's taps at that step; an `"all"` write at every step. A decode
+        # with no taps has no loop: an early EOS makes a loop outrun the run
+        # and drop what follows it (FINDINGS §12.4), which would be the ids.
+        model, prompt, made = self.model, len(step.input_ids[0]), {}
+        with model.generate(batch(step), max_new_tokens=step.max_new_tokens, **step.generation) as tracer:
+            if step.taps:
+                for index in tracer.iter[: step.max_new_tokens]:
+                    apply_interventions(model, step, values, featurizers, index)
+            made["ids"] = tracer.result[:, prompt:].clone()
+        return made["ids"]
 
 
 def batch(forward: Forward) -> dict[str, Any]:
@@ -135,20 +124,20 @@ def batch(forward: Forward) -> dict[str, Any]:
     }
 
 
-def apply_taps(
+def apply_interventions(
     model: Any,
     forward: Forward,
     values: dict[str, Any],
     featurizers: dict[str, Any],
     step: int | None = None,
 ) -> None:
-    """One pass over the addresses of one forward, in forward order.
+    """One walk over the addresses of one forward, in forward order.
 
-    `values` carries reads between the forwards of one pass: an operand is a
-    read name, and its tensor was produced by an earlier forward. A read's
-    featurizer is applied here too — `v_cf` is `Qᵀx`, not `x` — and it is the
+    `values` holds the operands this call's writes take, by name — each
+    produced by an earlier step — and receives what it reads. A read that
+    names a featurizer is featurized here — `v_cf` is `Qᵀx`, not `x` — by the
     same object the write's `inverse` will use, which is what makes one
-    featurizer name one parameter set.
+    featurizer name one parameter set; a read that names none is the tensor.
 
     `step` is None for a plain forward, and the decode step inside a
     generate trace. A tap applies when its frame is this step: the prompt
@@ -166,7 +155,7 @@ def apply_taps(
                 intervene.at_step(write_op.at, read(model, tap.address), tap.address.seq_axis, tap.step, step),
                 intervene.resolve_operand(values, write_op.operand),
                 write_op.mechanism,
-                featurizers[write_op.featurizer],
+                None if write_op.featurizer is None else featurizers[write_op.featurizer],
                 tap.address.seq_axis,
                 write_op.params,
                 original,
@@ -189,8 +178,10 @@ def apply_taps(
                 gathered = intervene.softcap(
                     model.lm_head(model.ln_final(gathered)), softcapping(model)
                 )
-            with intervene.exact(gathered):
-                values[read_op.name] = featurizers[read_op.featurizer].featurize(gathered)[0].clone()
+            if read_op.featurizer is not None:
+                with intervene.exact(gathered):
+                    gathered = featurizers[read_op.featurizer].featurize(gathered)[0]
+            values[read_op.name] = gathered.clone()
 
 
 def softcapping(model: Any) -> float | None:
@@ -199,86 +190,15 @@ def softcapping(model: Any) -> float | None:
     return getattr(model.config, "final_logit_softcapping", None)
 
 
-def find_op(source: Any, call_site: str) -> str:
-    """The single operation of a module's `.source` whose call site contains
-    `call_site`, or a refusal naming everything the forward does have.
-
-    Matching the *source line* rather than the operation's name is the whole
-    point. nnsight names an operation `{callable}_{occurrence}` and gives
-    assignments the same namespace as calls, so on transformers 5.17 the
-    attention forward has both `attention_interface_0` (the assignment
-    `attention_interface = ALL_ATTENTION_FUNCTIONS.get_interface(...)`) and
-    `attention_interface_1` (the call). A name match on "attention_interface"
-    hits both; the needle `"attention_interface("` is call-shaped and hits one.
-    """
-    hits = [op.name for op in source if call_site in op.text.split("\n")[op.line - 1]]
-    if len(hits) != 1:
-        raise AddressError(
-            f"{call_site!r} matches {len(hits)} operations {hits} of this forward; "
-            f"an address serves exactly one. The forward's operations are: "
-            f"{list(source.names)}"
-        )
-    return hits[0]
-
-
 def read(model: Any, address: Address) -> Any:
-    """The tensor at `address`, during a trace.
-
-    A module boundary is one of nnterp's accessors, which knows the module,
-    the side and where in the value the tensor sits — a layered one is read
-    at its layer, a whole-model one at `None`. Inside a forward the tensor is
-    one argument of one call, or one element of its return, and the address
-    says which.
-
-    This is the engine's half of an address: `address` says *where*, in terms
-    that are true of the architecture, and this says how to reach there with
-    nnsight. A different engine says it differently.
-    """
-    if address.accessor is not None:
-        return model.internals[address.accessor][address.layer]
-    call = operation(model, address)
-    if address.handle == "output":
-        return call.output if address.arg is None else call.output[address.arg]
-    args, _ = call.inputs
-    return args[address.arg]
+    """The tensor at `address`, during a trace: nnterp's accessor, at the
+    layer — a whole-model one at `None`. The accessor knows the module, the
+    operation inside its forward where there is one, the side, and where in
+    the value the tensor sits; the address is only its name and a layer."""
+    return model.internals[address.accessor][address.layer]
 
 
 def write(model: Any, address: Address, tensor: Any) -> None:
-    """Put a tensor back: rebuilding the tuple if there was one, or rebuilding
-    the call's arguments around the new one."""
-    if address.accessor is not None:
-        model.internals[address.accessor][address.layer] = tensor
-        return
-    call = operation(model, address)
-    index = address.arg
-    if address.handle == "output" and index is None:
-        call.output = tensor
-        return
-    assert index is not None
-    if address.handle == "output":
-        current = call.output
-        call.output = (*current[:index], tensor, *current[index + 1 :])
-        return
-    args, kwargs = call.inputs
-    call.inputs = ((*args[:index], tensor, *args[index + 1 :]), kwargs)
-
-
-def operation(model: Any, address: Address) -> Any:
-    """The `.source` operation an interior address names."""
-    if address.op is None:
-        raise AddressError(
-            f"component {address.component!r} is an interior; build its address "
-            "with engine.locate(...) so the operation is resolved"
-        )
-    outer = getattr(address.resolve(model).source, address.op)
-    if address.inner is None:
-        return outer
-    # The callee's own source: only openable here, inside the trace, because
-    # which function the call dispatches to is a run-time fact.
-    inner = outer.source
-    if address.inner not in inner.names:
-        raise AddressError(
-            f"component {address.component!r}: the function {address.op!r} dispatches to "
-            f"has no operation {address.inner!r}; it has {list(inner.names)}"
-        )
-    return getattr(inner, address.inner)
+    """Put a tensor back where `read` found it; the accessor rebuilds whatever
+    the tensor was reached through — a tuple, a call's arguments."""
+    model.internals[address.accessor][address.layer] = tensor

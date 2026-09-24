@@ -7,12 +7,12 @@ The shape of a write is the seam the rest of the project is built around:
 
     write = inverse(do(featurize(x)), err, x)
 
-With the identity featurizer that collapses to "replace the tensor", which is
-activation patching. Swap in a rotation for `featurize`/`inverse` and the same
+With no featurizer that collapses to `do(x)`, "replace the tensor", which is
+activation patching. Put a rotation in for `featurize`/`inverse` and the same
 line is DAS — the error term and the unselected directions come from `x`, the
 pre-write value, which is exactly what makes a subspace swap leave the
 orthogonal complement alone. That is why `err` and `x` are threaded through
-`inverse` even though the identity ignores both.
+`inverse`.
 
 **A featurizer is an object and a mechanism is a function**, and that asymmetry
 is forced rather than chosen: a trained rotation *is state*, so `featurize` and
@@ -45,17 +45,6 @@ class Featurizer(Protocol):
     def inverse(self, f: Any, err: Any, x: Any) -> Any:
         """(f, err, x) -> an activation of x's shape."""
         ...
-
-
-class Identity:
-    """The featurizer a read or write with no `featurizer` key gets: the feature
-    space is the activation itself and nothing is left over."""
-
-    def featurize(self, x: Any) -> tuple[Any, None]:
-        return x, None
-
-    def inverse(self, f: Any, err: Any, x: Any) -> Any:
-        return f
 
 
 class Mechanism(Protocol):
@@ -145,17 +134,16 @@ def at_step(at: Selection, tensor: Any, seq_axis: int, frame: int | str | None, 
     return at
 
 
-def rows(tensor: Any, positions: Positions | None, start: int, stop: int) -> Any:
-    """Rows `start:stop` of a gathered value. A rectangle is sliced; a ragged
-    value is flat, so its rows are wherever their windows' lengths put them.
-    `positions` None is a value with no row axis — a mean, a basis — which
-    every window of rows shares whole."""
-    if positions is None:
-        return tensor
-    if is_ragged(positions):
-        before = sum(len(window) for window in positions[:start])
-        return tensor[before : before + sum(len(window) for window in positions[start:stop])]
-    return tensor[start:stop]
+def rows(tensor: Any, flat: Positions | None, start: int, stop: int) -> Any:
+    """Rows `start:stop` of a value that has rows. A rectangle — `flat`
+    None — is sliced. A value gathered flat is one entry per position found,
+    so its rows are wherever `flat`, their windows, put them — and that is so
+    whether or not the windows happen to be one width: a text anchor three
+    tokens long on every row is still flat, three entries a row."""
+    if flat is None:
+        return tensor[start:stop]
+    before = sum(len(window) for window in flat[:start])
+    return tensor[before : before + sum(len(window) for window in flat[start:stop])]
 
 
 def resolve_operand(values: dict[str, Any], operand: Any) -> Any:
@@ -168,16 +156,9 @@ def resolve_operand(values: dict[str, Any], operand: Any) -> Any:
     return torch.tensor(float(operand))
 
 
-# The two closed vocabularies, by the name a document spells.
-#
-# `FEATURIZERS` holds the ones that are *stateless*, so one instance per process
-# is the same as one per run. A trained featurizer is not one of those, and that
-# is the single thing DAS changed about this file: a rotation's parameter is run
-# state that an optimizer steps, so it cannot live in a module-level table, and
-# `apply_write` therefore takes either a registered name or the object itself.
-# See `featurizer.KINDS` for the constructors a document's `featurizers` section
-# names.
-FEATURIZERS: dict[str, Featurizer] = {"identity": Identity()}
+# The mechanisms, by the name a document spells. A featurizer is not in a table
+# here: its parameter is run state an optimizer steps, so `apply_write` takes the
+# object, and `featurizer.KINDS` holds the constructors a document names.
 #: Typed loosely on purpose: each mechanism names the numbers it takes as
 #: keywords, and `Mechanism` above documents the shape rather than checking it.
 MECHANISMS: dict[str, Callable[..., Any]] = {
@@ -256,7 +237,7 @@ def _window(tensor: Any, at: Selection, seq_axis: int) -> Any:
 
 def _is_flat(at: Selection) -> bool:
     """Ragged positions can only come back flat; `flat` says so for a window
-    of a ragged pass whose own rows happen to line up."""
+    of a ragged read whose own rows happen to line up."""
     return at.flat or is_ragged(at.positions)
 
 
@@ -298,7 +279,7 @@ def apply_write(
     at: Selection | Positions,
     operand: Any,
     mechanism: str = "swap",
-    featurizer: str | Featurizer = "identity",
+    featurizer: Featurizer | None = None,
     seq_axis: int = 1,
     params: dict[str, Any] | None = None,
     original: Any = None,
@@ -307,13 +288,14 @@ def apply_write(
     """`original` is the tensor at this address before any write of this
     forward: what a `PRE_WRITE` mechanism measures against. `features` are
     the coordinates of the *featurizer's* space the mechanism acts on — one
-    SAE latent, three directions of a rotation — the rest passing through."""
-    featurize = FEATURIZERS[featurizer] if isinstance(featurizer, str) else featurizer
+    SAE latent, three directions of a rotation — the rest passing through.
+    With no featurizer the mechanism acts on the tensor itself."""
     x = gather(tensor, at, seq_axis)
     with exact(x):
-        f, err = featurize.featurize(x)
+        f, err = (x, None) if featurizer is None else featurizer.featurize(x)
         if mechanism in PRE_WRITE:
-            operand = featurize.featurize(gather(tensor if original is None else original, at, seq_axis))[0]
+            before = gather(tensor if original is None else original, at, seq_axis)
+            operand = before if featurizer is None else featurizer.featurize(before)[0]
         if features is None:
             f = MECHANISMS[mechanism](f, operand, **(params or {}))
         else:
@@ -325,7 +307,7 @@ def apply_write(
             f = f.clone()
             acted = MECHANISMS[mechanism](f[..., index], operand, **(params or {}))
             f[..., index] = acted.to(f) if hasattr(acted, "to") else acted  # a literal is a number
-        written = featurize.inverse(f, err, x)
+        written = f if featurizer is None else featurizer.inverse(f, err, x)
     return scatter(tensor, at, written, seq_axis)
 
 

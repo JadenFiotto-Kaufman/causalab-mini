@@ -36,17 +36,17 @@ It **imports nothing from causalab**. Only the JSON documents were copied.
 
 ## 2. State as of this handoff
 
-`master`, clean tree, pushed to GitHub (private). **486 tests passing**
+`master`, clean tree, pushed to GitHub (private). **539 tests passing**
 (`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~30 s), `uvx pyright` at 0
-errors. **7,356 lines** across 31 files in `causalab_mini/`.
+errors. **6,927 lines** across 30 files in `causalab_mini/`.
 
 The package is five sub-packages and a short spine, each named for what it is
 allowed to know:
 
     __init__.py shapes.py address.py cli.py       vocabulary, the architecture
                                                   map, the entry point
-    plan/   document.py spec.py plan.py           the request, as pure data
-            build.py    write.py  sweep.py         (two authoring formats)
+    plan/   spec.py     plan.py                   the request, as pure data
+            build.py    write.py  sweep.py
     data/   rows.py     tokens.py                  the corpus -> padded tokens
     ops/    intervene.py metrics.py featurizer.py  agnostic: tensors only
             locate.py                              a position spec -> indices
@@ -55,36 +55,32 @@ allowed to know:
       engines/nnterp/   engine.py  loading.py      one directory per runtime
       engines/hooks/    engine.py  loading.py      plain HF + forward hooks
 
-`plan/document.py` is 702 of those lines and was deliberately left whole: it is
-one concept (the protocol surface) and splitting it would need a third file for
-the shared refusal helpers, which is more concepts, not fewer.
-
 Working end to end: activation patching, one `.source` interior
 (`attention_query`), GPT-2 as a reach-only probe, and a DAS fit — all inside
 **one** nnsight session, with `remote="local"` producing bit-identical results.
 
 There is now a **second engine**, `engines/hooks`: a plain
 `AutoModelForCausalLM` driven by `register_forward_hook`, no nnsight anywhere.
-It runs `minimal_cpu.json` and the DAS fit to numbers bit-identical to the
+It runs `patching.json` and the DAS fit to numbers bit-identical to the
 nnterp engine's, refuses the interior and `remote` by name, and needed no
 change to `steps.py`, `ops/`, `plan/` or `address.py`. What it had to supply by
 hand — and what turned out to be free — is FINDINGS §6. It is not wired into
 the CLI: `--engine` is a flag nobody has needed yet.
 
-Documents: **nine** in `documents/` (the protocol format), **21** in
-`documents/v2/` (the plan-shaped one) and **five** in `documents/real/`,
-which pin real checkpoints and are compiled but not run by the suite. The
-nine, ported from causalab's own corpus:
-`multi_position_patch_cpu.json` (three disjoint absolute writes in one
-intervened model), `hydra_effect_cpu.json` (five intervened models, and a
-read taken inside one that is the operand of a write in another — the only
-cross-model operand chain in causalab's corpus), and
-`random_subspace_cpu.json` (the matched-k control: three untrained seeded
-rotations, no fit at all). The rest: `minimal_cpu.json` (patching, shipped),
-`das.json` (shipped, unrunnable here — Llama-3.1-8B), `das_cpu_reduction.json`
-(authored, four changes from `das.json`), `attention_query_cpu.json` (authored,
-the interior), `gpt2_cpu.json` (authored, the reach probe). Authored documents
-say so in their own `header.description`.
+Documents: **29** in `documents/v2/` and **five** in `documents/real/`, which
+pin real checkpoints and are compiled but not run by the suite. Among the v2
+ones, ported from causalab's own corpus: `multi_position_patch.json` (three
+disjoint writes at one site in one call, the bit-for-bit twin of
+`window_patch.json`'s one window), `hydra_effect.json` (a read taken inside
+one intervened call is the operand of a write in another — the only
+cross-call operand chain in causalab's corpus) and `random_subspace.json`
+(the matched-k control: three untrained seeded rotations, no fit at all).
+Authored for mini: `attention_query.json` (an interior),
+`gpt2_reach.json` (the reach probe on a second family) and
+`pos_sweep.json` (one document, three experiments). Authored documents say
+so in their own `header.description`. causalab's protocol format has no
+reader here; `documents/intervention_protocol.md` is its specification,
+which the vocabulary still follows.
 
 ## 3. Rules that must not be broken
 
@@ -95,12 +91,11 @@ These are load-bearing. Several tests enforce them.
    `model.session(remote=remote)`. Not a session per forward, not a lazy
    per-read path. `remote=True` on that session is the *only* difference
    between local and remote — there is no second code path.
-3. **There are two authoring formats and one compiler.** `document.py`
-   reads the protocol's JSON; `spec.py` reads a plan-shaped one whose
-   `steps` are the plan's steps and whose saves sit on the step that
-   produces them. Both reduce to `_Experiment` and share every helper below
-   it, so they cannot drift into producing different plans —
-   `tests/test_spec.py` asserts the same numbers from both.
+3. **One document format, one compiler.** `spec.py` reads the document,
+   whose `steps` are what runs — forwards, generates, metrics, reduces,
+   fits — and whose step names are how later steps and `saves` reach what
+   each produced. `build.py` compiles it, handing every model call to
+   `build._forward`.
 4. **A plan is pure data; an engine turns it into tensors.** A *fresh* plan
    holds strings, ints, tuples and dicts only — its `results` dicts are empty
    until it runs, and they are the only mutable thing in the tree. A plan has
@@ -123,18 +118,24 @@ These are load-bearing. Several tests enforce them.
    child, side and rank into the `Address` and checks `per_layer` against
    nnterp's answer, so the two cannot drift. The table is a floor and not a
    fence: a name only `model.internals` has is addressable, because
-   `RenameConfig(addresses={...})` is how a user adds a place. Four
-   interiors (`attention_query/key/scores/z`) are still mini's rows, and so
-   is their rank, interleaved into nnterp's numbering. What is left that is
-   purely mini's: the per-head kind, the key axis, the seq axis, the width
-   *attribute name*, and read-only. Reaching there is the engine's
-   (`engine/engines/nnterp/engine.py`'s `read`/`write`). `ops/` knows
-   nothing about models at all.
-7. **An engine is eight members and no more**: `load`, then `tokenizer`,
+   `RenameConfig(addresses={...})` is how a user adds a place, or moves one
+   nnterp has wrong for their model. The four places inside the attention
+   (`attention_query/key/scores/z`) are nnterp rows too —
+   `attention_queries`, `attention_keys`, `attention_scores`,
+   `attention_head_outputs`, hard-coded `.source` ops checked on 26 families
+   by nnterp's `test_source_ops.py` — so an address is an accessor and a
+   layer and nothing else, and the engine's `read`/`write` are
+   `model.internals[name][layer]`. What is left that is purely mini's: the
+   per-head kind, the key axis, the seq axis, the width *attribute name*,
+   and read-only. `ops/` knows nothing about models at all.
+7. **An engine is nine members and no more**: `load`, then `tokenizer`,
    `num_layers`, `locate`, `width` and `heads` — what the compiler asks of a
-   runtime — then `execute` and `forward`, what the run asks. (`heads` joined
-   when a site could name them: like `width`, it is a question about the
-   checkpoint that only its holder can answer.)
+   runtime — then `execute`, `forward` and `generate`, what the run asks.
+   (`heads` joined when a site could name them: like `width`, it is a
+   question about the checkpoint that only its holder can answer.
+   `generate` is beside `forward` because a decode is a different call with
+   a different result: it takes the step's generate arguments and returns
+   the ids.)
    Everything else lives in `engine/steps.py` and is shared.
    `tests/test_engine.py` pins this: it asserts the override set is exactly
    the contract, and runs a real compiled plan on an engine that has no model
@@ -204,22 +205,23 @@ token is a token the model produced). A bare `-1` is sugar for
   the continuation frame is given the one position its decode step
   processes, and where in the *continuation* that was is said by the code
   that has that frame. The prompt frame says nothing about it.
-- **The character map is built only for a pass that has a position the
+- **The character map is built only for a step that has a position the
   document does not already fix.** It is O(L) decode calls of O(L) work per
-  row and was built once per forward per pass; a fit whose every position is
-  a bare `-1` built 42 of them and read none.
-- **Eligibility is two halves meeting in the run.** `MetricOp.rows` is still
-  the column half, decided where the data is; the position half is what the
-  run could place; `results["eligible"]` is the intersection per metric and
-  `results["positions"]` the window, the reason and the decoded tokens per
-  op. A pass with no dynamic position and nothing out of range reports
-  neither, so an older document writes the table it always wrote.
+  row, once per forward; a fit whose every position is a bare `-1` would
+  build 42 of them and read none.
+- **Eligibility is two halves meeting in the run.** A metric step's `rows`
+  is the column half, decided where the data is; the position half is what
+  the run could place. A forward with a position the document leaves open
+  reports `results["positions"]` — the window, the reason and the decoded
+  tokens per op — and a metric of one of its reads carries its
+  `results["eligible"]`, the intersection, and that record. A step with no
+  such position reports neither.
 - **The continuation frame is cut per row at its first stop token.** A read
   whose cut only the finished text can settle (`{"index": -1}`, a scope)
   compiles to one ordinary read per decode step carrying a `stack` name, and
   the run puts them back together and cuts them — so neither engine needed a
   line. A write may only name a step the decode has reached.
-- **Chat turns are segments, and the data says so.** A role whose field
+- **Chat turns are segments, and the data says so.** A forward whose field
   holds a list of `{"role", "content"}` messages is rendered through the
   checkpoint's own chat template at compile time, and the character span of
   each turn's content travels in the plan beside the anchors. A position
@@ -247,13 +249,17 @@ What §4 used to describe as decided-but-unbuilt is in. How it landed, and
 where it differs from the plan written here before it was built:
 
 - **`Plan` is a step and plans nest.** `Plan.steps` is an ordered
-  `{name: Step}` dict; the leaves are `Featurizers`, `Observe`, `Fit`,
-  `Weights`. A document compiles to a root plan with two to four steps.
+  `{name: Step}` dict; the leaves are the kinds of thing a document runs —
+  `Forward`, `Generate`, `Metric`, `Reduce`, `Fit` — plus `Featurizers`
+  (declaring a parameter set is what builds it) and `Weights` (what a fit
+  trained, when saved). A steps-first document compiles one for one: its
+  steps are the plan's, under their own names. A `Fit` holds a plan of its
+  body's steps per minibatch, and one over the held-out rows.
 - **A plan carries its own results**, at the node that produced them.
-  `root.step("fit", Fit).epochs[0][0].results["ce"]` is the metric of one
+  `root.step("fit", Fit).epochs[0][0].result("ce")` is the metric of one
   training update. `Plan.result(name)` is the flat lookup; it descends through
-  steps but **stops before a fit's internal passes**, or every fitted document
-  would have six ambiguous `iia`s.
+  steps but **stops before a fit's updates**, or every fitted document would
+  have six ambiguous `iia`s.
 - **`nnsight.save(plan)` at the top of the session is how results come home**,
   exactly as predicted. Verified with a probe before anything was built: a
   frozen dataclass with nested children and mutable `results` dicts round-trips
@@ -266,27 +272,30 @@ where it differs from the plan written here before it was built:
   engine (torch hooks, vLLM) is possible and `plan/` stays free of torch and
   nnsight. `Engine` itself has **no implementation** — an engine that opens
   nothing should not inherit a session.
-- **There is no run state object.** `values` — the activations a write's
-  operand names — are born and die inside one `Observe`, so the only thing
-  crossing steps is the live featurizer dict.
+- **One state per `steps` list, and a step is the unit.** The walk is "for
+  each step, run it": what a step produces — a read by its op's name, a
+  decode's ids, a metric, a reduction — goes into `State.values`, so a
+  write's operand is simply the name of an earlier value, and each step's
+  windows of rows slice it by its own layout. A nested plan gets a copy; a
+  fit's update gets a copy that keeps each value's graph until the
+  optimizer step, and everything else is published detached. A step reports
+  its own provenance, when it has a position the document leaves open.
 - **No featurizer-isolation flag.** Each point rebuilds its own parameters
   before using them and execution is sequential, so nothing was needed yet.
 
 ### The sweep, and what it proved
 
-Built, in `plan/sweep.py` and `build_request`. `documents/pos_sweep_cpu.json`
+Built, in `plan/sweep.py` and `build_request`. `documents/v2/pos_sweep.json`
 is one document that is three experiments — the same interchange patched at
 the last token, the one before it, and the one before that.
 
 A sweep is lowered on the **raw JSON, before anything is compiled**: the
 wrapper is replaced by each value in turn and each resulting document is
 compiled on its own, so a point is an ordinary document with its own
-addresses, its own tokenization and its own digest. The slice is narrow in
-`document.py`'s style — one wrapper, at one field, holding a literal list;
-the range form, several swept fields, and a sweep of `model` or `header` are
-each refused by name.
+addresses, its own tokenization and its own digest. A sweep of `model` or
+`header` is refused by name.
 
-**The whole cost was 22 lines in `build.py`, one refusal in `document.py` and
+**The whole cost was 22 lines in `build.py`, one refusal in the document and
 a new file that is mostly refusals.** Nothing in `engine/`, `steps.py`,
 `plan/plan.py`, `plan/write.py`, `ops/` or `address.py` changed — the engine
 walks the same tree it always walked, and the writer already recursed. That
@@ -309,10 +318,9 @@ Full detail in `FINDINGS.md`; these are the ones that reach past mini.
   models, 0.38 on a padded GPT-2 row. FINDINGS §6.
 - **No family axis was needed.** `Address.locate` returns *equal* addresses on
   tiny Llama and tiny GPT-2 for all three components, including the interior,
-  though the trees share no module path. nnterp absorbs the family axis for
-  module boundaries, and the interior's op is resolved per model at load time
-  rather than tabulated. The real engine carries a family-keyed table; this
-  suggests it may not need one.
+  though the trees share no module path. nnterp absorbs the family axis, the
+  interiors included: one hard-coded op serves every family that calls
+  transformers' attention interface, and a family that does not says so.
 - **Binding-suffix addressing is a real trap, and mini measured it — but the
   claim about causalab was overstated and is corrected here.** On GPT-2,
   `query_states_0` is the cross-attention query on a branch that never runs
@@ -324,7 +332,8 @@ Full detail in `FINDINGS.md`; these are the ones that reach past mini.
   causalab's `sources.py` addresses scores and probabilities this way and
   that it works by luck. It does not. Its documented rule is a substring
   match with refusal on ambiguity and a preference for the hit whose own
-  source line *calls* the symbol — the same fix `find_op` uses — and it says
+  source line *calls* the symbol — the fix mini's `find_op` used before the
+  interiors became nnterp rows — and it says
   "NEVER a hardcoded `_n` suffix for a symbol that appears once". A suffix is
   spelled only where two *live* ops share a symbol. Checked against
   transformers 5.17: llama and gpt2 bind `attn_weights` in the same order, so
@@ -344,9 +353,9 @@ Full detail in `FINDINGS.md`; these are the ones that reach past mini.
 - **A subspace swap leaves the complement untouched only as arithmetic** — in
   fp32 it moves by up to ~4e-7, because the complement is reconstructed by a
   projection rather than copied. Bit-identity needs an axis-aligned write.
-- **`document.py` is a quarter of the project** (702 of 2,818 lines), almost all
-  refusals. The weight of causalab is in its document surface, not its
-  execution.
+- **The protocol reader was a quarter of the project** (702 of 2,818 lines when
+  it was written), almost all refusals. The weight of causalab is in its
+  document surface, not its execution.
 - **A layer-0 query interchange is a no-op** when the two prompts share a length
   and a last token. It looks exactly like a broken write.
 - **A `yield` cannot appear inside an nnsight block.** nnsight recompiles a
@@ -377,7 +386,7 @@ Full detail in `FINDINGS.md`; these are the ones that reach past mini.
 - Tiny CPU models: `hf-internal-testing/tiny-random-LlamaForCausalLM` pinned to
   a commit SHA (see the documents), and a tiny GPT-2. Tiny GPT-2 cannot run the
   weekdays documents — `" Friday"` is four tokens there — hence
-  `documents/data/counting` and `gpt2_cpu.json`.
+  `documents/data/counting` and `documents/v2/gpt2_reach.json`.
 
 ## 8. The wider context this sits in
 

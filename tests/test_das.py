@@ -2,18 +2,20 @@
 
 The first half is arithmetic — the defining property of a subspace swap, checked
 on tensors with no model anywhere near them. The second half runs
-`documents/das_cpu_reduction.json` end to end.
+`documents/v2/das.json` end to end.
 """
 
 import json
 
 import pytest
 import safetensors
+from pydantic import ValidationError
 import torch
+from conftest import of_kind, tensors
 
 from causalab_mini import cli, ops, plan
 from causalab_mini.ops import featurizer
-from causalab_mini.plan import document
+from causalab_mini.plan.spec import Spec
 from causalab_mini.engine import NNterpEngine
 
 
@@ -136,37 +138,31 @@ def test_the_fit_is_compiled_into_the_plan_rows_and_all(das_plan):
     # batch.pairs is 16 and the train split is 2 rows, so a batch is the whole
     # split and an epoch is one update.
     assert [len(epoch) for epoch in fit.epochs] == [1] * 10
-    assert [len(f.input_ids) for f in fit.epochs[0][0].forwards] == [2, 2]
-    assert [len(f.input_ids) for f in fit.evaluation.forwards] == [2, 2]
+    assert [len(f.input_ids) for f in of_kind(fit.epochs[0][0], plan.Forward)] == [2, 2]
+    assert [len(f.input_ids) for f in of_kind(fit.evaluation, plan.Forward)] == [2, 2]
     assert (fit.objective, fit.params) == (((1.0, "ce"),), ("rot",))
     assert (fit.early_stop, fit.patience, fit.mode) == ("iia", 3, "max")
 
 
 def test_the_rotation_reaches_the_read_and_the_write_and_not_the_head(das_plan):
-    source, patched = das_plan.step("observe", plan.Observe).forwards
+    source, patched = of_kind(das_plan, plan.Forward)
     assert [read.featurizer for read in source.taps[0].reads] == ["rot"]
     assert [write.featurizer for write in patched.taps[0].writes] == ["rot"]
     # the metric's read is a *plain* lm_head read; the document refuses any other.
-    assert [read.featurizer for read in patched.taps[1].reads] == ["identity"]
+    assert [read.featurizer for read in patched.taps[1].reads] == [None]
 
 
 def test_a_k_wider_than_the_site_is_a_load_error(das_raw, data_root, model_engine):
-    das_raw["method"]["featurizers"]["rot"]["k"] = 17
+    das_raw["featurizers"]["rot"]["k"] = 17
     with pytest.raises(plan.PlanError, match="not a subspace of the 16-wide site"):
         plan.build_request(das_raw, data_root, model_engine)
 
 
-def test_an_eval_split_sharing_rows_with_the_fit_is_a_load_error(das_raw, data_root, model_engine):
-    das_raw["method"]["train"]["eval"]["split"] = "weekdays/data"  # train + test
-    with pytest.raises(plan.PlanError, match="endpoint-disjoint"):
-        plan.build_request(das_raw, data_root, model_engine)
-
-
 def test_the_same_ref_for_both_is_the_visible_train_equals_test_ablation(das_raw, data_root, model_engine):
-    das_raw["method"]["train"]["eval"]["split"] = "weekdays/data#train"
+    das_raw["steps"]["fit"]["eval"]["data"] = {"train": "train"}
     fitted = plan.build_request(das_raw, data_root, model_engine)
-    assert fitted.step("fit", plan.Fit).evaluation.forwards[0].input_ids == (
-        fitted.step("observe", plan.Observe).forwards[0].input_ids
+    assert of_kind(fitted.step("fit", plan.Fit).evaluation, plan.Forward)[0].input_ids == (
+        of_kind(fitted, plan.Forward)[0].input_ids
     )
 
 
@@ -183,22 +179,22 @@ def fitted(model_engine, das_plan, model):
 def test_the_fit_reduces_its_own_objective(fitted):
     """Measured at step 0 and at the end, on the thing the document said to
     minimize — `[[1.0, "ce"]]` — and not on anything else."""
-    losses = fitted.result("train/loss")
+    losses = fitted.result("train")["loss"]
     assert losses[-1] < losses[0]
     assert (losses[1:] < losses[:-1]).all(), losses
 
 
-def test_the_fit_records_every_pass_where_it_happened(fitted):
+def test_the_fit_records_every_update_where_it_happened(fitted):
     """A plan carries its own results, so a fit is not a black box that emits
-    two curves: every update and every eval pass is still there, on the step
+    two curves: every update and every evaluation is still there, on the step
     that scored it. The flat search deliberately stops before them — six `iia`
     in one document would make every lookup ambiguous — so they are reached by
     saying where."""
     fit = fitted.step("fit", plan.Fit)
-    assert sorted(fit.epochs[0][0].results) == ["ce", "iia"]
-    assert sorted(fit.evaluation.results) == ["ce", "iia"]
+    assert sorted(fit.epochs[0][0].all_results()) == ["ce", "iia"]
+    assert sorted(fit.evaluation.all_results()) == ["ce", "iia"]
     assert torch.equal(
-        fitted.result("iia"), fitted.step("observe", plan.Observe).results["iia"]
+        fitted.result("iia"), fitted.step("iia", plan.Metric).results["iia"]
     )
 
 
@@ -216,16 +212,16 @@ def test_the_fit_moved_the_rotation_off_its_start(fitted):
 def test_early_stopping_ends_the_fit_before_its_epoch_budget(fitted):
     """`steps.epochs` is 10 and one epoch is one update here, so a fit that ran
     to the budget would leave 10 losses. The watched metric (`iia`, mode max)
-    *falls* on every pass — the objective is `ce`, and on this model the two
-    disagree — so the first pass is the best and patience 3 ends it at 4."""
-    assert len(fitted.result("train/loss")) == 4
-    evaluated = fitted.result("train/eval")[:, 0]
+    *falls* on every evaluation — the objective is `ce`, and on this model the
+    two disagree — so the first is the best and patience 3 ends it at 4."""
+    assert len(fitted.result("train")["loss"]) == 4
+    evaluated = fitted.result("train")["eval"][:, 0]
     assert (evaluated[1:] < evaluated[:-1]).all(), evaluated
 
 
 def test_the_same_seed_fits_the_same_rotation_and_another_seed_does_not(das_raw, data_root, model_engine):
     def fit(seed):
-        das_raw["method"]["train"]["seed"] = seed
+        das_raw["steps"]["fit"]["seed"] = seed
         built = plan.build_request(das_raw, data_root, model_engine)
         return model_engine.execute(built).result("rot")
 
@@ -238,13 +234,13 @@ def test_a_full_width_rotation_is_a_plain_swap_end_to_end(das_raw, data_root, mo
     the complement is empty, so DAS's write lands the counterfactual activation
     entire — whatever the rotation is, trained or not — and the run's metrics are
     the identity featurizer's to five decimals."""
-    das_raw["method"]["featurizers"]["rot"]["k"] = 16
+    das_raw["featurizers"]["rot"]["k"] = 16
     rotated = model_engine.execute(plan.build_request(das_raw, data_root, model_engine))
 
-    del das_raw["method"]["featurizers"], das_raw["method"]["train"]
-    del das_raw["method"]["reads"]["v_cf"]["featurizer"]
-    del das_raw["method"]["writes"]["patch"]["featurizer"]
-    das_raw["method"]["save"] = das_raw["method"]["save"][:2]
+    del das_raw["featurizers"], das_raw["steps"]["fit"]
+    del das_raw["interventions"]["cf_read"]["reads"]["v_cf"]["featurizer"]
+    del das_raw["interventions"]["das"]["writes"]["patch"]["featurizer"]
+    das_raw["steps"]["saves"] = {"iia": "iia.json", "ce": "ce.json"}
     plain = model_engine.execute(plan.build_request(das_raw, data_root, model_engine))
 
     for name in ("iia", "ce"):
@@ -257,9 +253,10 @@ def test_remote_local_fits_the_same_rotation_and_gets_the_same_numbers(model_eng
     this project's modules hidden. Same plan, same numbers."""
     here = model_engine.execute(das_plan)
     shipped = model_engine.execute(das_plan, remote="local")
-    assert set(here.all_results()) == set(shipped.all_results())
-    for name, values in here.all_results().items():
-        assert torch.equal(values, shipped.result(name)), name
+    here, shipped = tensors(here.all_results()), tensors(shipped.all_results())
+    assert set(here) == set(shipped)
+    for name, values in here.items():
+        assert torch.equal(values, shipped[name]), name
 
 
 # --------------------------------------------------------------------- #
@@ -276,10 +273,10 @@ def test_the_artifact_is_written_stamped_and_reloads_to_the_trained_values(model
     # the manifest, plus the two files every run carries: the document that
     # produced it and what ran it
     assert sorted(path.name for path in written) == [
-        "ce.json", "document.json", "iia.json", "rot.safetensors", "run.json"
+        "ce.json", "document.json", "held_out_iia.json", "iia.json", "rot.safetensors", "run.json"
     ]
     assert sorted(path.name for path in tmp_path.iterdir()) == [
-        "ce.json", "document.json", "iia.json", "rot.safetensors", "run.json"
+        "ce.json", "document.json", "held_out_iia.json", "iia.json", "rot.safetensors", "run.json"
     ]
     with safetensors.safe_open(tmp_path / "rot.safetensors", "pt") as bundle:
         assert bundle.keys() == ["weight"]  # one auto-declared slot, `rot.weight`
@@ -290,8 +287,8 @@ def test_the_artifact_is_written_stamped_and_reloads_to_the_trained_values(model
     assert stamp["k"] == "8" and stamp["d"] == "16"
     assert stamp["model_dtype"] == "fp32"
     assert stamp["parametrization"] == "cayley"
-    assert stamp["trained_on"] == "weekdays/data#train"
-    assert stamp["produced_by"] == document.Document.load(data_root.parent / "das_cpu_reduction.json").digest
+    assert stamp["kind"] == "subspace"
+    assert stamp["produced_by"] == Spec.model_validate(das_plan.source).digest
     assert [row["unit"] for row in json.loads((tmp_path / "ce.json").read_text())] == ["nat", "nat"]
 
 
@@ -299,7 +296,7 @@ def test_the_cli_runs_the_das_document_end_to_end(tmp_path, data_root):
     exit_code = cli.main(
         [
             "run",
-            str(data_root.parent / "das_cpu_reduction.json"),
+            str(data_root.parent / "v2" / "das.json"),
             "--data-root",
             str(data_root),
             "--out",
@@ -324,15 +321,48 @@ def test_a_fit_leaves_no_gradient_on_the_model(model_engine, das_plan):
     assert not module.training
     assert all(not p.requires_grad and p.grad is None for p in module.parameters())
 
-    hooks = HooksEngine.load(das_plan_model(), device_map="cpu")
+    hooks = HooksEngine.load(Spec.model_validate(das_plan.source).model, device_map="cpu")
     assert all(not p.requires_grad for p in hooks.model.parameters()) and not hooks.model.training
 
 
-def das_plan_model():
-    import json, pathlib
+@pytest.mark.parametrize(
+    "optimizer",
+    [
+        {"name": "adamw", "lr": 0.01},
+        {"name": "adam", "lr": 0.01, "betas": [0.8, 0.99]},
+        {"name": "sgd", "lr": 0.5, "momentum": 0.9},
+        {"name": "rmsprop", "lr": 0.01, "momentum": 0.5},
+    ],
+    ids=lambda one: one["name"],
+)
+def test_each_optimizer_trains_the_rotation(optimizer, das_raw, data_root, model_engine):
+    """The document names one of `torch.optim`'s; the run constructs it with
+    the fit's numbers and the one it takes beside them, and the loss moves."""
+    das_raw["steps"]["fit"].update(optimizer=optimizer, epochs=2, early_stop={"metric": "iia", "mode": "max", "patience": 5})
+    losses = model_engine.execute(plan.build_request(das_raw, data_root, model_engine)).result("train")["loss"]
+    assert len(losses) == 2 and losses[1] != losses[0]
 
-    from causalab_mini.plan.spec import Spec
 
-    return Spec.model_validate(
-        json.loads((pathlib.Path(__file__).resolve().parents[1] / "documents" / "v2" / "das.json").read_text())
-    ).model
+@pytest.mark.parametrize(
+    "optimizer, message",
+    [
+        ({"name": "lbfgs", "lr": 0.1}, "'adamw', 'adam', 'sgd' or 'rmsprop'"),
+        ({"name": "sgd", "lr": 0.1, "betas": [0.9, 0.99]}, "'sgd' takes no `betas`"),
+        ({"name": "adam", "lr": 0.1, "momentum": 0.9}, "'adam' takes no `momentum`"),
+    ],
+    ids=["unknown", "betas on sgd", "momentum on adam"],
+)
+def test_an_optimizer_is_one_the_run_knows_with_its_own_numbers(optimizer, message, das_raw):
+    das_raw["steps"]["fit"]["optimizer"] = optimizer
+    with pytest.raises(ValidationError, match=message):
+        Spec.model_validate(das_raw)
+
+
+def test_the_documents_optimizers_are_the_ones_the_run_constructs():
+    from typing import get_args
+
+    from causalab_mini.engine import steps
+    from causalab_mini.plan.spec import Optimizer
+
+    assert set(get_args(Optimizer.model_fields["name"].annotation)) == set(steps.OPTIMIZERS)
+    assert all(hasattr(torch.optim, one) for one in steps.OPTIMIZERS.values())

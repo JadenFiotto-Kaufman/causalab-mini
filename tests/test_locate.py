@@ -11,6 +11,7 @@ import pathlib
 from dataclasses import replace
 
 import pytest
+from conftest import of_kind
 
 from causalab_mini.data import tokens
 from causalab_mini.ops import locate
@@ -209,7 +210,7 @@ def test_a_tokenizer_that_disagrees_with_the_plan_is_refused_by_name(model_engin
 
     raw = json.loads((REPO / "documents" / "v2" / "entity_patch.json").read_text())
     built = plan.build_request(raw, data_root, model_engine)
-    forward = built.step("score", plan.Observe).forwards[0]
+    forward = of_kind(built, plan.Forward)[0]
     assert forward.sample.endswith("tomorrow is"), "the client put its own reading in the plan"
 
     skewed = replace(forward, sample="Something else entirely")
@@ -264,24 +265,24 @@ def test_a_multibyte_prompt_compiles(model, gpt2_tokenizer, which):
     assert locate.frame_of(tokenizer, ids, mask).texts[0] == sample
 
 
-def test_a_pass_with_no_anchor_never_builds_a_character_map(
+def test_a_run_with_no_anchor_never_builds_a_character_map(
     model_engine, data_root, minimal_raw, monkeypatch
 ):
     """The character map is O(L) decode calls of O(L) work per row, built
-    once per forward per pass — 840 ms for 64 rows of 260 tokens, and 42
-    times over in a fit whose every position is a bare `-1`. A pass with
-    nothing to look up in text does not build one, and this asserts it by
-    making the attempt fail."""
+    once per forward — 840 ms for 64 rows of 260 tokens, and 42 times over
+    in a fit whose every position is a bare `-1`. A forward with nothing to
+    look up in text does not build one, and this asserts it by making the
+    attempt fail."""
     from causalab_mini import plan
     from causalab_mini.ops import locate as locate_module
 
     def refuse(*_args, **_kwargs):
-        raise AssertionError("a character map was built for a pass that reads no text")
+        raise AssertionError("a character map was built for a forward that reads no text")
 
     monkeypatch.setattr(locate_module, "_chars", refuse)
     executed = model_engine.execute(plan.build_request(minimal_raw, data_root, model_engine))
     assert executed.result("logit_diff").shape == (4,)
-    assert "positions" not in executed.step("observe", plan.Observe).results
+    assert not any("positions" in one.results for one in executed.steps.values())
 
 
 @pytest.mark.parametrize("which", ["llama", "gpt2"])

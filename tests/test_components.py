@@ -19,7 +19,7 @@ import pathlib
 import nnsight
 import pytest
 import torch
-from conftest import same_numbers
+from conftest import model_block, same_numbers
 
 from causalab_mini import ops, plan
 from causalab_mini.address import Address, _COMPONENTS
@@ -27,19 +27,20 @@ from causalab_mini.engine.engines.hooks import engine as hooks
 from causalab_mini.engine import NNterpEngine
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.engine.engines.nnterp import engine as nnterp
-from causalab_mini.plan import document
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-GPT2 = REPO / "documents" / "gpt2_cpu.json"
+GPT2 = REPO / "documents" / "v2" / "gpt2_reach.json"
 
-#: Every module boundary. The interiors are covered by `test_interior.py`.
-BOUNDARIES = [name for name, entry in _COMPONENTS.items() if entry.op is None]
+#: The four places inside the attention's call into its implementation,
+#: covered by `test_interior.py` and below; every other component here.
+CALL = ("attention_query", "attention_key", "attention_scores", "attention_z")
+BOUNDARIES = [name for name in _COMPONENTS if name not in CALL]
 LAYERED = [name for name in BOUNDARIES if _COMPONENTS[name].per_layer]
 
 
 @pytest.fixture(scope="session")
 def gpt2_engine():
-    return NNterpEngine.load(document.Document.load(GPT2).model, device_map="cpu")
+    return NNterpEngine.load(model_block(GPT2), device_map="cpu")
 
 
 @pytest.fixture(scope="session")
@@ -47,20 +48,20 @@ def eager_engine():
     """The same tiny Llama running eager attention — the only implementation
     under which the attention pattern is a tensor at all."""
     return NNterpEngine.load(
-        document.Document.load(REPO / "documents" / "minimal_cpu.json").model,
+        model_block(REPO / "documents" / "v2" / "patching.json"),
         device_map="cpu", attn_implementation="eager",
     )
 
 
 @pytest.fixture(scope="session")
 def eager_gpt2_engine():
-    return NNterpEngine.load(document.Document.load(GPT2).model, device_map="cpu", attn_implementation="eager")
+    return NNterpEngine.load(model_block(GPT2), device_map="cpu", attn_implementation="eager")
 
 
 @pytest.fixture(scope="session")
 def hooks_engine():
     return HooksEngine.load(
-        document.Document.load(REPO / "documents" / "minimal_cpu.json").model,
+        model_block(REPO / "documents" / "v2" / "patching.json"),
         device_map="cpu",
     )
 
@@ -70,16 +71,16 @@ def hooks_engines(hooks_engine):
     """The same engine over both families, for the translation table."""
     return {
         "llama": hooks_engine,
-        "gpt2": HooksEngine.load(document.Document.load(GPT2).model, device_map="cpu"),
+        "gpt2": HooksEngine.load(model_block(GPT2), device_map="cpu"),
     }
 
 
 def _at(raw, component, layer):
     """The minimal document with its written site moved to another component."""
     raw = copy.deepcopy(raw)
-    raw["method"]["sites"]["target"] = {"component": component}
+    raw["sites"]["target"] = {"component": component}
     if layer is not None:
-        raw["method"]["sites"]["target"]["layers"] = [layer]
+        raw["sites"]["target"]["layers"] = layer
     return raw
 
 
@@ -92,10 +93,12 @@ def _at(raw, component, layer):
 def test_one_address_serves_both_families(component, eager_engine, eager_gpt2_engine):
     """FINDINGS §1.11, extended from three components to eleven: the address
     is *equal* on tiny Llama and tiny GPT-2, whose module trees share no path,
-    because nnterp absorbs the family axis and the interior's operation is
-    resolved per checkpoint rather than tabulated."""
+    because nnterp absorbs the family axis: the accessor, the side and
+    whether it is inside a forward are the same, and only the module path
+    each checkpoint spells differs."""
     layer = 0 if _COMPONENTS[component].per_layer else None
-    assert eager_engine.locate(component, layer).where == eager_gpt2_engine.locate(component, layer).where
+    one, other = eager_engine.locate(component, layer), eager_gpt2_engine.locate(component, layer)
+    assert (one.accessor, one.layer, one.io, one.inside) == (other.accessor, other.layer, other.io, other.inside)
 
 
 #: What each standardized name resolves to in a raw HuggingFace tree. This is
@@ -162,8 +165,7 @@ def test_the_hooks_engine_translates_every_name_to_the_right_raw_module(family, 
 def test_the_addresses_sort_into_forward_order(eager_engine):
     """The sort key is what keeps a read at the head from being issued before
     a read at layer 0 — nnsight refuses that outright. It is nnterp's
-    `internals.rank`, stamped by `locate`, with mini's own numbering only for
-    the interiors it addresses and nnterp does not."""
+    `internals.rank`, stamped by `locate`, for every place."""
     model_engine = eager_engine  # eager, so the pattern is among them
     layered = [model_engine.locate(name, 0) for name in LAYERED]
     order = [one.component for one in sorted(layered, key=lambda one: one.key)]
@@ -243,9 +245,8 @@ def test_the_residual_stream_taps_are_the_tensors_they_claim(model_engine):
 
 
 def test_the_attention_interior_taps_are_head_shaped(model_engine):
-    """`attention_key` is the second argument of the same call the query is
-    the first of, and `attention_z` is that call's return — the one tap whose
-    handle is an output rather than an argument."""
+    """`attention_key` is the argument after the query in the same call,
+    and `attention_z` is that call's result."""
     model = model_engine.model
     batch = {
         "input_ids": torch.tensor([[1, 2, 3, 4]]),
@@ -309,15 +310,11 @@ def test_a_swap_at_every_component_lands_and_moves_the_logits(
     swapped = model_engine.execute(plan.build_request(raw, data_root, model_engine))
 
     clean = copy.deepcopy(raw)
-    del clean["method"]["reads"]["v_cf"], clean["method"]["writes"]
-    del clean["method"]["intervened_models"]
-    clean["method"]["reads"]["logits"]["model"] = "original"
-    for entry in clean["method"]["save"]:
-        entry["model"] = "original"
+    del clean["steps"]["patched"]["interventions"]
     plain = model_engine.execute(plan.build_request(clean, data_root, model_engine))
 
     identity = copy.deepcopy(raw)
-    identity["method"]["reads"]["v_cf"]["input"] = "base"
+    identity["steps"]["counterfactual"]["field"] = "input"
     same = model_engine.execute(plan.build_request(identity, data_root, model_engine))
 
     assert torch.equal(same.result("logit_diff"), plain.result("logit_diff")), component
@@ -337,11 +334,7 @@ def test_an_interchange_at_the_embeddings_of_a_shared_last_token_is_a_no_op(
     swapped = model_engine.execute(plan.build_request(raw, data_root, model_engine))
 
     clean = copy.deepcopy(raw)
-    del clean["method"]["reads"]["v_cf"], clean["method"]["writes"]
-    del clean["method"]["intervened_models"]
-    clean["method"]["reads"]["logits"]["model"] = "original"
-    for entry in clean["method"]["save"]:
-        entry["model"] = "original"
+    del clean["steps"]["patched"]["interventions"]
     plain = model_engine.execute(plan.build_request(clean, data_root, model_engine))
 
     assert torch.equal(swapped.result("logit_diff"), plain.result("logit_diff"))
@@ -372,15 +365,15 @@ def test_the_token_ids_can_be_read_and_never_written(minimal_raw, data_root, mod
 
     from causalab_mini.plan.spec import Spec
 
-    raw = __import__("json").loads((REPO / "documents" / "v2" / "patching.json").read_text())
+    raw = json.loads((REPO / "documents" / "v2" / "patching.json").read_text())
     raw["sites"]["ids"] = {"component": "input_ids"}
-    raw["interventions"]["patching"]["reads"]["tokens"] = {"site": "ids", "pos": {"last": 2}, "input": "base"}
-    raw["steps"]["score"]["outputs"] = {"last_two": "tokens"}
+    raw["steps"]["patched"]["reads"]["tokens"] = {"site": "ids", "pos": {"last": 2}}
+    raw["steps"]["saves"]["patched.tokens"] = "tokens.safetensors"
     executed = model_engine.execute(plan.build_request(raw, data_root, model_engine))
-    tokens = executed.step("score", plan.Observe).results["last_two"]
+    tokens = executed.result("patched.tokens")
     assert tokens.shape == (4, 2) and not tokens.is_floating_point()
 
-    raw["interventions"]["patching"]["writes"]["patch"]["site"] = "ids"
+    raw["steps"]["patched"]["interventions"]["writes"]["patch"]["site"] = "ids"
     with pytest.raises(ValidationError, match="'input_ids' is read-only"):
         Spec.model_validate(raw)
 
@@ -417,23 +410,17 @@ def _both_heads(model: dict) -> dict:
     it twice: once where the head put it, once where the model reads it."""
     return {
         "model": model,
-        "roles": {"base": {"field": "input"}},
+        "data": {"prompts": {"path": "weekdays/train"}},
         "sites": {"head": {"component": "lm_head"}, "out": {"component": "logits"}},
-        "interventions": {
-            "one": {
-                "reads": {
-                    "raw": {"site": "head", "pos": -1, "model": "loud", "input": "base"},
-                    "capped": {"site": "out", "pos": -1, "model": "loud", "input": "base"},
-                },
-                "writes": {"shout": {"site": "head", "pos": -1, "mechanism": "swap", "operand": 100.0}},
-                "models": {"loud": {"input": "base", "writes": ["shout"]}},
-                "metrics": {
-                    "at_head": {"kind": "token_logit", "of": "raw", "token": "base_answer"},
-                    "at_logits": {"kind": "token_logit", "of": "capped", "token": "base_answer"},
-                },
-            }
+        "steps": {
+            "loud": {
+                "kind": "forward", "data": "prompts", "field": "input",
+                "interventions": {"writes": {"shout": {"site": "head", "pos": -1, "mechanism": "swap", "operand": 100.0}}},
+                "reads": {"raw": {"site": "head", "pos": -1}, "capped": {"site": "out", "pos": -1}},
+            },
+            "at_head": {"kind": "metric", "metric": "token_logit", "of": "loud.raw", "token": "prompts.base_answer"},
+            "at_logits": {"kind": "metric", "metric": "token_logit", "of": "loud.capped", "token": "prompts.base_answer"},
         },
-        "steps": {"score": {"kind": "observe", "interventions": "one", "rows": {"base": "weekdays/train"}}},
     }
 
 

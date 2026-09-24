@@ -4,13 +4,16 @@ A deliberately small, readable reimplementation of causalab's intervention
 engine. One rule underneath everything: **a plan is pure data; an engine turns
 it into tensors.**
 
-A document is a tree of steps. Each step says which rows it runs over and what
-it writes out; the experiment it runs — reads, writes, intervened models,
-metrics — is declared once and shared. The compiler resolves everything that
-needs a model but not a row — the widths, an interior's operation, the
-prompts' token ids — on the client, without weights, and hands the engine a
-plan of strings and integers. The engine walks it in one session; the results
-land on the nodes that produced them.
+A document is its steps, in the order they run: a `forward` or a `generate`
+is one model call over one dataset, with the interventions it lists in force;
+a `metric` scores one of its reads; a `reduce` takes a read's mean or its
+principal basis; a `fit` trains through a body of such steps. A step's name
+is how everything after it reaches what it produced — `patched.logits`,
+`iia`, `fit.rot` — and `saves` names what goes to disk. The compiler resolves
+everything that needs a model but not a row — the widths, where each place
+is, the prompts' token ids — on the client, without weights, and hands
+the engine a plan of the same steps in strings and integers. The engine walks
+it in one session; the results land on the steps that produced them.
 
 **Where** along a sequence a read or a write acts is the one thing the plan
 does not carry as an integer. It carries the spec — `-1`, `{"last": 3}`,
@@ -34,10 +37,10 @@ uv run causalab-mini run documents/v2/das.json --device-map cpu --out out
 | [`REVIEW.md`](REVIEW.md) | the design audited against its three goals, and the order of work that followed |
 | [`SURVEY.md`](SURVEY.md) | everything the real causalab has that this does not, rated by cost and reach |
 | [`FINDINGS.md`](FINDINGS.md) | every fact about model internals and runtimes this project had to learn the hard way |
-| [`NOTES.md`](NOTES.md) | a close reading of the protocol the copied documents are written in |
+| [`NOTES.md`](NOTES.md) | a close reading of causalab's intervention protocol, whose vocabulary the documents follow |
 | [`examples/`](examples/) | a notebook that runs one document end to end and shows the plan filling in |
 | [`documents/real/`](documents/real/) | Llama-3.2-1B on the weekday task, with measured results: behaviour, layer sweeps, head patching, DAS — run locally and on NDIF |
-| [`documents/v2/`](documents/v2/) | the plan-shaped format: patching, DAS, mean ablation, zero ablation, a window, an entity harvest, a logit lens, generation, a PCA control, DBM, head-by-head and neuron patching, attention knockout, steering with renormalize, SAE feature ablation, attention-pattern patching |
+| [`documents/v2/`](documents/v2/) | the documents: patching, a position sweep, three writes against one window, DAS, a random-subspace control, the hydra effect, an interior (the attention query), a GPT-2 reach probe, mean ablation, zero ablation, a window, an entity harvest, a logit lens (swept, and at every layer in one forward), generation, a PCA control, DBM, head-by-head and neuron patching, attention knockout, steering with renormalize, SAE feature ablation, attention-pattern patching |
 
 The CLI's read-only verbs — `schema`, `vocab`, `model`, `tokens`, `data`,
 `validate`, `explain` — need no GPU and are the loop an author lives in.

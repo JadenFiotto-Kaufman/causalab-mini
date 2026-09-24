@@ -46,15 +46,15 @@ def _apply_from(bundle):
 def test_a_loaded_rotation_scores_exactly_what_the_fit_scored_on_the_same_rows(
     tmp_path, data_root, model_engine
 ):
-    """The strongest check there is: the fit's own held-out pass and a later
+    """The strongest check there is: the fit's own held-out run and a later
     document loading the bundle onto the same rows are the same rotation on
     the same data, and agree to the bit."""
     fitted, bundle = _fit_into(tmp_path, data_root, model_engine)
     applied = model_engine.execute(plan.build_request(_apply_from(bundle), data_root, model_engine))
 
-    held_out = fitted.step("fit", plan.Fit).evaluation.results
-    scored = applied.step("apply", plan.Observe).results
-    assert torch.equal(held_out["iia"], scored["iia"]) and torch.equal(held_out["ce"], scored["ce"])
+    held_out = fitted.step("fit", plan.Fit).evaluation
+    assert torch.equal(held_out.result("iia"), applied.result("iia"))
+    assert torch.equal(held_out.result("ce"), applied.result("ce"))
     # and the plan carried the weights as the bundle's own bytes — still plain
     # data, at four bytes a number
     import safetensors.torch
@@ -95,7 +95,6 @@ def test_pca_is_the_right_singular_vectors_of_the_centered_rows():
     centered = rows - rows.mean(0, keepdim=True)
     _, s, vt = torch.linalg.svd(centered, full_matrices=False)
     assert torch.allclose(basis.abs(), vt[:2].T.abs(), atol=1e-5)  # up to sign
-    assert isinstance(ops.FEATURIZERS["identity"], ops.Featurizer)
     assert isinstance(featurizer.Basis(basis), ops.Featurizer)
 
 
@@ -107,7 +106,7 @@ def test_pca_is_the_right_singular_vectors_of_the_centered_rows():
 @pytest.mark.parametrize(
     "edit, key",
     [
-        (lambda raw: raw["sites"]["target"].update(layers=[1]), "layer"),
+        (lambda raw: raw["sites"]["target"].update(layers=1), "layer"),
         (lambda raw: raw["model"].update(key="hf-internal-testing/tiny-random-gpt2"), "model_key"),
         (lambda raw: raw["model"].update(dtype="bf16"), "model_dtype"),
     ],
@@ -163,21 +162,38 @@ def test_a_pca_basis_cannot_be_trained_or_written():
     with pytest.raises(ValidationError, match="a pca, which is fixed by definition"):
         Spec.model_validate(raw)
     harvest = json.loads(HARVEST.read_text())
-    harvest["interventions"]["ablate"] = {
-        "reads": {"logits": {"site": "target", "pos": -1, "model": "m", "input": "base"}},
-        "writes": {"w": {"site": "target", "pos": -1, "mechanism": "swap", "operand": {"ref": "basis"}}},
-        "models": {"m": {"input": "base", "writes": ["w"]}},
+    harvest["steps"]["ablated"] = {
+        "kind": "forward", "data": "prompts", "field": "input",
+        "interventions": {"writes": {"w": {"site": "target", "pos": -1, "mechanism": "swap", "operand": "basis"}}},
     }
-    harvest["steps"]["harvest"]["interventions"] = "harvest"  # two interventions now: each step says which
-    harvest["steps"]["ablate"] = {"kind": "observe", "interventions": "ablate", "rows": {"base": "weekdays/train"}}
-    with pytest.raises(plan.PlanError, match="a basis is loaded as a featurizer, not written"):
-        plan.build_request(harvest, REPO / "documents" / "data", __import__("causalab_mini.engine", fromlist=["NNterpEngine"]).NNterpEngine.load(Spec.model_validate(json.loads(DAS.read_text())).model, dispatch=False))
+    with pytest.raises(ValidationError, match="a pca basis is loaded as a featurizer, not written"):
+        Spec.model_validate(harvest)
 
 
 def test_a_pca_of_too_few_vectors_is_refused_before_any_forward(data_root, model_engine):
     """Four rows at one position each are four vectors; centered, they span
     three directions. The compiler knows the count from the positions."""
     raw = json.loads(HARVEST.read_text())
-    raw["interventions"]["harvest"]["reads"]["acts"]["pos"] = -1
+    raw["steps"]["harvest"]["reads"]["acts"]["pos"] = -1
     with pytest.raises(plan.PlanError, match="4 principal directions of 4 vector"):
         plan.build_request(raw, data_root, model_engine)
+
+
+def test_a_tensor_save_takes_three_forms(tmp_path):
+    """A tensor is one slot, `weight`; a dict a slot per key; a list a slot
+    per element, by index, whatever the shapes. No step makes a list today,
+    so the step is built by hand."""
+    from safetensors.torch import load_file
+
+    from causalab_mini.plan import write
+    from causalab_mini.plan.plan import SaveFile
+
+    ragged = [torch.ones(2, 3), torch.zeros(5)]
+    step = plan.Reduce(of="x", reduce="mean", results={"t": torch.ones(4), "d": {"a": torch.ones(1)}, "l": ragged})
+    slots = {
+        name: load_file(write._file(step, SaveFile(file_path=f"{name}.safetensors", value=name), tmp_path))
+        for name in ("t", "d", "l")
+    }
+    assert set(slots["t"]) == {"weight"} and set(slots["d"]) == {"a"}
+    assert set(slots["l"]) == {"0", "1"}
+    assert torch.equal(slots["l"]["0"], ragged[0]) and torch.equal(slots["l"]["1"], ragged[1])

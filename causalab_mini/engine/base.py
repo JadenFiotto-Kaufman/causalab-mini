@@ -21,10 +21,15 @@ compiled against a particular model and none of it may be decided later:
 and what the **run** asks:
 
     execute(plan, remote) -> Plan            the whole request
-    forward(forward, values, featurizers)    one forward, tapped
+    forward(step, values, featurizers) -> logits    one model call, tapped
+    generate(step, values, featurizers) -> ids      one decode, tapped at its steps
 
-That is all. The walk over steps, the fit loop, the metrics and the write
-algebra are shared, so a second engine is these eight members and no more.
+Two ways to call a model, because they are two calls with two results: a
+forward leaves its reads and returns its logits, a generate leaves its reads
+and returns the ids it said — each the call's own result, which the walk
+keeps only when something names it. That is all. The walk over steps, the fit loop, the metrics and the
+write algebra are shared, so a second engine is these nine members and no
+more.
 
 One rule for an engine that traces: a block may load the engine and the plan,
 never the document, the dataset or a bare tokenizer — nnsight ships every name
@@ -40,7 +45,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..address import Address
-from ..plan import Forward, Plan
+from ..plan import Forward, Generate, Plan
 
 
 class EngineError(ValueError):
@@ -59,12 +64,12 @@ class Engine:
     def load(cls, spec: Any, **options: Any) -> "Engine":
         """The engine, holding the model the document named.
 
-        `spec` is a model block from either authoring format — both carry
-        `key`, `revision` and `dtype`, and an engine needs nothing else.
+        `spec` is a document's model block — `key`, `revision` and `dtype`,
+        which is all an engine needs.
         `options` are the runtime's own and pass straight through: for nnsight
         that includes `dispatch=False`, a meta-device shell that answers
-        everything the compiler asks — tokenizer, layer count, widths, an
-        interior's `.source` — in well under a second, and that is *also* how
+        everything the compiler asks — tokenizer, layer count, widths, where
+        each place is — in well under a second, and that is *also* how
         a model is loaded to run on NDIF, where the weights are the server's.
         Whether such a shell can run is not the engine's question; the caller
         decided that when it chose how to load and where to execute.
@@ -86,10 +91,10 @@ class Engine:
     def locate(self, component: str, layer: int | None = None) -> Address:
         """The address of `(component, layer)` on this model.
 
-        A module boundary is just the pair. An interior also needs the
-        operation inside the forward resolved, and how that is done is the
-        runtime's business — which is why this is asked of the engine and not
-        of the address.
+        The pair, plus what the checkpoint says about it — which module,
+        which side, where in the forward pass — and a refusal for a place
+        this runtime cannot reach, which is the runtime's business: why this
+        is asked of the engine and not of the address.
         """
         raise NotImplementedError
 
@@ -117,12 +122,15 @@ class Engine:
         """
         raise NotImplementedError
 
-    def forward(
-        self,
-        forward: Forward,
-        values: dict[str, Any],
-        featurizers: dict[str, Any],
-    ) -> None:
+    def forward(self, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
         """Run one forward with its taps applied, leaving what it read in
-        `values`. This is the only place an engine touches a model's insides."""
+        `values`, and return the model's logits. With `generate`, the only
+        place an engine touches a model's insides."""
+        raise NotImplementedError
+
+    def generate(self, step: Generate, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
+        """Run one decode — `step.max_new_tokens` at most, with `step.generation`
+        passed to the runtime's generate as written — applying each tap at
+        its step, leaving what it read in `values`, and return the ids it
+        generated, `(rows, new tokens)`, prompt stripped."""
         raise NotImplementedError

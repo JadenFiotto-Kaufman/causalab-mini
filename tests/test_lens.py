@@ -1,8 +1,9 @@
 """The logit lens: a residual read pushed through the model's final norm and
 head, so every layer can be asked what it would say if it were the last.
 
-`view: "logits"` on a read is the projection; a layer sweep is the lens;
-`token_prob` on the answer is what to plot against depth.
+`view: "logits"` on a read is the projection; a layer sweep is the lens, or
+`layers: "all"`, which is every layer in one forward; `token_prob` on the
+answer is what to plot against depth.
 """
 
 import json
@@ -30,7 +31,7 @@ def lens_raw():
 def test_the_lens_reads_a_probability_per_row_at_every_layer(lens_raw, data_root, model_engine):
     executed = model_engine.execute(plan.build_request(lens_raw, data_root, model_engine))
     for point in ("layers=0", "layers=1"):
-        p = executed.step(point, plan.Plan).step("lens", plan.Observe).results["p_answer"]
+        p = executed.step(point, plan.Plan).result("p_answer")
         assert p.shape == (4,) and ((p > 0) & (p < 1)).all(), point
 
 
@@ -42,21 +43,21 @@ def test_the_two_engines_project_identically(lens_raw, data_root, model_engine):
     traced = model_engine.execute(plan.build_request(lens_raw, data_root, model_engine))
     hooked = hooks.execute(plan.build_request(lens_raw, data_root, hooks))
     for point in ("layers=0", "layers=1"):
-        a = traced.step(point, plan.Plan).step("lens", plan.Observe).results
-        b = hooked.step(point, plan.Plan).step("lens", plan.Observe).results
-        assert torch.equal(a["p_answer"], b["p_answer"]) and torch.equal(a["top1"], b["top1"]), point
+        a, b = (one.step(point, plan.Plan) for one in (traced, hooked))
+        assert torch.equal(a.result("p_answer"), b.result("p_answer")), point
+        assert torch.equal(a.result("top1"), b.result("top1")), point
 
 
 def test_the_lens_is_one_document_with_one_point_per_layer(lens_raw, data_root, model_engine):
     built = plan.build_request(lens_raw, data_root, model_engine)
-    assert list(built.steps) == ["layers=0", "layers=1"]  # a one-layer band sweeps as its layer
+    assert list(built.steps) == ["layers=0", "layers=1"]  # a layer sweeps as its layer
     text = explain(built)
-    assert "at block_output[0] pos={index:-1} via 'identity' as logits" in text
+    assert "at block_output[0] pos={index:-1} as logits" in text
     assert "at block_output[1]" in text
 
     executed = model_engine.execute(built)
     per_layer = [
-        executed.step(point, plan.Plan).step("lens", plan.Observe).results["p_answer"]
+        executed.step(point, plan.Plan).result("p_answer")
         for point in built.steps
     ]
     assert not torch.equal(per_layer[0], per_layer[1]), "two layers, two answers"
@@ -84,17 +85,15 @@ def test_the_lens_projection_matches_the_head_within_an_ulp(model_engine):
     "edit, message",
     [
         (lambda raw: raw["sites"].update(resid={"component": "lm_head"}), "'lm_head' is not the residual stream"),
-        (lambda raw: raw["sites"].update(resid={"component": "attention_query", "layers": [0]}), "'attention_query' is not the residual stream"),
-        (lambda raw: raw["interventions"]["lens"]["reads"]["lens"].update(featurizer="rot"), "cannot also be viewed as logits"),
+        (lambda raw: raw["sites"].update(resid={"component": "attention_query", "layers": 0}), "'attention_query' is not the residual stream"),
+        (lambda raw: raw["steps"]["lens"]["reads"]["logits"].update(featurizer="rot"), "cannot also be viewed as logits"),
     ],
     ids=["the head itself", "an interior", "a featurized read"],
 )
 def test_where_a_logits_view_is_refused(lens_raw, edit, message):
-    lens_raw["sites"]["resid"]["layers"] = [0]  # un-sweep so it is one document
+    lens_raw["sites"]["resid"]["layers"] = 0  # un-sweep so it is one document
     lens_raw["featurizers"] = {"rot": {"kind": "subspace", "k": 4, "parametrization": "cayley"}}
-    lens_raw["interventions"]["lens"]["reads"]["rot_user"] = {
-        "site": "resid", "pos": -1, "input": "base", "featurizer": "rot"
-    }
+    lens_raw["steps"]["lens"]["reads"]["rot_user"] = {"site": "resid", "pos": -1, "featurizer": "rot"}
     edit(lens_raw)
     with pytest.raises(ValidationError, match=message):
         Spec.model_validate(lens_raw)
@@ -102,6 +101,109 @@ def test_where_a_logits_view_is_refused(lens_raw, edit, message):
 
 def test_a_logits_view_cannot_be_written_back():
     raw = json.loads((REPO / "documents" / "v2" / "patching.json").read_text())
-    raw["interventions"]["patching"]["reads"]["v_cf"]["view"] = "logits"
+    raw["steps"]["counterfactual"]["reads"]["v_cf"]["view"] = "logits"
     with pytest.raises(ValidationError, match="is a logits view, which is vocabulary-wide"):
+        Spec.model_validate(raw)
+
+
+# --------------------------------------------------------------------- #
+# every layer, in one forward
+# --------------------------------------------------------------------- #
+
+EVERY = REPO / "documents" / "v2" / "logit_lens_all.json"
+
+
+def test_every_layer_in_one_forward_is_the_sweep_point_by_point(lens_raw, data_root, model_engine):
+    """`layers: "all"` is one forward whose read is taken at each layer and
+    stacked, the layer axis first; the swept document is one forward per
+    layer. They are the same lens, to the bit."""
+    every = model_engine.execute(plan.build_request(json.loads(EVERY.read_text()), data_root, model_engine))
+    swept = model_engine.execute(plan.build_request(lens_raw, data_root, model_engine))
+    assert every.result("p_answer").shape == (2, 4)
+    for layer in (0, 1):
+        point = swept.step(f"layers={layer}", plan.Plan)
+        for name in ("p_answer", "top1"):
+            assert torch.equal(every.result(name)[layer], point.result(name)), (name, layer)
+
+
+def test_a_list_of_layers_is_those_reads_stacked_in_the_listed_order(data_root, model_engine, tmp_path):
+    """`layers: [1, 0]` is the read at layer 1 and the read at layer 0,
+    stacked in that order — not forward order — with the layer axis first:
+    the same value, to the bit, as two single-layer reads stacked by hand,
+    and its table says each row's layer in that order."""
+    def lens(layers):
+        raw = json.loads(EVERY.read_text())
+        raw["sites"]["resid"]["layers"] = layers
+        raw["steps"]["saves"] = {"lens.logits": "logits.safetensors", "p_answer": "p_answer.json"}
+        return model_engine.execute(plan.build_request(raw, data_root, model_engine))
+
+    listed = lens([1, 0])
+    one, zero = lens(1), lens(0)
+    assert listed.result("lens.logits").shape[0] == 2
+    assert torch.equal(listed.result("lens.logits"), torch.stack([one.result("lens.logits"), zero.result("lens.logits")]))
+    assert torch.equal(listed.result("p_answer"), torch.stack([one.result("p_answer"), zero.result("p_answer")]))
+    listed.write(tmp_path)
+    assert [row["layer"] for row in json.loads((tmp_path / "p_answer.json").read_text())][::4] == [1, 0]
+
+
+def test_a_write_at_a_list_of_layers_writes_at_each(data_root, model_engine):
+    """The same swap at layers 0 and 1 is the swap at 0 and the swap at 1,
+    in one forward."""
+    def patched(layers, second=None):
+        raw = json.loads((REPO / "documents" / "v2" / "patching.json").read_text())
+        raw["sites"]["target"]["layers"] = layers
+        writes = raw["steps"]["patched"]["interventions"]["writes"]
+        writes["patch"]["operand"] = 0.0
+        if second is not None:
+            raw["sites"]["other"] = {"component": "block_output", "layers": second}
+            writes["again"] = dict(writes["patch"], site="other")
+        return model_engine.execute(plan.build_request(raw, data_root, model_engine)).result("logit_diff")
+
+    assert torch.equal(patched([0, 1]), patched(0, second=1))
+    assert not torch.equal(patched([0, 1]), patched(0))
+
+
+def test_a_table_of_every_layer_has_a_row_per_layer_and_example(data_root, model_engine, tmp_path):
+    executed = model_engine.execute(plan.build_request(json.loads(EVERY.read_text()), data_root, model_engine))
+    executed.write(tmp_path)
+    rows = json.loads((tmp_path / "p_answer.json").read_text())
+    assert [(row["layer"], row["example_id"]) for row in rows] == [(layer, str(row)) for layer in (0, 1) for row in range(4)]
+    assert [row["value"] for row in rows[4:]] == pytest.approx(executed.result("p_answer")[1].tolist())
+
+
+def test_the_two_engines_agree_on_every_layer(data_root, model_engine):
+    raw = json.loads(EVERY.read_text())
+    hooks = HooksEngine.load(Spec.model_validate(raw).model, device_map="cpu")
+    traced = model_engine.execute(plan.build_request(raw, data_root, model_engine))
+    hooked = hooks.execute(plan.build_request(raw, data_root, hooks))
+    assert torch.equal(traced.result("p_answer"), hooked.result("p_answer"))
+
+
+@pytest.mark.parametrize(
+    "edit, message",
+    [
+        (lambda raw: raw["steps"]["lens"].update(interventions={"writes": {"zero": {"site": "resid", "pos": -1, "mechanism": "swap", "operand": 0.0, "featurizer": "rot"}}})
+         or raw.update(featurizers={"rot": {"kind": "subspace", "k": 4}}),
+         "a write at several layers takes no featurizer"),
+        (lambda raw: raw["steps"]["lens"]["reads"]["logits"].update(view="raw", featurizer="rot")
+         or raw.update(featurizers={"rot": {"kind": "subspace", "k": 4}}),
+         "a read at several layers takes no featurizer"),
+        (lambda raw: raw["steps"].update(mean={"kind": "reduce", "reduce": "mean", "of": "lens.logits"}),
+         "a reduction of it is not implemented"),
+        (lambda raw: raw["steps"].update(patched={
+            "kind": "forward", "data": "prompts", "field": "input",
+            "interventions": {"writes": {"w": {"site": {"component": "block_output", "layers": 0}, "pos": -1,
+                                               "mechanism": "swap", "operand": "lens.logits"}}}}),
+         "is a read at several layers; an operand is"),
+    ],
+    ids=["a featurized write", "a featurizer", "a reduction", "an operand"],
+)
+def test_what_every_layer_may_not_be(edit, message):
+    """One value with the layer axis first is something to score and save.
+    A featurizer is one parameter set at one site, so neither a read nor a
+    write at several layers takes one, and a reduction over rows would first
+    have to say which axis the rows are."""
+    raw = json.loads(EVERY.read_text())
+    edit(raw)
+    with pytest.raises(ValidationError, match=message):
         Spec.model_validate(raw)

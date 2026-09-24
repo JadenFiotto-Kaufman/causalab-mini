@@ -1,0 +1,80 @@
+{
+  "header": {
+    "description": "patching.json with the patched position swept: the same interchange at the last token, the one before it and the one before that. One document, three experiments, one model load \u2014 a sweep point is a plan, and the root is three of them."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "data": {
+    "pairs": {
+      "path": "weekdays/train"
+    }
+  },
+  "sites": {
+    "target": {
+      "component": "block_output",
+      "layers": 0
+    }
+  },
+  "steps": {
+    "counterfactual": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "counterfactual_inputs[0]",
+      "reads": {
+        "v_cf": {
+          "site": "target",
+          "pos": -1
+        }
+      }
+    },
+    "patched": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "input",
+      "interventions": {
+        "writes": {
+          "patch": {
+            "site": "target",
+            "pos": {
+              "sweep": [
+                -1,
+                -2,
+                -3
+              ]
+            },
+            "mechanism": "swap",
+            "operand": "counterfactual.v_cf"
+          }
+        }
+      },
+      "reads": {
+        "logits": {
+          "site": {
+            "component": "lm_head"
+          },
+          "pos": -1
+        }
+      }
+    },
+    "iia": {
+      "kind": "metric",
+      "metric": "match",
+      "of": "patched.logits",
+      "expected": "pairs.cf_answer"
+    },
+    "logit_diff": {
+      "kind": "metric",
+      "metric": "logit_diff",
+      "of": "patched.logits",
+      "a": "pairs.cf_answer",
+      "b": "pairs.base_answer"
+    },
+    "saves": {
+      "iia": "iia.json",
+      "logit_diff": "logit_diff.json"
+    }
+  }
+}

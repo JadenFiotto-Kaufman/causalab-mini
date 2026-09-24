@@ -1,117 +1,53 @@
 {
   "header": {
-    "description": "Where is 'today' held? Interchange the residual stream between a base and a counterfactual day at every one of the 16 layers, at two positions: the day token itself (-4 of 'If today is X , tomorrow is') and the last token. 32 experiments, one document. `pos` is a NAMED axis: the read and the write move together, so it is 2 positions and not the 4 combinations a cross product would give."
+    "description": "Where is 'today' held? Interchange the residual stream between a base and a counterfactual day at every one of the 16 layers, at two positions: the day token itself (-4 of 'If today is X , tomorrow is') and the last token. 32 experiments, one document. `pos` is a NAMED axis: the read on `counterfactual` and the write on `patched` move together, so it is 2 positions and not the 4 combinations a cross product would give."
   },
   "model": {
     "key": "meta-llama/Llama-3.2-1B",
     "revision": "4e20de362430cd3b72f300e6b0f18e50e7166e08",
     "dtype": "fp32"
   },
-  "roles": {
-    "base": {
-      "field": "input"
-    },
-    "counterfactual": {
-      "field": "counterfactual_inputs[0]"
-    }
-  },
+  "data": {"days": {"path": "weekdays_full/data"}},
   "sites": {
-    "target": {
-      "component": "block_output",
-      "layers": [
-        {
-          "sweep": {
-            "range": [
-              0,
-              16
-            ]
-          }
-        }
-      ]
-    },
-    "head": {
-      "component": "lm_head"
-    }
-  },
-  "interventions": {
-    "patching": {
-      "reads": {
-        "v_cf": {
-          "site": "target",
-          "pos": {
-            "sweep": [
-              -4,
-              -1
-            ],
-            "as": "pos"
-          },
-          "model": "original",
-          "input": "counterfactual"
-        },
-        "logits": {
-          "site": "head",
-          "pos": -1,
-          "model": "patched",
-          "input": "base"
-        }
-      },
-      "writes": {
-        "patch": {
-          "site": "target",
-          "pos": {
-            "sweep": [
-              -4,
-              -1
-            ],
-            "as": "pos"
-          },
-          "mechanism": "swap",
-          "operand": "v_cf"
-        }
-      },
-      "models": {
-        "patched": {
-          "input": "base",
-          "writes": [
-            "patch"
-          ]
-        }
-      },
-      "metrics": {
-        "iia": {
-          "kind": "match",
-          "of": "logits",
-          "token_form": "space_prefixed",
-          "expected": "cf_answer"
-        },
-        "logit_diff": {
-          "kind": "logit_diff",
-          "of": "logits",
-          "token_form": "space_prefixed",
-          "a": "cf_answer",
-          "b": "base_answer"
-        }
-      }
-    }
+    "target": {"component": "block_output", "layers": {"sweep": {"range": [0, 16]}}},
+    "head": {"component": "lm_head"}
   },
   "steps": {
-    "score": {
-      "kind": "observe",
-      "interventions": "patching",
-      "rows": {
-        "base": "weekdays_full/data",
-        "counterfactual": "weekdays_full/data"
-      },
-      "saves": [
-        {
-          "value": "iia",
-          "file_path": "iia.json"
-        },
-        {
-          "value": "logit_diff",
-          "file_path": "logit_diff.json"
+    "counterfactual": {
+      "kind": "forward",
+      "data": "days",
+      "field": "counterfactual_inputs[0]",
+      "reads": {"v_cf": {"site": "target", "pos": {"sweep": [-4, -1], "as": "pos"}}}
+    },
+    "patched": {
+      "kind": "forward",
+      "data": "days",
+      "field": "input",
+      "interventions": {
+        "writes": {
+          "patch": {
+            "site": "target",
+            "pos": {"sweep": [-4, -1], "as": "pos"},
+            "mechanism": "swap",
+            "operand": "counterfactual.v_cf"
+          }
         }
-      ]
-    }
+      },
+      "reads": {"logits": {"site": "head", "pos": -1}}
+    },
+    "iia": {
+      "kind": "metric",
+      "metric": "match",
+      "of": "patched.logits",
+      "expected": "days.cf_answer"
+    },
+    "logit_diff": {
+      "kind": "metric",
+      "metric": "logit_diff",
+      "of": "patched.logits",
+      "a": "days.cf_answer",
+      "b": "days.base_answer"
+    },
+    "saves": {"iia": "iia.json", "logit_diff": "logit_diff.json"}
   }
 }
