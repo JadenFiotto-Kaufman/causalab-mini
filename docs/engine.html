@@ -1,0 +1,847 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>The engine — causalab-mini</title>
+    <meta name="description" content="How a plan becomes tensors: eight members, one session, and no execute on a plan.">
+    <link rel="stylesheet" href="site.css">
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to content</a>
+
+    <div class="topbar">
+      <button class="iconbutton" data-nav-toggle aria-expanded="false" aria-controls="sidebar">menu</button>
+      <span class="brand">causalab-mini</span>
+      <button class="iconbutton js-only" data-theme-toggle style="margin-left:auto">dark</button>
+    </div>
+
+    <div class="layout">
+      <aside class="sidebar" id="sidebar">
+        <a class="brand" href="index.html">causalab-mini</a>
+        <span class="brand-sub">a plan is pure data; an engine turns it into tensors</span>
+
+        <nav aria-label="Documentation">
+          <ol>
+            <li><a href="index.html">Home</a></li>
+          </ol>
+
+          <h2>The document</h2>
+          <ol>
+            <li><a href="documents.html">Documents</a></li>
+            <li><a href="locations.html">Locations</a></li>
+            <li><a href="positions.html">Positions</a></li>
+            <li><a href="ops.html">Reads, writes, metrics</a></li>
+          </ol>
+
+          <h2>Use cases</h2>
+          <ol>
+            <li><a href="use-cases/index.html">All use cases</a></li>
+          </ol>
+          <ol class="sub">
+          <li><a href="use-cases/layer-sweep.html">Layer sweep</a></li>
+          <li><a href="use-cases/entity-patching.html">Entity patching</a></li>
+          <li><a href="use-cases/das-fit.html">DAS fit</a></li>
+          <li><a href="use-cases/dbm-fit.html">DBM fit</a></li>
+          <li><a href="use-cases/attention-pattern.html">Attention pattern</a></li>
+          <li><a href="use-cases/logit-lens.html">Logit lens</a></li>
+          <li><a href="use-cases/generation.html">Generation</a></li>
+          <li><a href="use-cases/sae-features.html">SAE features</a></li>
+          <li><a href="use-cases/batching-and-remote.html">Batching &amp; remote</a></li>
+          <li><a href="use-cases/sweeps.html">Sweeps</a></li>
+          </ol>
+
+          <h2>Running</h2>
+          <ol>
+            <li><a href="cli.html">The CLI</a></li>
+          </ol>
+
+          <h2>Understand</h2>
+          <ol>
+            <li><a href="engine.html" aria-current="page">The engine</a></li>
+            <li><a href="standardization.html">Standardization</a></li>
+            <li><a href="remote.html">Remote &amp; NDIF</a></li>
+          </ol>
+        </nav>
+
+        <div class="footer">
+          <p><a href="https://github.com/JadenFiotto-Kaufman/causalab-mini">source on GitHub</a></p>
+          <p><button class="iconbutton js-only" data-theme-toggle>dark</button></p>
+        </div>
+      </aside>
+
+      <main id="content">
+        <article class="page">
+          <header>
+            <p class="eyebrow">Reference</p>
+            <h1>The engine</h1>
+            <p class="lede">How the engine turns a plan into tensors.</p>
+          </header>
+
+          <!-- causalab_mini/plan/build.py:1-12, causalab_mini/engine/base.py:1-27 -->
+          <p>Two halves, and the seam between them is the design. The
+          <strong>compiler</strong> takes a document and decides everything that
+          needs a model but no activations — an address per site, a width per
+          address, the token ids of every prompt, the order the forwards must run
+          in — and returns a <code>Plan</code>: strings, integers and tuples. An
+          <strong>engine</strong> walks that plan. What each step <em>means</em>
+          is written once, in <code>engine/steps.py</code>, as plain functions
+          taking an engine; an engine supplies eight members and nothing else.</p>
+
+          <!-- causalab_mini/plan/plan.py:28-33 -->
+          <p>Results come home by filling the plan in. A step's
+          <code>results</code> is the only mutable thing on it, so every number
+          sits on the node that produced it, and a node's path in the tree is its
+          path on disk.</p>
+
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/plan/explain.py:32 prints the compiled tree.
+               ran 2026-09-23, this box, CPU, fp32 -->
+          <p><code>explain</code> compiles a document against the model's config,
+          with no weights loaded, and prints the plan it produced:</p>
+
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/patching.json
+&lt;root&gt;: Plan
+  score: Observe  metrics=['iia/match', 'logit_diff/logit_diff']  saves=['iia.json', 'logit_diff.json']
+      forward 'original' on 'counterfactual'  (4 rows x 11 tokens)
+        read  'v_cf' at block_output[0] pos={index:-1} via 'identity'
+      forward 'patched' on 'base'  (4 rows x 11 tokens)
+        write 'patch' at block_output[0] pos={index:-1} swap(v_cf) via 'identity'
+        read  'logits' at lm_head pos={index:-1} via 'identity'</code></pre>
+
+          <p>That tree is the plan. Everything below is what put it there and
+          what walks it.</p>
+
+          <h2 id="the-pipeline">The pipeline <a class="anchor" href="#the-pipeline" aria-label="Link to this section">#</a></h2>
+
+          <figure>
+            <svg viewBox="0 0 460 384" role="img" aria-labelledby="eng-t eng-d" width="460">
+              <title id="eng-t">A document, compiled and executed</title>
+              <desc id="eng-d">Five boxes down the page in the order things
+              happen: document.json, Plan, steps.run, engine.forward, and the
+              output directory. A curved arrow runs from engine.forward back up
+              into the Plan, because the results of a forward are set on the
+              plan's own steps rather than returned.</desc>
+              <defs>
+                <marker id="eng-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+                        markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fg-faint)"/>
+                </marker>
+                <marker id="eng-arrow-accent" viewBox="0 0 10 10" refX="9" refY="5"
+                        markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"/>
+                </marker>
+              </defs>
+              <g fill="var(--bg-raised)" stroke="var(--rule-strong)" stroke-width="1">
+                <rect x="24" y="12"  width="250" height="44" rx="6"/>
+                <rect x="24" y="88"  width="250" height="44" rx="6"/>
+                <rect x="24" y="164" width="250" height="44" rx="6"/>
+                <rect x="24" y="240" width="250" height="44" rx="6"/>
+                <rect x="24" y="316" width="250" height="44" rx="6"/>
+              </g>
+              <g text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif">
+                <g fill="var(--fg)" font-size="14" font-weight="600">
+                  <text x="149" y="33">document.json</text>
+                  <text x="149" y="109">Plan</text>
+                  <text x="149" y="185">steps.run</text>
+                  <text x="149" y="261">engine.forward</text>
+                  <text x="149" y="337">out/</text>
+                </g>
+                <g fill="var(--fg-muted)" font-size="11">
+                  <text x="149" y="48">roles · sites · steps</text>
+                  <text x="149" y="124">strings, ints, tuples</text>
+                  <text x="149" y="200">the walk: observe · fit</text>
+                  <text x="149" y="276">a trace, or hooks</text>
+                  <text x="149" y="352">iia.json · run.json</text>
+                </g>
+              </g>
+              <g font-family="ui-sans-serif, system-ui, sans-serif" font-size="11"
+                 fill="var(--fg-faint)">
+                <text x="286" y="75">compile</text>
+                <text x="286" y="151">execute</text>
+                <text x="286" y="227">one forward</text>
+                <text x="286" y="303">plan.write(out)</text>
+              </g>
+              <g stroke="var(--fg-faint)" stroke-width="1.4" fill="none" marker-end="url(#eng-arrow)">
+                <path d="M 149 58 L 149 84"/>
+                <path d="M 149 134 L 149 160"/>
+                <path d="M 149 210 L 149 236"/>
+                <path d="M 149 286 L 149 312"/>
+              </g>
+              <path d="M 274 262 C 380 262, 430 240, 430 186 C 430 132, 380 110, 278 110"
+                    stroke="var(--accent)" stroke-width="1.6" fill="none"
+                    marker-end="url(#eng-arrow-accent)"/>
+              <g text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif"
+                 font-size="11" fill="var(--accent)">
+                <text x="350" y="178">results fill</text>
+                <text x="350" y="192">the plan</text>
+              </g>
+            </svg>
+            <figcaption>Top to bottom is the order things happen, not where data
+            goes: a forward returns nothing. It leaves what it read in a dict,
+            and the walk sets the metrics over that on the step that asked for
+            them — which is why the curved arrow points back into the same
+            <code>Plan</code> the compiler produced, and why that plan is what
+            writes itself to disk.</figcaption>
+          </figure>
+
+          <h2 id="one-document-all-the-way-through">One document, all the way through <a class="anchor" href="#one-document-all-the-way-through" aria-label="Link to this section">#</a></h2>
+
+          <p>The document is
+          <a href="use-cases/layer-sweep.html">the smallest real experiment</a> in
+          the repository: read the residual stream at the last token of a
+          counterfactual prompt, swap it into the same place on the base prompt,
+          score what the model then says. The
+          <a href="index.html">home page</a> shows it in full; what follows is
+          what happens to it.</p>
+
+          <h3 id="1-compile">1. Compile <a class="anchor" href="#1-compile" aria-label="Link to this section">#</a></h3>
+
+          <!-- causalab_mini/plan/build.py:51-107 -->
+          <p><code>build_spec</code> works in the order of the file. Each site's
+          layer is checked against <code>engine.num_layers</code>, then each site
+          becomes an <code>Address</code> through <code>engine.locate</code>;
+          each site that names units or heads gets its count from
+          <code>engine.width</code> or <code>engine.heads</code>, and an index
+          past the end is refused here rather than on a tensor. A featurizer's
+          <code>d</code> is derived from (model, site), because a traced block
+          may not decide anything from a tensor — including how wide the tensor
+          it is about to rotate is.</p>
+
+          <!-- causalab_mini/plan/build.py:874-910 -->
+          <p>Then the forwards. A read in model A may be the operand of a write
+          in model B, so B runs after A; <code>_schedule</code> topologically
+          sorts the (model, input) pairs and refuses a cycle. Here it gives
+          <code>original</code> on <code>counterfactual</code>, then
+          <code>patched</code> on <code>base</code> — the order
+          <code>explain</code> printed.</p>
+
+          <!-- causalab_mini/plan/build.py:1041-1048 -->
+          <p>Within a forward, taps are sorted into forward order by
+          <code>Address.key</code>, and at one address the writes go before the
+          reads, because a read in a model sees that model's writes.</p>
+
+          <p>Three checks belong to the compiler because they are decidable
+          without a run:</p>
+
+          <ul>
+            <!-- causalab_mini/plan/build.py:807-857 -->
+            <li><strong>An attention pattern swapped in from another prompt must
+            line up key for key</strong> — the last axis of
+            <code>attention_probs</code> is the keys of the padded batch, so the
+            two prompts must pad to the same width and have the same number of
+            real tokens row by row. Both masks are in hand before any forward.</li>
+            <!-- causalab_mini/plan/build.py:943-968 -->
+            <li><strong>A read that buffers every decode step has a size
+            bound</strong> — <code>decode × rows × width × 4</code> bytes, refused
+            over 256&nbsp;MiB. All three numbers are known before a model is
+            loaded, so the line is drawn before the memory is held.</li>
+            <!-- causalab_mini/plan/build.py:95-107 -->
+            <li><strong>A write's <code>features</code> must be distinct indices
+            inside the featurizer's space.</strong></li>
+          </ul>
+
+          <h3 id="2-the-plan">2. The plan <a class="anchor" href="#2-the-plan" aria-label="Link to this section">#</a></h3>
+
+          <!-- causalab_mini/plan/plan.py:1-38 -->
+          <p>A <code>Plan</code> is a dict of named steps, and is itself a step,
+          so plans nest — a sweep point is a nested plan. Four kinds of step sit
+          in one: <code>Featurizers</code> constructs the parameter sets,
+          <code>Observe</code> is one pass (forwards in order, then metrics over
+          what they read), <code>Fit</code> is that pass N times with an optimizer
+          between, and <code>Weights</code> turns fitted parameters into results.
+          Inside an <code>Observe</code>, a <code>Forward</code> holds its token
+          ids and a tuple of <code>Tap</code>s, one per address, each with its
+          writes and reads.</p>
+
+          <!-- causalab_mini/plan/plan.py:227-243 -->
+          <p>Every field is frozen except <code>results</code>. There is no
+          <code>execute</code> on a step: what running one means is the engine's
+          business, and a plan that knew would only work on one engine.</p>
+
+          <!-- causalab_mini/plan/plan.py:255-262, causalab_mini/engine/steps.py:153-166 -->
+          <p>Two things cross between steps. An <code>Observe</code>'s
+          <code>outputs</code> publish a read — kept, or reduced with
+          <code>mean</code> or <code>pca</code> — under a name a later step's
+          write can name as its operand via <code>ref</code>. And the featurizers
+          are shared live, which is what lets a fit train the rotation a later
+          step scores with. Both live in the walk's <code>State</code>, which is
+          a local of the walk: never saved, never shipped, gone with the plan. A
+          nested plan gets its own <code>outputs</code> and the same featurizers,
+          so sweep points cannot see each other's values.</p>
+
+          <h3 id="3-the-walk">3. The walk <a class="anchor" href="#3-the-walk" aria-label="Link to this section">#</a></h3>
+
+          <!-- causalab_mini/engine/steps.py:67-86 -->
+          <p><code>steps.run(engine, step)</code> is the whole executor: a
+          <code>Plan</code> recurses into its children, and each other kind of
+          step goes to its own function. Every one of those functions takes the
+          engine as its first argument and calls it for exactly one thing —
+          running a forward. None of them touches the model.</p>
+
+          <!-- causalab_mini/engine/steps.py:109-166 -->
+          <p><code>observe</code> runs the pass, then computes the metrics. A
+          metric's eligible rows are the intersection of two halves: the column
+          half, which the client decided from the data, and the position half,
+          which only the run can know. The scored metrics are returned live,
+          because a fit differentiates them, and recorded detached, because what
+          comes home should not carry a graph.</p>
+
+          <h3 id="4-the-per-forward-frame">4. The per-forward frame <a class="anchor" href="#4-the-per-forward-frame" aria-label="Link to this section">#</a></h3>
+
+          <!-- causalab_mini/engine/steps.py:294-318 -->
+          <p>Positions are resolved <em>here</em> — inside the session, in the
+          walk, against <code>engine.tokenizer</code> — and not on the client, so
+          that a text anchor is looked for in the text the model will actually
+          see. One <code>Frame</code> is built per forward and every tap of that
+          forward shares it.</p>
+
+          <!-- causalab_mini/ops/locate.py:86-91 -->
+          <p>The frame's character map is the expensive half: O(L) decode calls
+          of O(L) work per row, measured at 840&nbsp;ms for 64 rows of 260
+          tokens. So it is built only when the pass has a position the document
+          does not already fix — a text anchor, or any cut of the continuation.
+          A pass of bare <code>-1</code>s resolves the same integers on every row
+          and every run, and skips the map.</p>
+
+          <!-- causalab_mini/engine/steps.py:430-452 -->
+          <p>Before looking for any text in a row, the run decodes row 0's ids
+          with its own tokenizer and compares the string to the one the client
+          recorded when it encoded them. Locally those are one object; remotely
+          they are two, and a disagreement would put every position in range and
+          in the wrong place, silently, because both sides produce integers. One
+          row is a sample, not a proof.</p>
+
+          <!-- causalab_mini/engine/steps.py:294-334 -->
+          <p>What resolution returns beside the forward is the run's own record:
+          per op, each row's window, the reason it is empty when it is, and the
+          tokens it actually addressed. That is plain tuples of integers and
+          strings, so it comes home in <code>results</code> like a metric does.</p>
+
+          <div class="note">
+            <span class="label">a read may skip a row; a write may not</span>
+            <!-- causalab_mini/engine/steps.py:455-484 -->
+            <p>A read whose anchor is not in a row's prompt is an excluded
+            measurement. A write there is refused: writing nothing somewhere is
+            not an intervention, and the row would score as if one had happened.
+            Both are checked at the write, because that is where the positions
+            are, and the row numbers are put back into the pass's own terms so a
+            batched run names the row an author would count to.</p>
+          </div>
+
+          <h3 id="5-one-forward">5. One forward <a class="anchor" href="#5-one-forward" aria-label="Link to this section">#</a></h3>
+
+          <!-- causalab_mini/engine/base.py:120-128 -->
+          <p><code>engine.forward(forward, values, featurizers)</code> is the only
+          place an engine touches a model's insides. It returns nothing: it
+          leaves what it read in <code>values</code>, keyed by the read's name.
+          <code>values</code> starts as a copy of the published outputs, so a
+          write's operand may be either a read of this pass or something an
+          earlier step published — and the engine cannot tell the difference and
+          does not need to.</p>
+
+          <h3 id="6-home">6. Home <a class="anchor" href="#6-home" aria-label="Link to this section">#</a></h3>
+
+          <!-- causalab_mini/plan/plan.py:399-415 -->
+          <p><code>results_of</code> flattens a run into
+          <code>{step path: {name: tensor}}</code> — plain strings and tensors,
+          with none of this package's classes in it — and <code>fill</code> is
+          its inverse. That pair is what crosses back from a server, and it is
+          also what makes the returned plan the same object that was passed in.</p>
+
+          <!-- causalab_mini/plan/write.py:27-47, causalab_mini/cli.py:227 -->
+          <p><code>Plan.write</code> then writes the save manifest and nothing
+          else: nothing lands on disk that is not listed in a step's
+          <code>saves</code>. A nested plan writes into a directory named by its
+          step name, so a swept point's files land under <code>pos=-1/</code>. On
+          the root, the directory also gets <code>document.json</code> (the
+          experiment, verbatim) and <code>run.json</code>.</p>
+
+          <!-- ran 2026-09-23, this box, CPU, fp32, tiny-random-LlamaForCausalLM.
+               7.0 s wall including the model load and interpreter start. -->
+          <pre><code class="language-bash">$ uv run causalab-mini run documents/v2/patching.json --device-map cpu --out out
+out/document.json
+out/run.json
+out/iia.json
+out/logit_diff.json</code></pre>
+
+          <!-- causalab_mini/engine/provenance.py:33-52 -->
+          <p><code>run.json</code> is the engine, whether it ran remotely, the
+          batch size, the versions of the five packages whose code decides what a
+          block does, a sha256 over this package's own source, and the dtype the
+          model was actually served in. No hostname, no timestamp, no absolute
+          path — a record has to be byte-identical across machines to be worth
+          comparing.</p>
+
+          <pre><code class="language-json">{
+ "engine": "NNterpEngine",
+ "remote": false,
+ "batch_size": null,
+ "versions": {
+  "torch": "2.14.0",
+  "transformers": "5.17.0",
+  "nnsight": "0.8.1.dev125+ga8ee93782",
+  "nnterp": "1.3.1.dev64+g0e4b401af",
+  "pydantic": "2.13.5"
+ },
+ "causalab_mini": "76c8c9d0c0d1f3e0b8e2eaeb09564107d1c0a70cb9e8b7d6cecab09fdc92d8a1",
+ "served_dtype": "torch.float32"
+}</code></pre>
+
+          <h2 id="the-engine-contract">The engine contract <a class="anchor" href="#the-engine-contract" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/engine/base.py:50-128 -->
+          <p>Nine names: eight members, and <code>model</code>, which is an
+          attribute. Nothing in <code>base.py</code> has a body, so an engine
+          inherits no behaviour it did not ask for.</p>
+
+          <table>
+            <thead>
+              <tr><th>member</th><th>asked by</th><th>what it answers</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>model</code></td><td>—</td>
+                  <td>The loaded model, as an attribute. What kind of object it is, is the engine's business.</td></tr>
+              <tr><td><code>load(spec, **options)</code></td><td>loading</td>
+                  <td>A classmethod: the engine, holding the model the document named. <code>spec</code> is a model block from either authoring format; <code>options</code> are the runtime's own.</td></tr>
+              <tr><td><code>tokenizer</code></td><td>compile, run</td>
+                  <td>Resolves prompts and answer columns on the client, and — in the run — where along them a position lands.</td></tr>
+              <tr><td><code>num_layers</code></td><td>compile</td>
+                  <td>Bounds the layer band a site may name.</td></tr>
+              <tr><td><code>locate(component, layer)</code></td><td>compile</td>
+                  <td>The <code>Address</code> of a place on this model. A module boundary is just the pair; an interior also needs the operation inside the forward resolved, and how that is done is the runtime's business.</td></tr>
+              <tr><td><code>heads(address)</code></td><td>compile</td>
+                  <td>How many heads the per-head tensor there has.</td></tr>
+              <tr><td><code>width(address)</code></td><td>compile</td>
+                  <td>The size of the tap's last axis — the <code>d</code> a featurizer's <code>k</code> is a subspace of. Derived from (model, site), never authored.</td></tr>
+              <tr><td><code>execute(plan, remote, batch_size)</code></td><td>run</td>
+                  <td>Run the plan and return it, filled in. The plan that comes back is the one passed in.</td></tr>
+              <tr><td><code>forward(forward, values, featurizers)</code></td><td>run</td>
+                  <td>One forward with its taps applied, leaving what it read in <code>values</code>.</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/engine/base.py:26-27; tests/test_engine.py:83-92 -->
+          <p>The walk over steps, the fit loop, the metrics and the write algebra
+          are shared, so a second engine is these eight members and no more. A
+          test asserts the set of public names each engine class overrides, on
+          both engines, so a member added quietly fails the suite.</p>
+
+          <h2 id="what-both-engines-share-below-forward">What both engines share below <code>forward</code> <a class="anchor" href="#what-both-engines-share-below-forward" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/ops/intervene.py:1-23 -->
+          <p><code>ops/intervene.py</code> knows nothing about layers, models or
+          documents: positions arrive as integers and activations arrive as
+          tensors. One line is the seam the rest of the project is built
+          around:</p>
+
+          <pre><code class="language-python">write = inverse(do(featurize(x)), err, x)</code></pre>
+
+          <p>With the identity featurizer that collapses to "replace the tensor",
+          which is activation patching. Swap in a rotation and the same line is
+          DAS — the error term and the unselected directions come from
+          <code>x</code>, the pre-write value, which is what makes a subspace swap
+          leave the orthogonal complement alone.</p>
+
+          <!-- causalab_mini/ops/intervene.py:219-242, 269-293 -->
+          <p><code>gather</code> takes a window per row and, of it, the features
+          the selection names. Uniform windows keep the rectangle,
+          <code>(batch, seq, width) → (batch, w, width)</code>; ragged windows
+          cannot and come back flat, <code>(total, width)</code>, with the plan's
+          own positions saying where each row begins and ends. Which shape it is
+          is decided by the positions, never by the tensor — and, for a batched
+          run, decided once by the compiler over every row, because a window of a
+          ragged pass's rows can happen to be rectangular.
+          <code>scatter</code> is the inverse, and it clones.</p>
+
+          <!-- causalab_mini/ops/intervene.py:343-352; FINDINGS.md §19 -->
+          <p>Featurizer arithmetic runs inside <code>intervene.exact</code>, which
+          disables autocast. A server may wrap a whole request in
+          <code>torch.autocast</code> — NDIF does, at the served dtype — and
+          inside one a matmul of two fp32 tensors comes back bf16 while a
+          subtraction stays fp32, so half of a Cayley solve is downcast and
+          <code>linalg.solve</code> refuses the pair. A featurizer declares its
+          own dtype, fp32, and this is where that declaration is kept.</p>
+
+          <h2 id="one-session">One session <a class="anchor" href="#one-session" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:1-6 -->
+          <p>The nnterp engine's whole request is one
+          <code>model.session(...)</code>: not a session per forward, not a
+          session per training step, not a loop outside that opens sessions.</p>
+
+          <figure class="listing">
+            <figcaption><code>causalab_mini/engine/engines/nnterp/engine.py</code>
+            <span class="what">— the run half, in full</span></figcaption>
+            <pre><code class="language-python">    def execute(self, plan: Plan, remote: bool | str = False, batch_size: int | None = None) -&gt; Plan:
+        plan.provenance.update(provenance.record(self, remote, batch_size))
+        engine, model = self, self.model
+        with model.session(remote=remote):
+            # What comes home is plain — strings and tensors. The client
+            # already has the plan, so only what fills it in needs the trip,
+            # and nothing of ours has to survive the way back. (`remote="local"`
+            # never noticed: it does not serialize the way back. FINDINGS §19.)
+            home = nnsight.save({})
+            steps.run(engine, plan, batch_size=batch_size)
+            home.update(plan_module.results_of(plan))
+            # A server serves the dtype *it* chose; the document's is only a
+            # request. Say what ran, where the run record is.
+            home["served_dtype"] = str(model.lm_head.weight.dtype)
+        plan.provenance["served_dtype"] = home.pop("served_dtype")
+        plan_module.fill(plan, home)
+        return plan</code></pre>
+          </figure>
+
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:88-97; causalab_mini/cli.py:34-37 -->
+          <p><strong><code>remote</code> is the only difference between running
+          here and running on NDIF.</strong> There is no second code path: the
+          flag is passed to that one session. What the command line changes
+          besides the flag is how the model was loaded —
+          <code>--engine ndif</code> is this same engine with
+          <code>dispatch=False</code>, a shell with no local weights, because the
+          weights are the server's.</p>
+
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:8-13, 22-27, 96 -->
+          <p>Results come home because the session saves a dict.
+          <code>nnsight.save({})</code> hands back an object the block fills;
+          locally that is the dict itself, remotely it is the copy that will be
+          shipped home. What goes into it is <code>results_of(plan)</code> —
+          plain strings and tensors by step path. The plan itself does not come
+          back: the client never gave it up, so only what fills it in needs the
+          trip. Nothing of ours ships by value either way — the block's module
+          references and the plan's classes resolve by import on the server,
+          which is why it needs <code>causalab_mini</code> and <code>nnterp</code>
+          installed at the client's versions (FINDINGS §24).</p>
+
+          <div class="note">
+            <span class="label">what a traced block may name</span>
+            <!-- causalab_mini/engine/engines/nnterp/engine.py:15-20; tests/test_structure.py:1-46 -->
+            <p>nnsight recompiles a traced block from its source and ships every
+            name the block loads as a whole pickled object. So everything inside
+            a block here is a module-level function taking plan data and tensors:
+            no document, no dataset, no bare tokenizer, no <code>self</code>.
+            <code>tests/test_structure.py</code> parses the package's own source
+            and checks the <code>ast.Name</code> nodes of every
+            <code>with ….trace(</code> and <code>.session(</code> block against
+            that rule. An attribute is not a name, which is why the run reaches a
+            tokenizer as <code>model.tokenizer</code> — one of nnsight's
+            persistent objects, written as an id and resolved on a server to the
+            served checkpoint's own.</p>
+          </div>
+
+          <!-- causalab_mini/engine/engines/nnterp/loading.py:29-49 -->
+          <p>Two things happen at load. nnsight loads weights lazily, on the
+          first trace, by <em>replacing</em> the module — so the loader forces
+          <code>dispatch=True</code> and freezes afterwards, and what is frozen
+          is what runs. The freeze is <code>eval()</code> and
+          <code>requires_grad_(False)</code>: the model is an instrument, not a
+          parameter. Without it a fit's backward reaches every weight the patched
+          forward touched and leaves a <code>.grad</code> the size of the model
+          behind. Nothing reads it; the memory is real.</p>
+
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:106-127 -->
+          <p>A forward with no <code>decode</code> is one
+          <code>model.trace(...)</code>. A forward that generates is one
+          <code>model.generate(...)</code> with <code>tracer.iter</code> walking
+          the steps: prompt-frame taps apply at step 0, the prefill; a step's own
+          taps at that step; an <code>"all"</code> write at every step. Greedy,
+          with EOS held off so the bound holds and the loop never outruns the
+          run.</p>
+
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:67-76, 202-221 -->
+          <p>An interior — one argument of one call inside a module's forward —
+          is resolved at <code>locate</code> time, on the client, against the
+          loaded checkpoint's <code>.source</code>. The match is on the
+          <em>source line</em> rather than the operation's name: nnsight names an
+          operation <code>{callable}_{occurrence}</code> and gives assignments the
+          same namespace as calls, so on transformers 5.17 the attention forward
+          has both an <code>attention_interface_0</code> (the assignment) and an
+          <code>attention_interface_1</code> (the call). The needle
+          <code>"attention_interface("</code> is call-shaped and hits one. A
+          document that cannot be addressed fails at compile time, not inside
+          someone else's process.</p>
+
+          <h2 id="the-reference-engine">The reference engine <a class="anchor" href="#the-reference-engine" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/engine/engines/hooks/engine.py:1-13 -->
+          <p>The second engine is a plain <code>AutoModelForCausalLM</code> and
+          <code>register_forward_hook</code>: no session, no envoys, no tracing,
+          no remote. One <code>model(**batch)</code> per forward, with a hook on
+          each module a tap names, doing the reading and the writing on the way
+          out. It exists to test one claim — that everything else is genuinely
+          engine-independent — and it shares <code>engine/steps.py</code> and
+          <code>ops/</code> unchanged.</p>
+
+          <!-- FINDINGS.md §6, §6.1 -->
+          <p>What it costs to not be standardized is one function:
+          <code>loading.standardized</code> builds an object carrying nnterp's
+          spellings, so <code>Address.resolve</code> walks it unchanged. Three of
+          the six names are published by transformers and needed no family
+          knowledge at all — the decoder under <code>base_model_prefix</code>, the
+          head under <code>get_output_embeddings</code>, the embeddings under
+          <code>get_input_embeddings</code>. The other three are conventions the
+          engine guesses at, and each guess raises rather than picking a first
+          match. See <a href="standardization.html">Standardization</a> for what
+          nnterp is doing there.</p>
+
+          <p>What it refuses, by name:</p>
+
+          <ul>
+            <!-- causalab_mini/engine/engines/hooks/engine.py:65-87 -->
+            <li><strong>Every interior.</strong> A hook fires at a module
+            boundary; <code>attention_query</code> never crosses one. Reaching it
+            would mean either a patched <code>forward</code> per family or
+            reimplementing, inside the engine, the head reshape and the rotary
+            embedding the address says have already happened. Both move
+            per-family model code back into the engine, which is the cost this
+            project exists to measure.</li>
+            <!-- causalab_mini/engine/engines/hooks/engine.py:106-112 -->
+            <li><strong><code>remote</code>, in any form</strong>, including
+            <code>"local"</code>. A hook is a Python callable registered on a
+            module object in this process, and there is nothing to ship. Running
+            here silently would produce correct numbers under a false claim about
+            where they came from.</li>
+            <!-- causalab_mini/engine/engines/hooks/engine.py:99-105 -->
+            <li><strong>Running from a meta shell.</strong> nnsight's shell can
+            run remotely; a hooks shell has nowhere to run, so the engine — not
+            the base contract — says so.</li>
+          </ul>
+
+          <!-- causalab_mini/engine/engines/hooks/engine.py:310-320 — selection()
+               reads the row's Selection off the weightless nnterp shell the
+               engine already holds; :193 — an empty module path is the model.
+               tests/test_components.py: a `logits` read is bit-equal on the two
+               engines, and on tiny-Gemma2 the hooks engine sees the cap. -->
+          <p>Where a tensor sits inside a module's value is nnterp's row to say,
+          as a <code>Selection</code> with <code>get</code> and <code>put</code>,
+          and the hooks engine asks the row rather than deciding once. Unwrapping
+          a tuple's first element is one of those
+          (<code>FirstIfTuple</code>); the model's own output, whose
+          <code>logits</code> field is the tensor, is another
+          (<code>Index("logits")</code>). So <code>logits</code> — the component
+          that on a capping family is not <code>lm_head</code> — reads the same
+          bits on both engines, and the hooks engine sees Gemma-2's cap because
+          it is reading the model's output rather than reproducing it.</p>
+
+          <!-- causalab_mini/engine/engines/hooks/engine.py:117-153; FINDINGS.md §6.7 -->
+          <p>One thing is harder here than under tracing. The nnterp engine's
+          taps live and die with the <code>with model.trace(...)</code> block;
+          hooks outlive the forward unless removed, and a leaked handle
+          intervenes on the <em>next</em> forward — a wrong number, not an error,
+          and the next forward is usually the one being scored. The registration
+          loop is wrapped in <code>try/finally</code>, and a test asserts the
+          module's <code>_forward_hooks</code> count is unchanged afterwards.</p>
+
+          <h2 id="batching-windows">Batching windows <a class="anchor" href="#batching-windows" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/engine/steps.py:245-291; causalab_mini/engine/base.py:113-116 -->
+          <p><code>batch_size</code> bounds how many rows one model call holds. It
+          is a property of the run and not of the experiment — it bounds memory
+          and moves the last bit, nothing else — so it arrives with
+          <code>execute</code> and is absent from the plan.</p>
+
+          <!-- causalab_mini/engine/steps.py:245-259; causalab_mini/plan/plan.py:126-148 -->
+          <p>It lives in the shared walk, in one function. A window of rows is a
+          whole small pass: the same forwards in the same order over a slice of
+          the rows, with the published values it reads sliced the same way, so a
+          write still meets the operand of <em>its</em> row. Every per-row thing
+          a forward holds is a tuple with one entry per row — ids, mask, each
+          op's anchors and positions — so a window is a slice of each, and
+          positions are absolute indices into the padded width the client fixed
+          once for all rows, so they survive the slice unchanged. An engine is
+          handed a forward that is merely shorter and cannot tell. What the
+          windows read is concatenated back in row order, and everything after
+          that — metrics, eligibility, outputs, saves, a fit's loss — sees one
+          pass.</p>
+
+          <p>Neither engine changed to get this, and <code>remote="local"</code>
+          windows identically, because the windowing ships with the walk.</p>
+
+          <!-- ran 2026-09-23, this box, CPU, fp32. The same document at
+               --batch-size 1 and with no flag; values pasted from
+               out/logit_diff.json. FINDINGS.md §8 -->
+          <p>What it does change is the last bit: a GEMM over fewer rows rounds
+          differently. The same document, run whole and at
+          <code>--batch-size&nbsp;1</code>:</p>
+
+          <table>
+            <thead><tr><th>row</th><th>every row at once</th><th><code>--batch-size 1</code></th></tr></thead>
+            <tbody>
+              <tr><td>0</td><td class="num">−0.027417995035648346</td><td class="num">−0.027418017387390137</td></tr>
+              <tr><td>1</td><td class="num">0.18085992336273193</td><td class="num">0.18085995316505432</td></tr>
+              <tr><td>2</td><td class="num">0.03514503687620163</td><td class="num">0.03514504432678223</td></tr>
+              <tr><td>3</td><td class="num">−0.19330616295337677</td><td class="num">−0.19330619275569916</td></tr>
+            </tbody>
+          </table>
+
+          <p>About two parts in 10<sup>8</sup>, which is why <code>run.json</code>
+          records the batch size beside the versions.</p>
+
+          <!-- FINDINGS.md §18 -->
+          <p>It does not free memory inside a fit's update: the loss is the mean
+          over the concatenated rows, so the graph of every window is alive until
+          the backward. A fit's memory knob is <code>pairs</code>. Windowing does
+          bound the held-out pass, which runs under <code>no_grad</code>.</p>
+
+          <h2 id="a-fit-is-the-same-plan-repeatedly">A fit is the same plan, repeatedly <a class="anchor" href="#a-fit-is-the-same-plan-repeatedly" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/plan/plan.py:265-288; causalab_mini/engine/steps.py:499-507 -->
+          <p>Nothing about the training loop is a second engine. A
+          <code>Fit</code> holds the rows of every update it will make, already
+          batched, already tokenized, already in the order the seed puts them in
+          — as <code>Observe</code> steps, because a training update is the same
+          pass over different rows. An update is <code>observe</code> over one
+          minibatch, and the only things between updates are an optimizer step
+          and an eval pass.</p>
+
+          <!-- ran 2026-09-23, this box; no weights loaded -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/das.json
+&lt;root&gt;: Plan
+  featurizers: Featurizers
+      rot: subspace k=8 d=16 cayley seed=0 trained=True
+  fit: Fit  10 epochs x 1 update  lr=0.001 objective=((1.0, 'ce'),) params=('rot',)  early_stop='iia' patience=3
+      epochs[0][0]: Observe  metrics=['iia/logit_diff', 'ce/cross_entropy']
+          forward 'original' on 'counterfactual'  (2 rows x 11 tokens)
+            read  'v_cf' at block_output[0] pos={index:-1} via 'rot'
+          forward 'patched' on 'base'  (2 rows x 11 tokens)
+            write 'patch' at block_output[0] pos={index:-1} swap(v_cf) via 'rot'
+            read  'logits' at lm_head pos={index:-1} via 'identity'
+      evaluation: Observe  metrics=['iia/logit_diff', 'ce/cross_entropy']  saves=['held_out_iia.json']
+          forward 'original' on 'counterfactual'  (2 rows x 9 tokens)
+            read  'v_cf' at block_output[0] pos={index:-1} via 'rot'
+          forward 'patched' on 'base'  (2 rows x 9 tokens)
+            write 'patch' at block_output[0] pos={index:-1} swap(v_cf) via 'rot'
+            read  'logits' at lm_head pos={index:-1} via 'identity'
+  score: Observe  metrics=['iia/logit_diff', 'ce/cross_entropy']  saves=['iia.json', 'ce.json']
+      …
+  weights: Weights  names=['rot']  saves=['rot.safetensors']</code></pre>
+
+          <!-- causalab_mini/engine/steps.py:89-106 -->
+          <p><code>epochs[0][0]</code>, <code>evaluation</code> and
+          <code>score</code> are the same pass over different rows. The
+          <code>Featurizers</code> step above them constructs the parameter sets
+          where the run runs, and that is the whole point: the parameter it draws
+          is the tensor the optimizer will step and the write will use. Drawn on
+          the client it would be a different tensor from the one the block
+          rotates by.</p>
+
+          <!-- causalab_mini/engine/steps.py:508-513 -->
+          <p>The optimizer is created inside the session, over
+          <code>[featurizers[name].weight for name in step.params]</code>.
+          <code>step.params</code> is the protocol's only trainability
+          declaration, so the optimizer's parameter list <em>is</em> it — the
+          model is frozen and nothing else in the run carries a gradient.</p>
+
+          <!-- causalab_mini/engine/steps.py:520-552 -->
+          <p>Per epoch: the featurizers go into training mode, each update scores
+          the pass, builds the objective, and steps; then they go into eval mode
+          and the held-out pass runs under <code>no_grad</code> on rows the fit
+          never saw. Early stopping watches one named metric with a
+          <code>mode</code> and a <code>patience</code>. A gate's temperature is
+          annealed geometrically from the first update to the last.</p>
+
+          <!-- causalab_mini/engine/steps.py:569-577 -->
+          <p>The objective is Σ&nbsp;wᵢ·termᵢ, minimized. The sign of the weight
+          is the direction — a positive weight on a cross-entropy minimizes it, a
+          −1 on a logit difference maximizes the margin — and there is no
+          <code>maximize</code> flag anywhere.</p>
+
+          <!-- causalab_mini/engine/steps.py:11-15 -->
+          <p>Every <code>Observe</code> records what it scored, including the ones
+          inside a fit, so a run is navigable at any depth:
+          <code>root.steps["fit"].epochs[0][1].results["iia"]</code>. On a long
+          fit that is a real amount of small tensors coming home.</p>
+
+          <h2 id="what-the-tests-pin">What the tests pin <a class="anchor" href="#what-the-tests-pin" aria-label="Link to this section">#</a></h2>
+
+          <p>486 tests, and these are the ones about the seam.</p>
+
+          <table>
+            <thead><tr><th>claim</th><th>test</th></tr></thead>
+            <tbody>
+              <tr><td>An engine's public surface is exactly those eight names — asserted separately on both engines</td>
+                  <td><code>test_engine.py:83</code>, <code>test_hooks_engine.py:182</code></td></tr>
+              <tr><td><code>Engine</code> has no implementation: every member raises</td>
+                  <td><code>test_engine.py:60</code></td></tr>
+              <tr><td>A plan compiled for nnsight runs unchanged on an engine with no model and no session at all</td>
+                  <td><code>test_engine.py:119</code></td></tr>
+              <tr><td>An engine that ships holds nothing but its model</td>
+                  <td><code>test_engine.py:100</code></td></tr>
+              <tr><td>A weightless shell compiles the same plan as a model with weights, on both engines</td>
+                  <td><code>test_engine.py:140</code></td></tr>
+              <tr><td>The two engines answer the compiler identically — layer count, padding side, addresses, widths</td>
+                  <td><code>test_hooks_engine.py:53</code></td></tr>
+              <tr><td>The two engines produce the same numbers on <code>documents/minimal_cpu.json</code>, by <code>torch.equal</code></td>
+                  <td><code>test_hooks_engine.py:65</code></td></tr>
+              <tr><td>…and the same fitted (16, 8) rotation through ten AdamW updates, not just the metrics over it</td>
+                  <td><code>test_hooks_engine.py:82</code></td></tr>
+              <tr><td>No <code>batch_size</code> is one window and changes nothing, by <code>torch.equal</code></td>
+                  <td><code>test_batching.py:109</code></td></tr>
+              <tr><td>A windowed run equals the whole run across seven kinds of pass at batch sizes 1 and 3</td>
+                  <td><code>test_batching.py:100</code></td></tr>
+              <tr><td>Windowing ships with the walk: <code>remote="local"</code> windows identically</td>
+                  <td><code>test_batching.py:193</code></td></tr>
+              <tr><td>No trace body names a document, a dataset, a bare tokenizer or <code>self</code></td>
+                  <td><code>test_structure.py:132</code>, <code>:147</code></td></tr>
+              <tr><td>A forward leaves no hook behind</td>
+                  <td><code>test_hooks_engine.py:134</code></td></tr>
+            </tbody>
+          </table>
+
+          <!-- ran 2026-09-23, this box, CPU, fp32: the same document through
+               both engines, values from out/logit_diff.json, equal as strings.
+               FINDINGS.md §6.4 records the same four numbers. -->
+          <p>The cross-engine result reproduces from the command line. The
+          same document through both engines gives <code>logit_diff</code> equal
+          in every decimal place — and these are the four numbers
+          <code>FINDINGS.md</code> records from a different machine:</p>
+
+          <pre><code class="language-bash">$ uv run causalab-mini run documents/v2/patching.json --engine nnterp --device-map cpu --out out/nnterp
+$ uv run causalab-mini run documents/v2/patching.json --engine hooks  --device-map cpu --out out/hooks
+$ jq -c '[.[].value]' out/nnterp/logit_diff.json out/hooks/logit_diff.json
+[-0.027417995035648346,0.18085992336273193,0.03514503687620163,-0.19330616295337677]
+[-0.027417995035648346,0.18085992336273193,0.03514503687620163,-0.19330616295337677]</code></pre>
+
+          <div class="caution">
+            <span class="label">bit-parity is a property of the documents that were run</span>
+            <!-- FINDINGS.md §8, and §19 "What held" -->
+            <p>It is not a property of writing. Recorded measurements: a
+            single-position swap is exact; replacing three positions in one write
+            differs across the two engines by 1.49e-08 on one of four rows, and so
+            does installing three writes at three positions; a single-position
+            write of a harvested mean differs by 7.45e-09 on one row while a zero
+            ablation at the same position is exact. The divergence is
+            input-dependent, enters after a replacement is installed, and is on
+            the order of one ulp when it appears. It is also machine-dependent —
+            on one CPU the engines differ where on another they do not — which is
+            why nine cross-engine assertions state a tolerance and carry the
+            measurement in their docstring.</p>
+          </div>
+
+          <div class="seealso">
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
+            <ul>
+              <li><a href="standardization.html">Standardization</a> — what nnterp
+                names for the nnterp engine, and what the hooks engine had to
+                guess to reach the same modules without it</li>
+              <li><a href="remote.html">Remote &amp; NDIF</a> — the same session
+                with <code>remote=True</code>: what ships, what comes back, and
+                what a served checkpoint decides for you</li>
+              <li><a href="cli.html">The CLI</a> — <code>--engine</code>,
+                <code>--batch-size</code> and what lands in the output
+                directory</li>
+              <li><a href="use-cases/layer-sweep.html">Layer sweep</a> — the same
+                machinery producing a result on a real model</li>
+              <li><a href="ops.html">Reads, writes, metrics</a> — the mechanisms
+                and featurizers that fill in <code>do</code> and
+                <code>featurize</code></li>
+            </ul>
+          </div>
+
+        </article>
+      </main>
+    </div>
+    <script src="site.js"></script>
+  </body>
+</html>

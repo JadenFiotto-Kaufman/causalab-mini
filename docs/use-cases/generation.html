@@ -1,0 +1,752 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Generation — causalab-mini</title>
+    <meta name="description" content="Intervene on the prompt, then read what the model actually says.">
+    <link rel="stylesheet" href="../site.css">
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to content</a>
+
+    <div class="topbar">
+      <button class="iconbutton" data-nav-toggle aria-expanded="false" aria-controls="sidebar">menu</button>
+      <span class="brand">causalab-mini</span>
+      <button class="iconbutton js-only" data-theme-toggle style="margin-left:auto">dark</button>
+    </div>
+
+    <div class="layout">
+      <aside class="sidebar" id="sidebar">
+        <a class="brand" href="../index.html">causalab-mini</a>
+        <span class="brand-sub">a plan is pure data; an engine turns it into tensors</span>
+
+        <nav aria-label="Documentation">
+          <ol>
+            <li><a href="../index.html">Home</a></li>
+          </ol>
+
+          <h2>The document</h2>
+          <ol>
+            <li><a href="../documents.html">Documents</a></li>
+            <li><a href="../locations.html">Locations</a></li>
+            <li><a href="../positions.html">Positions</a></li>
+            <li><a href="../ops.html">Reads, writes, metrics</a></li>
+          </ol>
+
+          <h2>Use cases</h2>
+          <ol>
+            <li><a href="../use-cases/index.html">All use cases</a></li>
+          </ol>
+          <ol class="sub">
+          <li><a href="../use-cases/layer-sweep.html">Layer sweep</a></li>
+          <li><a href="../use-cases/entity-patching.html">Entity patching</a></li>
+          <li><a href="../use-cases/das-fit.html">DAS fit</a></li>
+          <li><a href="../use-cases/dbm-fit.html">DBM fit</a></li>
+          <li><a href="../use-cases/attention-pattern.html">Attention pattern</a></li>
+          <li><a href="../use-cases/logit-lens.html">Logit lens</a></li>
+          <li><a href="../use-cases/generation.html" aria-current="page">Generation</a></li>
+          <li><a href="../use-cases/sae-features.html">SAE features</a></li>
+          <li><a href="../use-cases/batching-and-remote.html">Batching &amp; remote</a></li>
+          <li><a href="../use-cases/sweeps.html">Sweeps</a></li>
+          </ol>
+
+          <h2>Running</h2>
+          <ol>
+            <li><a href="../cli.html">The CLI</a></li>
+          </ol>
+
+          <h2>Understand</h2>
+          <ol>
+            <li><a href="../engine.html">The engine</a></li>
+            <li><a href="../standardization.html">Standardization</a></li>
+            <li><a href="../remote.html">Remote &amp; NDIF</a></li>
+          </ol>
+        </nav>
+
+        <div class="footer">
+          <p><a href="https://github.com/JadenFiotto-Kaufman/causalab-mini">source on GitHub</a></p>
+          <p><button class="iconbutton js-only" data-theme-toggle>dark</button></p>
+        </div>
+      </aside>
+
+      <main id="content">
+        <article class="page">
+          <header>
+            <p class="eyebrow">Use case</p>
+            <h1>Generation</h1>
+            <p class="lede">A forward that keeps going: <code>decode: N</code>, positions
+            along what the model said, and a write that fires at every step.</p>
+          </header>
+
+          <!-- causalab_mini/plan/spec.py:317 -->
+          <p><code>decode: N</code> on an intervention makes <em>every</em> forward of that
+          intervention a prefill plus N greedy steps instead of one pass. With it a read or a
+          write may name the <strong>continuation frame</strong> —
+          <code>{"frame": "generated", …}</code> — a position along what this row generated,
+          rather than along the prompt it was given.</p>
+
+          <p>Two documents in the corpus use it, and between them they use the two halves of
+          the frame. <code>generate_probe.json</code> reads at a decode <em>step</em>, swept,
+          so each step is a point of the sweep. <code>generated_answer.json</code> reads at a
+          <em>cut of the finished continuation</em> — the last token of a word the model said
+          — which is a place a row may not have, and the run reports which rows had it.</p>
+
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
+
+          <!-- ran 2026-09-23, CPU, fp32; 22 lines, the first point and the last -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/generate_probe.json
+&lt;root&gt;: Plan
+  index=0: Plan
+    score: Observe  metrics=[&#x27;p_answer/token_prob&#x27;]  saves=[&#x27;p_answer.json&#x27;, &#x27;generated.safetensors&#x27;]
+        forward &#x27;original&#x27; on &#x27;counterfactual&#x27;  (4 rows x 11 tokens)  decode=3
+          read  &#x27;v_cf&#x27; at block_output[0] pos={index:-1} via &#x27;identity&#x27;
+        forward &#x27;patched&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)  decode=3
+          write &#x27;patch&#x27; at block_output[0] pos={index:-1} swap(v_cf) via &#x27;identity&#x27;
+          read  &#x27;logits&#x27; at lm_head @step 0 pos={generated index:0} via &#x27;identity&#x27;
+  …
+  index=2: Plan
+    score: Observe  metrics=[&#x27;p_answer/token_prob&#x27;]  saves=[&#x27;p_answer.json&#x27;, &#x27;generated.safetensors&#x27;]
+        forward &#x27;original&#x27; on &#x27;counterfactual&#x27;  (4 rows x 11 tokens)  decode=3
+          read  &#x27;v_cf&#x27; at block_output[0] pos={index:-1} via &#x27;identity&#x27;
+        forward &#x27;patched&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)  decode=3
+          write &#x27;patch&#x27; at block_output[0] pos={index:-1} swap(v_cf) via &#x27;identity&#x27;
+          read  &#x27;logits&#x27; at lm_head @step 2 pos={generated index:2} via &#x27;identity&#x27;</code></pre>
+
+          <p>Three points, one per decode step. <code>decode=3</code> is on both forwards,
+          because it is a property of the intervention and not of one read. The write is in
+          the prompt frame at <code>pos={index:-1}</code>, so it happens once, at the prefill;
+          the read is <code>@step 2</code>, two greedy tokens later.</p>
+
+          <h2 id="the-decode-is-a-bound-not-a-stop">The decode is a bound, not a stop <a class="anchor" href="#the-decode-is-a-bound-not-a-stop" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:122 — min_new_tokens=decode,
+               max_new_tokens=decode, do_sample=False -->
+          <p>A decoding forward is one <code>generate</code> trace with
+          <code>max_new_tokens</code> and <code>min_new_tokens</code> both set to
+          <code>decode</code>, and sampling off. Every row produces exactly N tokens and the
+          batch stays rectangular, which is what lets a step be a position at all: step 2 is
+          step 2 on every row.</p>
+
+          <!-- causalab_mini/ops/locate.py:127 — `continuation`: the decode ran to the bound,
+               so how far a row *meant* to generate is a result -->
+          <div class="note">
+            <span class="label">EOS is held off</span>
+            <p>Forcing the bound means a row that would have stopped does not. That is not
+            thrown away: the continuation's frame is cut at the row's first stop token, the
+            stop token is the last one in it, and a row that never stopped has the whole
+            bound and no <code>eos</code> segment. "Did the model stop?" comes home as a
+            reported reason on the row rather than as an exception that ends the run.</p>
+          </div>
+
+          <!-- causalab_mini/ops/locate.py:134 — the character map is built from the ids the
+               decode produced, never from re-encoding the finished text -->
+          <p>The character map the frame uses is built from the ids the decode produced, not
+          by re-encoding the text it decoded to. A tokenizer is free to merge across a
+          boundary the decode never saw, and then a span found in the re-encoded text would
+          name tokens that never existed.</p>
+
+          <h2 id="the-two-halves-of-the-frame">The two halves of the frame <a class="anchor" href="#the-two-halves-of-the-frame" aria-label="Link to this section">#</a></h2>
+
+          <p>A read may name any cut of the continuation, because by the time the run scores
+          it the whole continuation exists. A write happens <em>during</em> the decode, so it
+          may only name a step the decode has already reached.</p>
+
+          <!-- causalab_mini/plan/spec.py:676-707 — the four refusals below -->
+          <table>
+            <thead><tr><th>position</th><th>what it names</th><th>read</th><th>write</th></tr></thead>
+            <tbody>
+              <tr><td><code>{"frame": "generated", "index": k}</code>, k ≥ 0</td>
+                  <td>decode step k</td><td>yes</td><td>yes</td></tr>
+              <tr><td><code>{"frame": "generated", "all": true}</code></td>
+                  <td>as a write, every decode step; as a read, every token of the finished
+                  continuation — which is a window, so no metric scores it directly</td>
+                  <td>yes</td><td>yes</td></tr>
+              <tr><td><code>{"frame": "generated", "index": -1}</code></td>
+                  <td>the last token of the finished continuation</td><td>yes</td><td>no</td></tr>
+              <tr><td><code>{"frame": "generated", "index": -1, "scope": {"variable": "c"}}</code></td>
+                  <td>the last token of where column <code>c</code>'s text was said</td><td>yes</td><td>no</td></tr>
+              <tr><td><code>{"frame": "generated", "index": -1, "scope": {"segment": "eos"}}</code></td>
+                  <td>the row's stop token</td><td>yes</td><td>no</td></tr>
+            </tbody>
+          </table>
+
+          <p>The bottom three are cuts of something that does not exist until the decode has
+          finished. A read of one fires at every step and the stack is cut afterwards; a write
+          is refused, by name:</p>
+
+          <!-- ran 2026-09-23; the traceback above the message trimmed -->
+          <pre><code class="language-bash">$ uv run causalab-mini validate gen_write_last.json
+Traceback (most recent call last):
+  …
+pydantic_core._pydantic_core.ValidationError: 1 validation error for Spec
+  Value error, interventions.steer: write &#x27;push&#x27;: a write in the continuation frame is at a step the decode has reached — {&#x27;index&#x27;: k} with k &gt;= 0, or {&#x27;all&#x27;: true}. {generated index:-1} names a cut of the finished continuation, which is something to read and not something to write into</code></pre>
+
+          <h2 id="reading-at-a-step-generate-probe">Reading at a step: <code>generate_probe</code> <a class="anchor" href="#reading-at-a-step-generate-probe" aria-label="Link to this section">#</a></h2>
+
+          <details class="listing">
+            <summary><code>documents/v2/generate_probe.json</code> <span class="what">— the whole document</span></summary>
+            <pre><code class="language-json">{
+  &quot;header&quot;: {
+    &quot;description&quot;: &quot;Generation: the interchange at layer 0 of the prompt, then three greedy tokens, with the head read at each decode step \u2014 {&#x27;frame&#x27;: &#x27;generated&#x27;, &#x27;index&#x27;: k} is the continuation frame, swept here so each step is a point. Does the patch, made once at the prefill, still move what the model says two tokens later? It reaches the continuation only through the cache. The generated ids come home as a result too.&quot;
+  },
+  &quot;model&quot;: {
+    &quot;key&quot;: &quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;,
+    &quot;revision&quot;: &quot;9fb191250dd56d0ba7ec9785a025ed29c03d5998&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;
+  },
+  &quot;roles&quot;: {
+    &quot;base&quot;: {
+      &quot;field&quot;: &quot;input&quot;
+    },
+    &quot;counterfactual&quot;: {
+      &quot;field&quot;: &quot;counterfactual_inputs[0]&quot;
+    }
+  },
+  &quot;sites&quot;: {
+    &quot;target&quot;: {
+      &quot;component&quot;: &quot;block_output&quot;,
+      &quot;layers&quot;: [
+        0
+      ]
+    },
+    &quot;head&quot;: {
+      &quot;component&quot;: &quot;lm_head&quot;
+    }
+  },
+  &quot;interventions&quot;: {
+    &quot;generate&quot;: {
+      &quot;reads&quot;: {
+        &quot;v_cf&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;original&quot;,
+          &quot;input&quot;: &quot;counterfactual&quot;
+        },
+        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: {
+            &quot;frame&quot;: &quot;generated&quot;,
+            &quot;index&quot;: {
+              &quot;sweep&quot;: [
+                0,
+                1,
+                2
+              ]
+            }
+          },
+          &quot;model&quot;: &quot;patched&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        }
+      },
+      &quot;writes&quot;: {
+        &quot;patch&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;mechanism&quot;: &quot;swap&quot;,
+          &quot;operand&quot;: &quot;v_cf&quot;
+        }
+      },
+      &quot;models&quot;: {
+        &quot;patched&quot;: {
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;writes&quot;: [
+            &quot;patch&quot;
+          ]
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;p_answer&quot;: {
+          &quot;kind&quot;: &quot;token_prob&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;token&quot;: &quot;cf_answer&quot;
+        }
+      },
+      &quot;decode&quot;: 3
+    }
+  },
+  &quot;steps&quot;: {
+    &quot;score&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;interventions&quot;: &quot;generate&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;p_answer&quot;,
+          &quot;file_path&quot;: &quot;p_answer.json&quot;
+        },
+        {
+          &quot;value&quot;: &quot;patched.generated&quot;,
+          &quot;file_path&quot;: &quot;generated.safetensors&quot;
+        }
+      ]
+    }
+  }
+}</code></pre>
+          </details>
+
+          <p>The swept field is the read's <code>index</code>, inside the position:</p>
+
+          <pre><code class="language-json">"logits": {
+  "site": "head",
+  "pos": {"frame": "generated", "index": {"sweep": [0, 1, 2]}},
+  "model": "patched",
+  "input": "base"
+}</code></pre>
+
+          <!-- causalab_mini/plan/sweep.py:159 — the label is the swept field's own name -->
+          <p>so the points are named after the field the wrapper sits on, <code>index</code>,
+          and land in directories of that name:</p>
+
+          <!-- ran 2026-09-23, CPU, fp32, tiny-random-LlamaForCausalLM -->
+          <pre><code class="language-bash">$ uv run causalab-mini run documents/v2/generate_probe.json --device-map cpu --out out/gen
+out/b-gen/document.json
+out/b-gen/run.json
+out/b-gen/index=0/document.json
+out/b-gen/index=0/p_answer.json
+out/b-gen/index=0/generated.safetensors
+out/b-gen/index=1/document.json
+out/b-gen/index=1/p_answer.json
+out/b-gen/index=1/generated.safetensors
+out/b-gen/index=2/document.json
+out/b-gen/index=2/p_answer.json
+out/b-gen/index=2/generated.safetensors</code></pre>
+
+          <p><code>p_answer</code> is <code>token_prob</code> of the <code>cf_answer</code>
+          column, per row, at that step. The four rows of
+          <code>weekdays/train</code>, one column per point:</p>
+
+          <table>
+            <thead><tr><th>row</th><th class="num">step 0</th><th class="num">step 1</th><th class="num">step 2</th></tr></thead>
+            <tbody>
+              <tr><td><code>0</code></td><td class="num">2.747e-05</td><td class="num">3.009e-05</td><td class="num">2.967e-05</td></tr>
+              <tr><td><code>1</code></td><td class="num">3.412e-05</td><td class="num">2.982e-05</td><td class="num">3.160e-05</td></tr>
+              <tr><td><code>2</code></td><td class="num">2.829e-05</td><td class="num">3.266e-05</td><td class="num">3.006e-05</td></tr>
+              <tr><td><code>3</code></td><td class="num">2.827e-05</td><td class="num">3.368e-05</td><td class="num">2.937e-05</td></tr>
+            </tbody>
+          </table>
+
+          <div class="caution">
+            <span class="label">these numbers mean nothing</span>
+            <p><code>hf-internal-testing/tiny-random-LlamaForCausalLM</code> has random
+            weights. Every probability here is about 3e-05, which is 1/32000 — the uniform
+            distribution over its vocabulary. The document is here for the mechanism; for a
+            result, run a <code>documents/real/</code> document.</p>
+          </div>
+
+          <p>The written row says where it was read, and in the continuation frame that is the
+          <em>step</em>, not an index into the prompt:</p>
+
+          <pre><code class="language-json">$ head -12 out/gen/index=2/p_answer.json
+[
+ {
+  &quot;example_id&quot;: &quot;0&quot;,
+  &quot;metric&quot;: &quot;p_answer&quot;,
+  &quot;value&quot;: 2.9670592994079925e-05,
+  &quot;eligible&quot;: true,
+  &quot;positions&quot;: [
+   2
+  ],
+  &quot;reason&quot;: &quot;&quot;,
+  &quot;unit&quot;: &quot;probability&quot;,
+…</code></pre>
+
+          <h3 id="the-generated-ids-come-home">The generated ids come home <a class="anchor" href="#the-generated-ids-come-home" aria-label="Link to this section">#</a></h3>
+
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:127 —
+               values[f"{forward.name}.generated"] = tracer.result[:, prompt:].clone() -->
+          <p>A decoding forward publishes one more value than a plain one:
+          <code>&lt;model&gt;.generated</code>, the ids it produced, prompt stripped. The
+          document saves <code>patched.generated</code> to a safetensors file, and it is a
+          <code>[4, 3]</code> int64 tensor — four rows, three steps. Decoded, all four rows of
+          this point are <code>'Handler substr energ'</code>: the weights are random, so the
+          continuation does not depend on the prompt.</p>
+
+          <p>The prompt-frame write reaches those steps only through the cache — nothing writes
+          at step 1 or step 2. Measured against the same model with no write at all, the
+          probabilities move by up to 1.4e-07 at step 0, where the write lands, and by up to
+          4.6e-09 at steps 1 and 2. Small, and not zero.</p>
+
+          <h2 id="reading-where-the-model-said-something-generated-answer">Reading where the model said something: <code>generated_answer</code> <a class="anchor" href="#reading-where-the-model-said-something-generated-answer" aria-label="Link to this section">#</a></h2>
+
+          <details class="listing">
+            <summary><code>documents/v2/generated_answer.json</code> <span class="what">— the whole document</span></summary>
+            <pre><code class="language-json">{
+  &quot;header&quot;: {
+    &quot;description&quot;: &quot;The continuation frame, read where the model said the row&#x27;s own text. `said` is a word this checkpoint does say in its first six tokens for two of these rows and does not for the other two \u2014 the weights are random, so what it says is gibberish and the column was written to match it; on a real model `said` would be the answer. The read is {&#x27;frame&#x27;: &#x27;generated&#x27;, &#x27;index&#x27;: -1, &#x27;scope&#x27;: {&#x27;variable&#x27;: &#x27;said&#x27;}}: the last token of that word in what this row generated. Whether the model said it at all is a reported result \u2014 two rows score and two come back `alignment_missing` \u2014 rather than an exception that ends the run. The second read asks where the row stopped; mini holds EOS off so the decode runs to its bound, so no row stops and every row says so.&quot;
+  },
+  &quot;model&quot;: {
+    &quot;key&quot;: &quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;,
+    &quot;revision&quot;: &quot;9fb191250dd56d0ba7ec9785a025ed29c03d5998&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;
+  },
+  &quot;roles&quot;: {
+    &quot;base&quot;: {
+      &quot;field&quot;: &quot;input&quot;
+    }
+  },
+  &quot;sites&quot;: {
+    &quot;head&quot;: {
+      &quot;component&quot;: &quot;lm_head&quot;
+    }
+  },
+  &quot;interventions&quot;: {
+    &quot;say&quot;: {
+      &quot;reads&quot;: {
+        &quot;at_said&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: {
+            &quot;frame&quot;: &quot;generated&quot;,
+            &quot;index&quot;: -1,
+            &quot;scope&quot;: {
+              &quot;variable&quot;: &quot;said&quot;
+            }
+          },
+          &quot;model&quot;: &quot;original&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        },
+        &quot;at_stop&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: {
+            &quot;frame&quot;: &quot;generated&quot;,
+            &quot;index&quot;: -1,
+            &quot;scope&quot;: {
+              &quot;segment&quot;: &quot;eos&quot;
+            }
+          },
+          &quot;model&quot;: &quot;original&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;p_answer&quot;: {
+          &quot;kind&quot;: &quot;token_prob&quot;,
+          &quot;of&quot;: &quot;at_said&quot;,
+          &quot;token&quot;: &quot;cf_answer&quot;
+        }
+      },
+      &quot;decode&quot;: 6
+    }
+  },
+  &quot;steps&quot;: {
+    &quot;score&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;interventions&quot;: &quot;say&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/said&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;p_answer&quot;,
+          &quot;file_path&quot;: &quot;p_answer.json&quot;
+        }
+      ]
+    }
+  }
+}</code></pre>
+          </details>
+
+          <p>Its dataset carries a <code>said</code> column, a word to look for in the
+          continuation:</p>
+
+          <!-- ran 2026-09-23 -->
+          <pre><code class="language-bash">$ uv run causalab-mini data weekdays/said
+weekdays/said: 4 rows
+  columns: base_answer, cf_answer, example_id, input, said, split
+  splits:  all
+  sample:  {&quot;example_id&quot;: &quot;substr&quot;, &quot;input&quot;: &quot;If today is Thursday, tomorrow is&quot;, &quot;said&quot;: &quot;substr&quot;, &quot;base_answer&quot;: &quot; Friday&quot;, &quot;cf_answer&quot;: &quot; Sunday&quot;, &quot;split&quot;: &quot;all&quot;}</code></pre>
+
+          <p>Two reads, both at the head, both cuts of the finished continuation:</p>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/generated_answer.json
+&lt;root&gt;: Plan
+  score: Observe  metrics=[&#x27;p_answer/token_prob&#x27;]  saves=[&#x27;p_answer.json&#x27;]
+      forward &#x27;original&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)  decode=6
+        read  &#x27;at_said&#x27; at lm_head over 6 steps pos={generated index:-1 scope:{variable:said}} via &#x27;identity&#x27;
+        read  &#x27;at_stop&#x27; at lm_head over 6 steps pos={generated index:-1 scope:{segment:eos}} via &#x27;identity&#x27;</code></pre>
+
+          <!-- causalab_mini/engine/steps.py:353 — _continuation: a read whose position only
+               the finished text can settle fired at every step and left one value per step;
+               those become one tensor and the spec is resolved against the continuation -->
+          <p><code>over 6 steps</code> is what a cut costs: the read cannot say which step it
+          wants until the decode has finished, so it fires at every one, keeps a value per
+          step, and the stack is cut against the continuation afterwards.</p>
+
+          <!-- causalab_mini/plan/build.py:940, 960 — STACK_LIMIT, and the count is the
+               pass's rows whatever --batch-size the run uses -->
+          <div class="caution">
+            <span class="label">a cut has a size, and it is checked before the run</span>
+            <p>Keeping every step is <code>rows × decode × width</code> numbers, which is
+            nothing at <code>decode: 6</code> on a 16-wide site and a gigabyte at
+            <code>decode: 256</code> on a wide one. The compiler knows all three numbers
+            before any weights are loaded and refuses above 256 MiB, naming the three ways
+            out: name the step instead of a cut, decode fewer tokens, or score fewer rows in
+            one pass. <code>--batch-size</code> is not one of them — the count is the whole
+            pass's rows.</p>
+          </div>
+
+          <p>Six greedy tokens, and every row of this checkpoint produces the same six:</p>
+
+          <!-- measured 2026-09-23: generated_answer.json with one save added
+               ({"value": "original.generated", "file_path": "generated.safetensors"}),
+               the ids decoded with the model's own tokenizer -->
+          <pre><code>row         said        the six generated tokens
+substr      'substr'    'Handler' 'substr' 'energ' 'calc' 'toss' 'orter'
+energ       'energ'     'Handler' 'substr' 'energ' 'calc' 'toss' 'orter'
+Friday      'Friday'    'Handler' 'substr' 'energ' 'calc' 'toss' 'orter'
+Saturday    'Saturday'  'Handler' 'substr' 'energ' 'calc' 'toss' 'orter'</code></pre>
+
+          <p>So two rows contain their own <code>said</code> word and two do not. That is the
+          point of the document: eligibility is per row, and it is a reported result.</p>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-bash">$ uv run causalab-mini run documents/v2/generated_answer.json --device-map cpu --out out/said
+out/b-genans/document.json
+out/b-genans/run.json
+out/b-genans/p_answer.json</code></pre>
+
+          <pre><code class="language-json">$ cat out/said/p_answer.json
+[
+ {
+  &quot;example_id&quot;: &quot;substr&quot;,
+  &quot;metric&quot;: &quot;p_answer&quot;,
+  &quot;value&quot;: 3.008824569405988e-05,
+  &quot;eligible&quot;: true,
+  &quot;positions&quot;: [
+   1
+  ],
+  &quot;reason&quot;: &quot;&quot;,
+…
+ },
+ {
+  &quot;example_id&quot;: &quot;Friday&quot;,
+  &quot;metric&quot;: &quot;p_answer&quot;,
+  &quot;value&quot;: null,
+  &quot;eligible&quot;: false,
+  &quot;positions&quot;: [],
+  &quot;reason&quot;: &quot;alignment_missing&quot;,
+…</code></pre>
+
+          <p><code>'substr'</code> is the row's second generated token, so its position is
+          <code>[1]</code>; <code>'energ'</code> is <code>[2]</code>. The two rows whose word
+          is not there get <code>value: null</code>, <code>eligible: false</code> and
+          <code>reason: "alignment_missing"</code> — a row of the table, not a gap in it, so
+          the miss can never be read as a zero or quietly shorten a denominator.</p>
+
+          <!-- documents/v2/generated_answer.json header: at_stop is alignment_missing on all
+               four rows, because mini holds EOS off so no row stops -->
+          <div class="note">
+            <span class="label">the second read is the EOS cut</span>
+            <p><code>at_stop</code> is <code>{"frame": "generated", "index": -1, "scope":
+            {"segment": "eos"}}</code> — the row's stop token. Because the decode is a bound
+            and EOS is held off, no row here stops, so no row has an <code>eos</code> segment
+            and all four resolve to <code>alignment_missing</code>. Nothing is saved from it;
+            it is in the document to show that "the model never stopped" is a position that
+            fails to resolve rather than an error.</p>
+          </div>
+
+          <h2 id="writing-at-every-step-steering">Writing at every step: steering <a class="anchor" href="#writing-at-every-step-steering" aria-label="Link to this section">#</a></h2>
+
+          <p>No document in <code>documents/</code> writes in the continuation frame. This one
+          was written for this page and run here; it is not part of the corpus. It reads the
+          layer-0 residual at the prompt's last token from the un-written model, then adds it
+          back, scaled by 4, at <strong>every</strong> decode step of a second model.</p>
+
+          <figure class="listing">
+            <figcaption><code>generate_steer.json</code> <span class="what">— authored for this page, not in <code>documents/</code></span></figcaption>
+            <pre><code class="language-json">{
+  &quot;header&quot;: {
+    &quot;description&quot;: &quot;Not in the corpus: a steering write in the continuation frame. The layer-0 residual at the prompt&#x27;s last token is read from the un-written model and added back, scaled, at EVERY decode step of a second model - {&#x27;frame&#x27;: &#x27;generated&#x27;, &#x27;all&#x27;: true} - so the write fires three times and not once. Both models are read at the same swept decode step, so the two p(answer) curves are directly comparable, and both continuations come home as ids.&quot;
+  },
+  &quot;model&quot;: {
+    &quot;key&quot;: &quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;,
+    &quot;revision&quot;: &quot;9fb191250dd56d0ba7ec9785a025ed29c03d5998&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;
+  },
+  &quot;roles&quot;: {
+    &quot;base&quot;: {&quot;field&quot;: &quot;input&quot;}
+  },
+  &quot;sites&quot;: {
+    &quot;target&quot;: {&quot;component&quot;: &quot;block_output&quot;, &quot;layers&quot;: [0]},
+    &quot;head&quot;: {&quot;component&quot;: &quot;lm_head&quot;}
+  },
+  &quot;interventions&quot;: {
+    &quot;steer&quot;: {
+      &quot;reads&quot;: {
+        &quot;v_last&quot;: {&quot;site&quot;: &quot;target&quot;, &quot;pos&quot;: -1, &quot;model&quot;: &quot;original&quot;, &quot;input&quot;: &quot;base&quot;},
+        &quot;clean_logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: {&quot;frame&quot;: &quot;generated&quot;, &quot;index&quot;: {&quot;sweep&quot;: [0, 1, 2], &quot;as&quot;: &quot;step&quot;}},
+          &quot;model&quot;: &quot;original&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        },
+        &quot;steered_logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: {&quot;frame&quot;: &quot;generated&quot;, &quot;index&quot;: {&quot;sweep&quot;: [0, 1, 2], &quot;as&quot;: &quot;step&quot;}},
+          &quot;model&quot;: &quot;steered&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        }
+      },
+      &quot;writes&quot;: {
+        &quot;push&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: {&quot;frame&quot;: &quot;generated&quot;, &quot;all&quot;: true},
+          &quot;mechanism&quot;: &quot;add_scaled&quot;,
+          &quot;operand&quot;: &quot;v_last&quot;,
+          &quot;params&quot;: {&quot;scale&quot;: 4.0}
+        }
+      },
+      &quot;models&quot;: {
+        &quot;steered&quot;: {&quot;input&quot;: &quot;base&quot;, &quot;writes&quot;: [&quot;push&quot;]}
+      },
+      &quot;metrics&quot;: {
+        &quot;p_clean&quot;: {&quot;kind&quot;: &quot;token_prob&quot;, &quot;of&quot;: &quot;clean_logits&quot;, &quot;token&quot;: &quot;cf_answer&quot;},
+        &quot;p_steered&quot;: {&quot;kind&quot;: &quot;token_prob&quot;, &quot;of&quot;: &quot;steered_logits&quot;, &quot;token&quot;: &quot;cf_answer&quot;}
+      },
+      &quot;decode&quot;: 3
+    }
+  },
+  &quot;steps&quot;: {
+    &quot;score&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;interventions&quot;: &quot;steer&quot;,
+      &quot;rows&quot;: {&quot;base&quot;: &quot;weekdays/train&quot;},
+      &quot;saves&quot;: [
+        {&quot;value&quot;: &quot;p_clean&quot;, &quot;file_path&quot;: &quot;p_clean.json&quot;},
+        {&quot;value&quot;: &quot;p_steered&quot;, &quot;file_path&quot;: &quot;p_steered.json&quot;},
+        {&quot;value&quot;: &quot;original.generated&quot;, &quot;file_path&quot;: &quot;clean.safetensors&quot;},
+        {&quot;value&quot;: &quot;steered.generated&quot;, &quot;file_path&quot;: &quot;steered.safetensors&quot;}
+      ]
+    }
+  }
+}</code></pre>
+          </figure>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain generate_steer.json
+&lt;root&gt;: Plan
+  step=0: Plan
+    score: Observe  metrics=[&#x27;p_clean/token_prob&#x27;, &#x27;p_steered/token_prob&#x27;]  saves=[&#x27;p_clean.json&#x27;, &#x27;p_steered.json&#x27;, &#x27;clean.safetensors&#x27;, &#x27;steered.safetensors&#x27;]
+        forward &#x27;original&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)  decode=3
+          read  &#x27;v_last&#x27; at block_output[0] pos={index:-1} via &#x27;identity&#x27;
+          read  &#x27;clean_logits&#x27; at lm_head @step 0 pos={generated index:0} via &#x27;identity&#x27;
+        forward &#x27;steered&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)  decode=3
+          write &#x27;push&#x27; at block_output[0] @step all pos={generated all} add_scaled(v_last, scale=4.0) via &#x27;identity&#x27;
+          read  &#x27;steered_logits&#x27; at lm_head @step 0 pos={generated index:0} via &#x27;identity&#x27;
+  step=1: Plan
+    score: Observe  metrics=[&#x27;p_clean/token_prob&#x27;, &#x27;p_steered/token_prob&#x27;]  saves=[&#x27;p_clean.json&#x27;, &#x27;p_steered.json&#x27;, &#x27;clean.safetensors&#x27;, &#x27;steered.safetensors&#x27;]
+        forward &#x27;original&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)  decode=3
+          read  &#x27;v_last&#x27; at block_output[0] pos={index:-1} via &#x27;identity&#x27;
+          read  &#x27;clean_logits&#x27; at lm_head @step 1 pos={generated index:1} via &#x27;identity&#x27;
+        forward &#x27;steered&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)  decode=3
+          write &#x27;push&#x27; at block_output[0] @step all pos={generated all} add_scaled(v_last, scale=4.0) via &#x27;identity&#x27;
+          read  &#x27;steered_logits&#x27; at lm_head @step 1 pos={generated index:1} via &#x27;identity&#x27;
+  step=2: Plan
+    score: Observe  metrics=[&#x27;p_clean/token_prob&#x27;, &#x27;p_steered/token_prob&#x27;]  saves=[&#x27;p_clean.json&#x27;, &#x27;p_steered.json&#x27;, &#x27;clean.safetensors&#x27;, &#x27;steered.safetensors&#x27;]
+        forward &#x27;original&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)  decode=3
+          read  &#x27;v_last&#x27; at block_output[0] pos={index:-1} via &#x27;identity&#x27;
+          read  &#x27;clean_logits&#x27; at lm_head @step 2 pos={generated index:2} via &#x27;identity&#x27;
+        forward &#x27;steered&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)  decode=3
+          write &#x27;push&#x27; at block_output[0] @step all pos={generated all} add_scaled(v_last, scale=4.0) via &#x27;identity&#x27;
+          read  &#x27;steered_logits&#x27; at lm_head @step 2 pos={generated index:2} via &#x27;identity&#x27;</code></pre>
+
+          <!-- causalab_mini/ops/intervene.py:119 — `applies`: "all" is every step -->
+          <p><code>@step all</code> is the whole difference from
+          <code>generate_probe</code>, where the same site carried <code>@step</code> nothing
+          at all. A tap in the prompt frame applies at step 0, the prefill; a tap at
+          <code>{"index": k}</code> applies at step k; a tap at <code>{"all": true}</code>
+          applies at every step, prefill included.</p>
+
+          <!-- causalab_mini/ops/intervene.py:129 — `at_step`: past the prefill a forward sees
+               one position, so the plan's index cannot apply and the last index is used -->
+          <p>Where it lands is decided per step, not compiled in: past the prefill the forward
+          sees one position, so the write goes to the last index of whatever the sequence axis
+          has. At the prefill that is the prompt's last token, which is where
+          <code>v_last</code> was read.</p>
+
+          <p>Both models are read at the same swept decode step, so the two columns below are
+          the same rows, the same step, with and without the write:</p>
+
+          <!-- ran 2026-09-23, CPU, fp32; means over the four rows are not taken — the rows
+               are shown, because there are four of them -->
+          <table>
+            <thead><tr><th>row</th>
+              <th class="num">step 0, clean</th><th class="num">step 0, steered</th>
+              <th class="num">step 1, clean</th><th class="num">step 1, steered</th>
+              <th class="num">step 2, clean</th><th class="num">step 2, steered</th></tr></thead>
+            <tbody>
+              <tr><td><code>0</code></td><td class="num">2.735e-05</td><td class="num">2.772e-05</td><td class="num">3.009e-05</td><td class="num">2.740e-05</td><td class="num">2.967e-05</td><td class="num">2.674e-05</td></tr>
+              <tr><td><code>1</code></td><td class="num">3.412e-05</td><td class="num">3.398e-05</td><td class="num">2.982e-05</td><td class="num">3.357e-05</td><td class="num">3.160e-05</td><td class="num">3.529e-05</td></tr>
+              <tr><td><code>2</code></td><td class="num">2.843e-05</td><td class="num">2.808e-05</td><td class="num">3.266e-05</td><td class="num">2.835e-05</td><td class="num">3.007e-05</td><td class="num">2.826e-05</td></tr>
+              <tr><td><code>3</code></td><td class="num">2.837e-05</td><td class="num">2.832e-05</td><td class="num">3.368e-05</td><td class="num">2.894e-05</td><td class="num">2.937e-05</td><td class="num">2.912e-05</td></tr>
+            </tbody>
+          </table>
+
+          <p>At step 0 the write moves the probability in the fourth digit; at steps 1 and 2 it
+          moves it in the second, because by then it has fired again. It also changes what the
+          model says, which the two saved id tensors show directly:</p>
+
+          <!-- measured 2026-09-23: out/steer/step=0/{clean,steered}.safetensors, decoded with
+               the model's own tokenizer. Every row of this checkpoint decodes the same. -->
+          <pre><code>original.generated   [4598, 25148, 18190]   'Handler substr energ'
+steered.generated    [4598,  5448, 31926]   'Handler wurden𝓝'</code></pre>
+
+          <p>Step 0 is unchanged and steps 1 and 2 are not. The write does fire at the prefill
+          — the step-0 probabilities differ — but not by enough to move the argmax on this
+          checkpoint.</p>
+
+          <h2 id="what-is-refused">What is refused <a class="anchor" href="#what-is-refused" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/plan/spec.py:678, 685, 702, 705 — all four checked on the Spec,
+               so no model is loaded to find out -->
+          <table>
+            <thead><tr><th>document</th><th>message</th></tr></thead>
+            <tbody>
+              <tr><td>a generated position with <code>decode: 0</code></td>
+                  <td><code>read 'clean_logits': a generated position needs `decode` &gt; 0</code></td></tr>
+              <tr><td>a read or write past the budget</td>
+                  <td><code>write 'push': step 5 of a 3-token decode</code></td></tr>
+              <tr><td>a write at <code>{"index": -1}</code> or at the <code>eos</code> cut</td>
+                  <td><code>a write in the continuation frame is at a step the decode has reached …</code></td></tr>
+              <tr><td>a write with a <code>scope</code></td>
+                  <td><code>write 'push': a write in the continuation frame takes no scope; … is only known once the decode has finished</code></td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/shapes.py:88 -->
+          <p>One more is refused a level down: <code>{"scope": {"segment": "eos"}}</code> in
+          the <em>prompt</em> frame. <code>eos</code> is a run of the generated frame, and a
+          prompt does not have one.</p>
+
+          <!-- causalab_mini/shapes.py:97-103 — each frame refuses the other's segment;
+               causalab_mini/data/tokens.py:56-88 fills the prompt frame's -->
+          <p>The other direction is refused too: a chat turn in the
+          <em>generated</em> frame. <code>eos</code> is the one segment name a frame
+          invents; every other one is a turn of the prompt, and a conversation names
+          it — see <a href="../positions.html#chat-turns">chat turns</a>.</p>
+
+          <div class="seealso">
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
+            <ul>
+              <li><a href="../positions.html">Positions</a> — the whole <code>Where</code>
+                  vocabulary the continuation frame is one field of, and what
+                  <code>alignment_missing</code> is alongside</li>
+              <li><a href="../ops.html">Reads, writes, metrics</a> — <code>add_scaled</code>
+                  and the other five mechanisms, and why a metric needs a one-position read</li>
+              <li><a href="sweeps.html">Sweeps</a> — why sweeping the decode step gives one
+                  directory per step</li>
+              <li><a href="layer-sweep.html">Layer sweep</a> — the same swap write on a real
+                  model, where the numbers mean something</li>
+            </ul>
+          </div>
+
+        </article>
+      </main>
+    </div>
+    <script src="../site.js"></script>
+  </body>
+</html>

@@ -1,0 +1,795 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Positions — causalab-mini</title>
+    <meta name="description" content="The Where vocabulary: which sequence, which run of it, and how much.">
+    <link rel="stylesheet" href="site.css">
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to content</a>
+
+    <div class="topbar">
+      <button class="iconbutton" data-nav-toggle aria-expanded="false" aria-controls="sidebar">menu</button>
+      <span class="brand">causalab-mini</span>
+      <button class="iconbutton js-only" data-theme-toggle style="margin-left:auto">dark</button>
+    </div>
+
+    <div class="layout">
+      <aside class="sidebar" id="sidebar">
+        <a class="brand" href="index.html">causalab-mini</a>
+        <span class="brand-sub">a plan is pure data; an engine turns it into tensors</span>
+
+        <nav aria-label="Documentation">
+          <ol>
+            <li><a href="index.html">Home</a></li>
+          </ol>
+
+          <h2>The document</h2>
+          <ol>
+            <li><a href="documents.html">Documents</a></li>
+            <li><a href="locations.html">Locations</a></li>
+            <li><a href="positions.html" aria-current="page">Positions</a></li>
+            <li><a href="ops.html">Reads, writes, metrics</a></li>
+          </ol>
+
+          <h2>Use cases</h2>
+          <ol>
+            <li><a href="use-cases/index.html">All use cases</a></li>
+          </ol>
+          <ol class="sub">
+          <li><a href="use-cases/layer-sweep.html">Layer sweep</a></li>
+          <li><a href="use-cases/entity-patching.html">Entity patching</a></li>
+          <li><a href="use-cases/das-fit.html">DAS fit</a></li>
+          <li><a href="use-cases/dbm-fit.html">DBM fit</a></li>
+          <li><a href="use-cases/attention-pattern.html">Attention pattern</a></li>
+          <li><a href="use-cases/logit-lens.html">Logit lens</a></li>
+          <li><a href="use-cases/generation.html">Generation</a></li>
+          <li><a href="use-cases/sae-features.html">SAE features</a></li>
+          <li><a href="use-cases/batching-and-remote.html">Batching &amp; remote</a></li>
+          <li><a href="use-cases/sweeps.html">Sweeps</a></li>
+          </ol>
+
+          <h2>Running</h2>
+          <ol>
+            <li><a href="cli.html">The CLI</a></li>
+          </ol>
+
+          <h2>Understand</h2>
+          <ol>
+            <li><a href="engine.html">The engine</a></li>
+            <li><a href="standardization.html">Standardization</a></li>
+            <li><a href="remote.html">Remote &amp; NDIF</a></li>
+          </ol>
+        </nav>
+
+        <div class="footer">
+          <p><a href="https://github.com/JadenFiotto-Kaufman/causalab-mini">source on GitHub</a></p>
+          <p><button class="iconbutton js-only" data-theme-toggle>dark</button></p>
+        </div>
+      </aside>
+
+      <main id="content">
+        <article class="page">
+          <header>
+            <p class="eyebrow">Reference</p>
+            <h1>Positions</h1>
+            <p class="lede">Where along a sequence a read or a write acts — a spec, resolved per row.</p>
+          </header>
+
+          <!-- causalab_mini/shapes.py:50-66 — the Where docstring: "Three independent questions, one field each" -->
+          <p>A position is never an integer in a document. It is a spec with three
+          independent fields — which sequence (<code>frame</code>), which run of it
+          (<code>scope</code>), and how much of that run (exactly one of
+          <code>index</code>, <code>span</code>, <code>last</code> and
+          <code>all</code>) — and the integers come out of a row. One spec is written
+          once and every row answers it for itself, which is what lets
+          <code>{"index": -1, "scope": {"variable": "entity"}}</code> mean the last
+          token of <em>this row's</em> entity, whatever text that is and however many
+          tokens it takes.</p>
+
+          <!-- causalab_mini/ops/locate.py:1-27 — AGNOSTIC: stdlib, torch and shapes.py only, "which is what lets it run where the model is" -->
+          <!-- FINDINGS.md §25, §25.1 — the block reaches the served checkpoint's own tokenizer, measured through nnsight's persistent objects -->
+          <p>Resolution happens inside the session, where the model is, against the
+          <em>model's</em> tokenizer — not on the client. On a remote run that is the
+          served checkpoint's own tokenizer, reached through nnsight's persistent
+          objects, so no tokenizer bytes travel and a document runs against a model
+          whose tokenizer the client never loads (FINDINGS §25.1). The resolver,
+          <code>causalab_mini/ops/locate.py</code>, imports nothing but the standard
+          library, <code>torch</code> and <code>shapes.py</code> for exactly that
+          reason.</p>
+
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
+
+          <!-- ran 2026-09-24, CPU; causalab_mini/shapes.py:107-123 (Where.forms) derives these lines off the dataclass -->
+          <pre><code class="language-bash">$ uv run causalab-mini vocab
+…
+position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, all=bool
+                  scope: variable=str, segment=str
+                  frame: Literal['prompt', 'generated']; a bare integer is {&quot;index&quot;: i}; -1 is the last token</code></pre>
+
+          <p>Three positions out of one shipped document — the same spec on both sides
+          of an interchange, and the bare integer that is the whole of the sugar:</p>
+
+          <figure class="listing">
+            <figcaption><code>documents/v2/entity_patch.json</code> <span class="what">— the two reads and the write, verbatim</span></figcaption>
+            <pre><code class="language-json">      &quot;reads&quot;: {
+        &quot;v_cf&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: {
+            &quot;index&quot;: -1,
+            &quot;scope&quot;: {
+              &quot;variable&quot;: &quot;entity&quot;
+            }
+          },
+          &quot;model&quot;: &quot;original&quot;,
+          &quot;input&quot;: &quot;counterfactual&quot;
+        },
+        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;patched&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        }
+      },
+      &quot;writes&quot;: {
+        &quot;patch&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: {
+            &quot;index&quot;: -1,
+            &quot;scope&quot;: {
+              &quot;variable&quot;: &quot;entity&quot;
+            }
+          },
+          &quot;mechanism&quot;: &quot;swap&quot;,
+          &quot;operand&quot;: &quot;v_cf&quot;
+        }
+      },</code></pre>
+          </figure>
+
+          <h2 id="the-three-questions">The three questions <a class="anchor" href="#the-three-questions" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/shapes.py:70-89 — the fields and __post_init__'s checks -->
+          <table>
+            <thead><tr><th>field</th><th>what it answers</th><th>default</th></tr></thead>
+            <tbody>
+              <tr><td><code>frame</code></td><td>which sequence: <code>"prompt"</code>, or <code>"generated"</code> — what the decode produced</td><td><code>"prompt"</code></td></tr>
+              <tr><td><code>scope</code></td><td>which run of it: an anchor naming a <code>variable</code>, a <code>segment</code>, or both</td><td>the row's whole content</td></tr>
+              <tr><td><code>index</code> / <code>span</code> / <code>last</code> / <code>all</code></td><td>how much of that run. Exactly one of them</td><td>—</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/ops/locate.py:11-20 — "A position is three independent questions and one function answers them" -->
+          <p>They are independent: any cut of any scope in either frame. The resolver
+          answers them in that order — find the run, cut it, check the cut is inside
+          it — and a position with no scope is those same three steps with the run
+          being the row's whole content. That is why <code>{"index": -1}</code> and
+          <code>{"index": -1, "scope": {"variable": "entity"}}</code> cost the same
+          code.</p>
+
+          <h3 id="the-cut">The cut <a class="anchor" href="#the-cut" aria-label="Link to this section">#</a></h3>
+
+          <!-- causalab_mini/ops/locate.py:270-287 (_cut); causalab_mini/shapes.py:130-144 (width) -->
+          <table>
+            <thead><tr><th>cut</th><th>means</th><th><code>width</code></th></tr></thead>
+            <tbody>
+              <tr><td><code>{"index": i}</code></td><td>one token of the run; <code>-1</code> is its last</td><td class="num">1</td></tr>
+              <tr><td><code>{"last": n}</code></td><td>the run's last <code>n</code> tokens; <code>n</code> must be positive</td><td class="num">n</td></tr>
+              <tr><td><code>{"span": [a, b]}</code></td><td>half-open, <code>a</code> up to but not including <code>b</code>; must run forwards</td><td class="num">b − a</td></tr>
+              <tr><td><code>{"all": true}</code></td><td>every token of the run</td><td>only a row knows</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/plan/spec.py:156-169 (_spelling) — "The one sugar a document may use" -->
+          <p>The one sugar is that a bare integer is <code>{"index": i}</code>, so
+          <code>"pos": -1</code> is the last prompt token. There is no other spelling:
+          a decode step is <code>{"frame": "generated", "index": k}</code>, in the same
+          vocabulary as everything else.</p>
+
+          <!-- causalab_mini/ops/locate.py:272-286 — negatives are resolved against len(run) -->
+          <p>Negatives count from the end of the <em>run</em>, not of the row. Inside a
+          scope, <code>{"index": -1}</code> is the anchor's last token; with no scope it
+          is the prompt's. A span may mix signs, and then its width is not knowable
+          before the row is (<code>shapes.py:142-143</code>).</p>
+
+          <h2 id="what-you-can-ask-for">What you can ask for <a class="anchor" href="#what-you-can-ask-for" aria-label="Link to this section">#</a></h2>
+
+          <table>
+            <thead><tr><th>you want</th><th>you write</th></tr></thead>
+            <tbody>
+              <tr><td>the last prompt token</td><td><code>-1</code></td></tr>
+              <tr><td>the last token of this row's entity</td><td><code>{"index": -1, "scope": {"variable": "entity"}}</code></td></tr>
+              <tr><td>every token of this row's entity</td><td><code>{"all": true, "scope": {"variable": "entity"}}</code></td></tr>
+              <tr><td>the last three prompt tokens</td><td><code>{"last": 3}</code></td></tr>
+              <tr><td>all tokens of the user turn</td><td><code>{"all": true, "scope": {"segment": "user"}}</code></td></tr>
+              <tr><td>the last token of the second user turn</td><td><code>{"index": -1, "scope": {"segment": "user[1]"}}</code></td></tr>
+              <tr><td>decode step 2</td><td><code>{"frame": "generated", "index": 2}</code></td></tr>
+              <tr><td>the last generated token</td><td><code>{"frame": "generated", "index": -1}</code></td></tr>
+              <tr><td>where the model said the row's own answer</td><td><code>{"frame": "generated", "index": -1, "scope": {"variable": "said"}}</code></td></tr>
+              <tr><td>where the row stopped</td><td><code>{"frame": "generated", "index": -1, "scope": {"segment": "eos"}}</code></td></tr>
+            </tbody>
+          </table>
+
+          <h2 id="chat-turns">Chat turns <a class="anchor" href="#chat-turns" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/data/tokens.py:29-54 (rendered) — a list of
+               {"role", "content"} messages goes through apply_chat_template -->
+          <p>A segment is a run of the row's prompt that the <em>frame</em> located,
+          and in the prompt frame those are the turns of a conversation. What makes a
+          role a chat is its data: a role's field may hold a string, or a list of
+          <code>{"role", "content"}</code> messages, and a list is rendered through
+          the checkpoint's own chat template when the document is compiled. There is
+          no flag — the same shape an anchor already has, where what it looks for is
+          whatever the row carries under that name.</p>
+
+          <figure class="listing">
+            <figcaption><code>documents/data/weekdays/chat.json</code> <span class="what">— one row's <code>chat</code> column</span></figcaption>
+            <pre><code class="language-json">  &quot;chat&quot;: [
+   {
+    &quot;role&quot;: &quot;user&quot;,
+    &quot;content&quot;: &quot;Name a weekday.&quot;
+   },
+   {
+    &quot;role&quot;: &quot;assistant&quot;,
+    &quot;content&quot;: &quot;Thursday.&quot;
+   },
+   {
+    &quot;role&quot;: &quot;user&quot;,
+    &quot;content&quot;: &quot;If today is Thursday, tomorrow is&quot;
+   }
+  ],</code></pre>
+          </figure>
+
+          <!-- causalab_mini/data/tokens.py:56-88 (turns) — the span of each
+               message's content, found forward from the last one, in the
+               coordinates locate.frame_of uses -->
+          <p>The compiler records the character span of each turn's
+          <em>content</em>, in the coordinates the resolver works in, and they
+          travel in the plan. A turn is named by its own role, and by
+          <code>role[k]</code> for the k-th of that role — the bracket a field path
+          already uses for a list. The bare name is recorded only for a role that
+          speaks once; asking for it when two did is
+          <code>alignment_ambiguous</code>, the rule a variable occurring twice
+          already gets.</p>
+
+          <!-- ran 2026-09-24, CPU, fp32 -->
+          <pre><code class="language-python">forward.sample
+'[INST] Name a weekday. [/INST] Thursday. &lt;/s&gt;&lt;s&gt;[INST] If today is Thursday, tomorrow is [/INST]'
+
+forward.segments[0]
+{"user[0]": [7, 22], "assistant[0]": [31, 40], "user[1]": [55, 88], "assistant": [31, 40]}</code></pre>
+
+          <p>The template's own control tokens are between the turns and inside none
+          of them, because each content is found as itself. So a read at the last
+          token of the second user turn is the question's last token, where
+          <code>-1</code> of the whole prompt is the template's closing
+          <code>[/INST]</code>:</p>
+
+          <!-- ran 2026-09-24, CPU, fp32: documents/v2/chat_turn.json, the run's
+               own results["positions"] -->
+          <pre><code class="language-python">{"index": -1, "scope": {"segment": "user[1]"}}   ((32,), (32,), (32,), (32,))   "' is'"
+{"index": -1}                                    ((36,), (36,), (36,), (36,))   "']'"</code></pre>
+
+          <p><code>{"segment": …, "variable": …}</code> composes: the row's entity
+          searched inside the turn that asked the question, which is what makes it
+          unique when the assistant said the same word first. <code>eos</code> is the
+          one segment name a frame invents rather than reads, and it belongs to the
+          continuation; each frame refuses the other's.</p>
+
+          <h2 id="anchors-which-text-on-which-row">Anchors: which text, on which row <a class="anchor" href="#anchors-which-text-on-which-row" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/data/rows.py:69-94 (variable_text) — the sibling first, then a top-level column -->
+          <p>A <code>variable</code> anchor names a column, and the text it binds to is
+          the row's own. The rule is the <code>&lt;column&gt;_variables</code> sibling
+          of the role's field first, and a top-level column of that name otherwise:
+          <code>counterfactual_inputs[0]</code> with the variable <code>entity</code>
+          looks for <code>counterfactual_inputs_variables[0].entity</code>, then for a
+          column <code>entity</code>. A name that is neither is a misspelling, refused
+          on the client, naming both places it looked.</p>
+
+          <p>That rule is what lets one spec serve both roles of a pair. In
+          <code>weekdays/train</code> the base role's field is <code>input</code> and
+          picks up the top-level <code>entity</code>; the counterfactual role's field
+          is <code>counterfactual_inputs[0]</code> and picks up the sibling:</p>
+
+          <!-- ran 2026-09-23, CPU -->
+          <pre><code class="language-bash">$ uv run causalab-mini data weekdays/train
+weekdays/train: 4 rows
+  columns: answer, base_answer, cf_answer, counterfactual_inputs, counterfactual_inputs_variables, entity, input, label, split
+  splits:  all
+  sample:  {&quot;answer&quot;: &quot; Friday&quot;, &quot;base_answer&quot;: &quot; Friday&quot;, &quot;cf_answer&quot;: &quot; Sunday&quot;, &quot;counterfactual_inputs&quot;: [&quot;If today is Saturday, tomorrow is&quot;], &quot;counterfactual_inputs_variables&quot;: [{&quot;entity&quot;: &quot;Saturday&quot;}], &quot;entity&quot;: &quot;Thursday&quot;, &quot;input&quot;: &quot;If today is Thursday, tomorrow is&quot;, &quot;label&quot;: &quot; Sunday&quot;, &quot;split&quot;: &quot;all&quot;}</code></pre>
+
+          <!-- causalab_mini/plan/build.py:978-989 — "Nothing here resolves a position. What it does compile is the *anchor*" -->
+          <!-- causalab_mini/shapes.py:198-201 — Selection.anchors: the one input the resolver cannot find for itself -->
+          <p>The compiler carries that text per row, in the plan, as the one input the
+          resolver cannot find for itself: <code>locate.py</code> has no dataset. The
+          spec and the per-row text travel together as
+          <code>Selection.where</code> and <code>Selection.anchors</code>.</p>
+
+          <h3 id="when-the-value-is-in-the-prompt-twice-or-not-at-all">When the value is in the prompt twice, or not at all <a class="anchor" href="#when-the-value-is-in-the-prompt-twice-or-not-at-all" aria-label="Link to this section">#</a></h3>
+
+          <!-- causalab_mini/ops/locate.py:37-40 (REASONS); :225, :235, :237 for the first two; :270-287 for out_of_range -->
+          <table>
+            <thead><tr><th>reason</th><th>when</th><th>what it means</th></tr></thead>
+            <tbody>
+              <tr><td><code>alignment_missing</code></td><td>the anchor's text is not in this row's run</td><td>an excluded measurement, or the wrong column</td></tr>
+              <tr><td><code>alignment_ambiguous</code></td><td>it occurs more than once</td><td>scope the anchor, or name a longer value</td></tr>
+              <tr><td><code>out_of_range</code></td><td>the cut falls outside the run it cuts</td><td>for a fixed-width cut this is refused, not reported — see below</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/ops/locate.py:249-267 (_hits) — the three spellings, and occurrences counted for one of them -->
+          <p>The search is in the decoded text, because decoding is what normalizes a
+          sentencepiece prefix space. It tries the value, then <code>" " +
+          value</code>, then the stripped value, and the first spelling that hits at
+          all decides — so <code>" Thursday"</code> occurring once is one hit even
+          though <code>"Thursday"</code> also occurs inside it. Anchoring to
+          <code>"day"</code> on these prompts is ambiguous, because it is in
+          <code>today</code> and in <code>Thursday</code> both — the last line of the
+          block below.</p>
+
+          <h2 id="the-character-map-and-why-the-last-token-of-thursday-is-day">The character map, and why the last token of Thursday is <code>day</code> <a class="anchor" href="#the-character-map-and-why-the-last-token-of-thursday-is-day" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/ops/locate.py:22-26, :170-190 (_chars) — offsets[k] = len(decode(ids[:k])), parked where a prefix is not one -->
+          <p>The map from characters to tokens is built from the ids, by decoding
+          growing prefixes: <code>offsets[k]</code> is the character at which token
+          <code>k</code> starts. It needs no fast tokenizer and no
+          <code>offset_mapping</code>, and it describes the ids the run will actually
+          feed the model rather than a re-encoding that may not reproduce them.</p>
+
+          <!-- ran 2026-09-23, CPU, fp32, tiny-random-LlamaForCausalLM rev 9fb19125 -->
+          <pre><code class="language-python">from transformers import AutoTokenizer
+from causalab_mini.ops import locate
+from causalab_mini.shapes import Anchor, Where
+
+tok = AutoTokenizer.from_pretrained(
+    &quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;,
+    revision=&quot;9fb191250dd56d0ba7ec9785a025ed29c03d5998&quot;)
+ids, mask, frame = locate.frame_of_texts(
+    tok, [&quot;If today is Thursday, tomorrow is&quot;, &quot;If today is Friday, tomorrow is&quot;])
+
+print(repr(frame.texts[0]))
+print([tok.decode([i]) for i in ids[0][frame.starts[0]:frame.ends[0]]])
+print(frame.offsets[0])
+
+for where in (Where(all=True, scope=Anchor(variable=&quot;e&quot;)),
+              Where(index=-1, scope=Anchor(variable=&quot;e&quot;))):
+    window, reason = locate.locate(frame, where, (&quot;Thursday&quot;, &quot;Friday&quot;))
+    print(where.spelling(), window,
+          [locate.tokens_of(frame, one, row) for row, one in enumerate(window)], reason)
+
+print(locate.locate(frame, Where(index=-1, scope=Anchor(variable=&quot;e&quot;)), (&quot;day&quot;, &quot;day&quot;)))</code></pre>
+
+          <pre><code>'If today is Thursday, tomorrow is'
+['If', 'today', 'is', 'Th', 'urs', 'day', ',', 'tom', 'orrow', 'is']
+(0, 2, 8, 11, 14, 17, 20, 21, 25, 30, 33)
+{all scope:{variable:e}} ((4, 5, 6), (6,)) [&quot;' Thursday'&quot;, &quot;' Friday'&quot;] ('', '')
+{index:-1 scope:{variable:e}} ((6,), (6,)) [&quot;'day'&quot;, &quot;' Friday'&quot;] ('', '')
+(((), ()), ('alignment_ambiguous', 'alignment_ambiguous'))</code></pre>
+
+          <!-- causalab_mini/ops/locate.py:240-246 — "the tokens that OVERLAP the character span: a value starting mid-piece brings its whole piece" -->
+          <p>A character span selects the tokens that <strong>overlap</strong> it, not
+          the ones it contains, because the addressed thing is a token. The anchor
+          <code>"Thursday"</code> starts at character 12 and the piece
+          <code>' Th'</code> starts at 11, so that piece is in the window and the
+          window decodes back to <code>' Thursday'</code>. Cut that run at
+          <code>-1</code> and you get its last token, which on this tokenizer is the
+          piece <code>day</code>.</p>
+
+          <div class="note">
+            <span class="label">this is what the vocabulary is for</span>
+            <!-- FINDINGS.md §11.2 — the default outcome of an entity patch on real text -->
+            <!-- causalab_mini/engine/steps.py:486-499 — the width mismatch refusal, naming the rows -->
+            <p><code>{"all": true}</code> over the entity is three tokens on a Thursday
+            row and one on a Friday row, so swapping one row's whole entity into
+            another's has no width to land in; mini refuses it, naming the rows.
+            <code>{"index": -1}</code> <em>inside</em> the entity is one token on every
+            row whatever the entity is, which is what makes the same interchange land.
+            "The last token of" is a question about tokens, and the answer here is a
+            word fragment.</p>
+          </div>
+
+          <h2 id="position-0-and-bos">Position 0, and BOS <a class="anchor" href="#position-0-and-bos" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/ops/locate.py:71-92 (frame_of), :160-167 (_special_prefix) — asked rather than guessed -->
+          <p>A row's run starts after whatever the tokenizer puts before every prompt,
+          and what that is, is asked rather than guessed: whatever the tokenizer makes
+          of the empty string is what it adds to everything. Llama's sentencepiece
+          prepends a BOS and GPT-2's BPE prepends nothing, so without this
+          <code>{"index": 0}</code> would be <code>&lt;s&gt;</code> on one family and
+          the first word on the other — the same document addressing two different
+          things, silently, which is the one thing a standardized position may not do.</p>
+
+          <!-- ran 2026-09-23, CPU, fp32; both fixtures out of the local HF cache -->
+          <pre><code class="language-python">from transformers import AutoTokenizer
+from causalab_mini.ops import locate
+from causalab_mini.shapes import Where
+
+FIXTURES = {
+    &quot;llama&quot;: (&quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;, &quot;9fb191250dd56d0ba7ec9785a025ed29c03d5998&quot;),
+    &quot;gpt2&quot;: (&quot;hf-internal-testing/tiny-random-gpt2&quot;, &quot;71034c5d8bde858ff824298bdedc65515b97d2b9&quot;),
+}
+for family, (key, revision) in FIXTURES.items():
+    tok = AutoTokenizer.from_pretrained(key, revision=revision)
+    ids, mask, frame = locate.frame_of_texts(tok, [&quot;If today is Thursday, tomorrow is&quot;])
+    window, _ = locate.locate(frame, Where(index=0))
+    print(f&quot;{family:6s} prefix={locate._special_prefix(tok)!s:5s} ids[:4]={ids[0][:4]} &quot;
+          f&quot;starts={frame.starts} index 0 -&gt; {window[0]} {locate.tokens_of(frame, window[0], 0)}&quot;)</code></pre>
+
+          <pre><code>llama  prefix=(1,)  ids[:4]=(1, 960, 9826, 338) starts=(1,) index 0 -&gt; (1,) 'If'
+gpt2   prefix=()    ids[:4]=(41, 70, 227, 68) starts=(0,) index 0 -&gt; (0,) 'I'</code></pre>
+
+          <p>The tiny GPT-2's vocabulary is small enough to split <code>If</code> in
+          two, so what the test asserts is that the first token is the start of the
+          prompt's own text and not a marker the tokenizer added
+          (<code>tests/test_locate.py:287-305</code>).</p>
+
+          <!-- causalab_mini/ops/locate.py:85-88 — "Nothing addresses the prefix itself yet" -->
+          <p>The prefix itself is not addressable. It would be a run the frame locates,
+          like <code>eos</code> in the continuation — <code>{"scope": {"segment":
+          "bos"}}</code> — and no document has asked.</p>
+
+          <h2 id="left-padding-the-same-index-a-different-token">Left padding: the same index, a different token <a class="anchor" href="#left-padding-the-same-index-a-different-token" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/ops/locate.py:47-59 — starts/ends are "what makes resolution independent of the padding side" -->
+          <p>Resolution works from each row's half-open content span inside the padded
+          sequence, so it does not care which side the padding is on. What left padding
+          does mean is that every row's last token sits at the same index, and so does
+          everything counted back from it. Rows that share a tail therefore share that
+          tail's indices, and the index of the last token of whatever precedes it. The
+          four prompts of <code>entity_patch.json</code> differ only in the weekday and
+          all end <code>, tomorrow is</code>, so the last token of the entity is at
+          index 6 on every row and no two rows address the same piece. The integers say
+          nothing here and the decoded tokens say everything (see
+          <a href="#prov">Provenance</a> below for the run that produced them).</p>
+
+          <!-- FINDINGS.md §25.3 — the index only moves when the tokens AFTER the anchor differ -->
+          <p>The index moves when the tokens <em>after</em> the anchor differ. On
+          arithmetic prompts, where <code>" Tuesday"</code> is three tokens and
+          <code>" Monday"</code> one, the same spec lands at 8 on two rows and at 6 on
+          the other two (the same <code>tok</code> as above):</p>
+
+          <!-- ran 2026-09-23, CPU, fp32; the same prompts as tests/test_locate.py:173-196 -->
+          <pre><code class="language-python">prompts = [&quot;Q: What day is one days after Monday?\nA:&quot;,
+           &quot;Q: What day is three days after Monday?\nA:&quot;,
+           &quot;Q: What day is two days after Tuesday?\nA:&quot;,
+           &quot;Q: What day is five days after Tuesday?\nA:&quot;]
+_ids, _mask, frame = locate.frame_of_texts(tok, prompts)
+
+windows, reasons = locate.locate(frame, Where(index=-1, scope=Anchor(variable=&quot;number&quot;)),
+                                 (&quot;one&quot;, &quot;three&quot;, &quot;two&quot;, &quot;five&quot;))
+print(windows, reasons)
+print([locate.tokens_of(frame, one, row) for row, one in enumerate(windows)])</code></pre>
+
+          <pre><code>((8,), (8,), (6,), (6,)) ('', '', '', '')
+[&quot;' one'&quot;, &quot;' three'&quot;, &quot;' two'&quot;, &quot;' five'&quot;]</code></pre>
+
+          <p>Both facts are worth knowing. The decoded tokens are what show an anchored
+          patch doing something per row; an assertion that the integers differ needs a
+          corpus where they do.</p>
+
+          <h2 id="eligibility-a-read-may-skip-a-row-a-write-may-not">Eligibility: a read may skip a row, a write may not <a class="anchor" href="#eligibility-a-read-may-skip-a-row-a-write-may-not" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/engine/steps.py:456-467 (_writes_land) — "The ragged write policy, and it is `refuse`" -->
+          <p>A row whose anchor text is not in its prompt gets an empty window. For a
+          read that is an excluded measurement: the row contributes no positions, the
+          run reports the reason, and it stays a row of the table. For a write it is
+          refused — writing nothing somewhere is not an intervention, and the row would
+          score as if one had happened. The message names each row and that row's own
+          reason, because the three have three different fixes
+          (<code>tests/test_ragged.py:243-297</code> asserts both shapes):</p>
+
+          <!-- causalab_mini/engine/steps.py:475-484 — the message, verbatim from the f-string -->
+          <pre><code>write 'patch' has nothing to write on row(s) {1: 'alignment_missing'}. A read may
+skip a row; a write may not — writing nothing somewhere is not an intervention, and
+the row would score as if one had happened. `alignment_ambiguous` is a value that is
+in the prompt more than once, and scoping the anchor is what makes it one</code></pre>
+
+          <!-- causalab_mini/engine/steps.py:416-429 (_fits_every_row) — "A fixed-width cut that does not fit a row is an authoring error" -->
+          <p>An empty window means two different things and they get opposite answers.
+          An <em>anchored</em> cut that found nothing is data, reported per row. A cut
+          of a <em>fixed width</em> that a row cannot fit — <code>{"last": 12}</code>
+          on a nine-token row, <code>{"index": 40}</code> on any of these — names the
+          same number of tokens on every row, so a row it does not fit is a document
+          that is wrong about its own prompts. That is refused where it is resolved,
+          naming the op, the rows and the reason.</p>
+
+          <!-- causalab_mini/engine/steps.py:122-133 — the intersection of the column half and the position half -->
+          <p>A metric's rows are the intersection of two halves. The <em>column</em>
+          half is the client's — whether the data had an answer to score. The
+          <em>position</em> half is the run's — whether it could place the read.
+          Neither is authoritative alone, and the run reports the intersection as
+          <code>results["eligible"]</code>. A metric none of whose rows survive both
+          halves is refused: <em>a metric of nothing has no mean</em>
+          (<code>steps.py:207-212</code>).</p>
+
+          <h2 id="prov">Provenance <a class="anchor" href="#prov" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/engine/steps.py:41-45 (Record), :141-148 — positions and eligible land in the results -->
+          <p>A pass with a position the document does not already fix records where it
+          acted. <code>results["positions"]</code> holds, per op, each row's
+          <code>rows</code> window, the <code>reason</code> it is empty when it is, and
+          the <code>tokens</code> it addressed — plain tuples of integers and strings,
+          so they come home in the plan like a metric does.</p>
+
+          <!-- causalab_mini/engine/steps.py:150-161 (_dynamic) — a text anchor or any cut of the continuation; neither means no character map -->
+          <p>A pass whose every position is a bare integer resolves the same numbers on
+          every row and every run, and the document already says so: it builds no
+          character map and reports nothing. The map is the expensive half — O(L)
+          decode calls of O(L) work per row — and only a pass that reports where it
+          acted has any use for it (<code>locate.py:85-91</code>).</p>
+
+          <!-- ran 2026-09-23, CPU, fp32, 12-core Ryzen 9 5900X; about 7 s including the model load -->
+          <pre><code class="language-bash">$ uv run causalab-mini run documents/v2/entity_patch.json --out out/entity_patch
+out/entity_patch/document.json
+out/entity_patch/run.json
+out/entity_patch/iia.json
+out/entity_patch/logit_diff.json</code></pre>
+
+          <p>A <em>write's</em> record has no table to live in, and for that the
+          plan the run filled in is where to look. Save this as
+          <code>where.py</code>:</p>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-python">import json
+import sys
+
+from causalab_mini import plan
+from causalab_mini.engine import NNterpEngine
+from causalab_mini.plan.spec import Spec
+
+raw = json.loads(open(sys.argv[1]).read())
+engine = NNterpEngine.load(Spec.model_validate(raw).model, device_map=&quot;cpu&quot;)
+done = engine.execute(plan.build_request(raw, &quot;documents/data&quot;, engine))
+results = done.step(&quot;score&quot;, plan.Observe).results
+
+for name, record in results[&quot;positions&quot;].items():
+    print(name, record[&quot;rows&quot;], record[&quot;tokens&quot;], record[&quot;reason&quot;])
+print(&quot;eligible&quot;, results[&quot;eligible&quot;])</code></pre>
+
+          <pre><code>$ python where.py documents/v2/entity_patch.json
+v_cf ((6,), (6,), (6,), (6,)) (&quot;' Saturday'&quot;, &quot;' Sunday'&quot;, &quot;'day'&quot;, &quot;' Friday'&quot;) ('', '', '', '')
+patch ((6,), (6,), (6,), (6,)) (&quot;'day'&quot;, &quot;' Friday'&quot;, &quot;' Saturday'&quot;, &quot;' Sunday'&quot;) ('', '', '', '')
+logits ((10,), (10,), (10,), (10,)) (&quot;' is'&quot;, &quot;' is'&quot;, &quot;' is'&quot;, &quot;' is'&quot;) ('', '', '', '')
+eligible {'iia': (True, True, True, True), 'logit_diff': (True, True, True, True)}</code></pre>
+
+          <p>Row 0's base entity is <code>Thursday</code> and its counterfactual's is
+          <code>Saturday</code>: the write lands on the piece <code>day</code> where
+          the read took <code>' Saturday'</code> whole. Both are at index 6.</p>
+
+          <!-- causalab_mini/plan/write.py:84-99 — positions, reason and tokens on every row of a metric table -->
+          <p>All three reach disk. Every row of a metric table carries
+          <code>positions</code> — where the number was read —
+          <code>reason</code> — why it was nowhere — and <code>tokens</code>, what
+          that window says. The window is the one the metric's own read resolved
+          to, so on this document it is the <code>logits</code> read at
+          <code>-1</code> and not the entity:</p>
+
+          <figure class="listing">
+            <figcaption><code>out/entity_patch/iia.json</code> <span class="what">— row 0 of 4, as written</span></figcaption>
+            <pre><code class="language-json">{
+ &quot;example_id&quot;: &quot;0&quot;,
+ &quot;metric&quot;: &quot;iia&quot;,
+ &quot;value&quot;: 0.0,
+ &quot;eligible&quot;: true,
+ &quot;positions&quot;: [
+  10
+ ],
+ &quot;reason&quot;: &quot;&quot;,
+ &quot;tokens&quot;: &quot;' is'&quot;,
+ &quot;unit&quot;: &quot;fraction&quot;,
+ &quot;estimand_version&quot;: &quot;match/v1&quot;,
+ &quot;produced_by&quot;: &quot;67d6465731d362667958723aa1faa600aca13bd2e4f78f73b895d38972af260c&quot;
+}</code></pre>
+          </figure>
+
+          <div class="caution">
+            <span class="label">the weights are random</span>
+            <p><code>hf-internal-testing/tiny-random-LlamaForCausalLM</code> is a
+            fixture. Its <code>iia</code> of 0.0, and the probabilities further down,
+            are what the arithmetic produced and say nothing about any model. The
+            positions and the decoded tokens are real either way: they are the
+            tokenizer's, and the tokenizer is a real one.</p>
+          </div>
+
+          <!-- causalab_mini/plan/write.py:65-74 — an excluded measurement is still a row, with no value -->
+          <p>An excluded measurement is still a row of the table, with
+          <code>"value": null</code> and <code>"eligible": false</code>, so it can
+          never be read as a zero or silently shorten a denominator.</p>
+
+          <h2 id="the-generated-frame">The generated frame <a class="anchor" href="#the-generated-frame" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/ops/locate.py:124-138 (continuation) — the decode ran to the bound; the frame stops at the first stop token -->
+          <p><code>{"frame": "generated"}</code> addresses what the decode produced.
+          The decode runs to its bound — mini holds EOS off so the loop is a bound and
+          the batch stays rectangular — but how far a row <em>meant</em> to generate is
+          a result, so the frame is cut per row at that row's first stop token and the
+          stop token is the last one in it. A row that never stopped has the whole
+          bound and no <code>eos</code> segment.</p>
+
+          <!-- causalab_mini/ops/locate.py:134-137 — the map is built from the ids the decode produced, never from re-encoding -->
+          <p>Its character map is built from the ids the decode produced, never from
+          re-encoding the finished text: a tokenizer is free to merge across a boundary
+          the decode never saw.</p>
+
+          <!-- causalab_mini/plan/build.py:943-949 (_stacks); FINDINGS.md §25.4 — one ordinary read per step, stacked and cut afterwards -->
+          <p><code>{"index": k}</code> with <code>k &gt;= 0</code> is decode step
+          <code>k</code>, and the tap fires there. Every other cut of the continuation
+          — the last generated token, the stop token, where the model said the answer —
+          is of text that does not exist until the decode has run, so the compiler
+          emits one ordinary read per step, each carrying the same spec and the name of
+          the stack it belongs to, and the walk stacks them and cuts them against the
+          continuation afterwards. Neither engine had to learn to buffer. The cost is
+          stated where it is paid: <code>rows × decode × width</code> numbers, refused
+          above 256 MiB (<code>build.py:931-940, 951-965</code>).</p>
+
+          <!-- causalab_mini/plan/spec.py:683-707 — what a write in the continuation frame may say -->
+          <p>A write is the other case. It happens <em>during</em> the decode, so it
+          may only name a step the run has already reached:</p>
+
+          <table>
+            <thead><tr><th>a write with <code>"frame": "generated"</code></th><th>what happens</th></tr></thead>
+            <tbody>
+              <tr><td><code>{"index": k}</code>, <code>0 &lt;= k &lt; decode</code></td><td>writes at that step</td></tr>
+              <tr><td><code>{"all": true}</code></td><td>writes at every step — this is steering</td></tr>
+              <tr><td><code>{"index": -1}</code>, <code>{"last": n}</code>, <code>{"span": …}</code></td><td>refused: a cut of the finished continuation is something to read, not something to write into</td></tr>
+              <tr><td>any <code>scope</code></td><td>refused: it is only known once the decode has finished</td></tr>
+              <tr><td>any form, with <code>decode: 0</code></td><td>refused: a generated position needs <code>decode</code> &gt; 0</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/engine/steps.py:353-372 (_continuation); FINDINGS.md §25.7 — report in the frame you resolved in -->
+          <p>Every tap in this frame is reported by the continuation and not by the
+          prompt, stacked or not: the prompt frame has nothing true to say about a
+          position that is a decode step. So <code>positions</code> for a
+          generated-frame op is the step, and <code>tokens</code> is the token the
+          model produced there.</p>
+
+          <!-- ran 2026-09-23, CPU, fp32; about 6 s including the model load -->
+          <pre><code class="language-bash">$ uv run causalab-mini run documents/v2/generated_answer.json --out out/generated_answer
+out/generated_answer/document.json
+out/generated_answer/run.json
+out/generated_answer/p_answer.json</code></pre>
+
+          <p>The same script as above, on that document:</p>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code>$ python where.py documents/v2/generated_answer.json
+at_said ((1,), (2,), (), ()) (&quot;' substr'&quot;, &quot;' energ'&quot;, '', '') ('', '', 'alignment_missing', 'alignment_missing')
+at_stop ((), (), (), ()) ('', '', '', '') ('alignment_missing', 'alignment_missing', 'alignment_missing', 'alignment_missing')
+eligible {'p_answer': (True, True, False, False)}</code></pre>
+
+          <p><code>at_said</code> is <code>{"frame": "generated", "index": -1,
+          "scope": {"variable": "said"}}</code>: the last token of this row's own
+          <code>said</code> text, in what this row generated. Two of the four rows said
+          it — at step 1 and at step 2 — and two did not, and that is a reported result
+          rather than an exception that ends the run. The table keeps all four rows:</p>
+
+          <figure class="listing">
+            <figcaption><code>out/generated_answer/p_answer.json</code> <span class="what">— rows 0 and 2 of 4, as written</span></figcaption>
+            <pre><code class="language-json">[
+ {
+  &quot;example_id&quot;: &quot;substr&quot;,
+  &quot;metric&quot;: &quot;p_answer&quot;,
+  &quot;value&quot;: 3.008824569405988e-05,
+  &quot;eligible&quot;: true,
+  &quot;positions&quot;: [
+   1
+  ],
+  &quot;reason&quot;: &quot;&quot;,
+  &quot;unit&quot;: &quot;probability&quot;,
+  &quot;estimand_version&quot;: &quot;token_prob/v1&quot;,
+  &quot;produced_by&quot;: &quot;8dcb96076c71ff1883ad97ecead2ece4ae24d447a121d013bb60e0155198f334&quot;
+ },
+ …
+ {
+  &quot;example_id&quot;: &quot;Friday&quot;,
+  &quot;metric&quot;: &quot;p_answer&quot;,
+  &quot;value&quot;: null,
+  &quot;eligible&quot;: false,
+  &quot;positions&quot;: [],
+  &quot;reason&quot;: &quot;alignment_missing&quot;,
+  &quot;unit&quot;: &quot;probability&quot;,
+  &quot;estimand_version&quot;: &quot;token_prob/v1&quot;,
+  &quot;produced_by&quot;: &quot;8dcb96076c71ff1883ad97ecead2ece4ae24d447a121d013bb60e0155198f334&quot;
+ },
+ …
+]</code></pre>
+          </figure>
+
+          <!-- FINDINGS.md §25.5 — EOS held off means no row ever stops, and that is a result -->
+          <p><code>at_stop</code> asks <code>{"scope": {"segment": "eos"}}</code> and
+          every row reports <code>alignment_missing</code>. That is not the document
+          being wrong: mini decodes with <code>min_new_tokens == max_new_tokens</code>
+          so the loop is a bound, so no row ever stops, so nothing has an
+          <code>eos</code> segment. "Did the model stop?" comes home as a reported
+          reason. The positive case is reachable only over hand-made ids, which is
+          where it is tested (<code>tests/test_locate.py:149-164</code>).</p>
+
+          <h2 id="width-and-ragged">Width and ragged <a class="anchor" href="#width-and-ragged" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/shapes.py:130-163 — "The two are different questions, which is why width answers the first and this the second" -->
+          <p>Two properties of a spec, both knowable without a row, answering different
+          questions.</p>
+
+          <table>
+            <thead><tr><th>property</th><th>asks</th><th>value</th></tr></thead>
+            <tbody>
+              <tr><td><code>width</code></td><td>how many positions the <em>cut</em> names</td><td>1 for <code>index</code>, <code>n</code> for <code>last: n</code>, <code>b − a</code> for a same-signed span; <code>None</code> for <code>all</code> and for a mixed-sign span</td></tr>
+              <tr><td><code>ragged</code></td><td>whether a row may come back with a window the others do not have</td><td>true for a cut of varying width, <em>and</em> for any anchored spec however narrow the cut</td></tr>
+            </tbody>
+          </table>
+
+          <p>So <code>{"index": -1, "scope": {"variable": "entity"}}</code> has width 1
+          <em>and</em> is ragged: the cut names one token, and whether a row has that
+          one token at all is the other question. <code>{"all": true}</code> has no
+          width and is ragged for the first reason. <code>width</code> is what lets the
+          compiler check a write against its operand before either has been resolved;
+          <code>ragged</code> is what decides that the gather comes back flat,
+          <code>(total, width)</code>, one row per row that resolved — see
+          <a href="ops.html">Reads, writes, metrics</a> for what a read and a write
+          then do with it.</p>
+
+          <!-- causalab_mini/plan/spec.py:708-718 — "a metric scores one position per row" -->
+          <p>A metric reads <code>width == 1</code> and nothing else. Ragged is fine:
+          <code>p_answer</code> above reads a ragged width-1 window and scores the two
+          rows it found. <code>{"all": true}</code> or <code>{"last": 3}</code> under a
+          metric is refused at validation.</p>
+
+          <!-- causalab_mini/shapes.py:155-162 — in the continuation frame ragged is about the steps a row keeps -->
+          <p>In the continuation frame <code>ragged</code> is about the steps a row
+          keeps, not the positions a tap acts at: whatever the spec names, a decode
+          step processes one position, and the cut happens afterwards over the stack of
+          steps.</p>
+
+          <h2 id="what-is-refused-and-where">What is refused, and where <a class="anchor" href="#what-is-refused-and-where" aria-label="Link to this section">#</a></h2>
+
+          <table>
+            <thead><tr><th>refusal</th><th>where</th></tr></thead>
+            <tbody>
+              <!-- causalab_mini/shapes.py:77-89 (__post_init__) -->
+              <tr><td>two cuts, or none; <code>{"last": 0}</code>; a backwards span; <code>segment: "eos"</code> in the prompt frame; an anchor naming neither a variable nor a segment</td><td>validation, by pydantic, with the path to the key</td></tr>
+              <!-- causalab_mini/plan/spec.py:708-727 -->
+              <tr><td>a metric over a window that is not width 1; a write and its operand of different fixed widths</td><td>validation</td></tr>
+              <!-- causalab_mini/plan/spec.py:676-707 -->
+              <tr><td>a generated position with <code>decode: 0</code>; a step past the budget; a write naming a cut of the finished continuation, or taking a scope</td><td>validation</td></tr>
+              <!-- causalab_mini/plan/build.py:143-173 -->
+              <tr><td>a write whose referenced output was read over a different window, or over an unreduced ragged read</td><td>compile</td></tr>
+              <!-- causalab_mini/plan/build.py:951-965 (_fits) -->
+              <tr><td>a continuation read that would buffer more than 256 MiB of decode steps</td><td>compile</td></tr>
+              <!-- causalab_mini/engine/steps.py:416-429 -->
+              <tr><td>a fixed-width cut that a row cannot fit</td><td>the run, where the positions are</td></tr>
+              <!-- causalab_mini/engine/steps.py:468-499 -->
+              <tr><td>a write with nothing to write on a row; a ragged write whose operand is a different width on some row</td><td>the run</td></tr>
+              <!-- causalab_mini/engine/steps.py:196-212 -->
+              <tr><td>a metric no row is both column-eligible and placeable for</td><td>the run</td></tr>
+              <!-- causalab_mini/engine/steps.py:430-449 (_same_text) -->
+              <tr><td>a tokenizer here that disagrees with the one that encoded the plan</td><td>the run, by decoding row 0 on both sides and comparing the strings</td></tr>
+            </tbody>
+          </table>
+
+          <!-- FINDINGS.md §25.2 — do not check a tokenizer by re-encoding -->
+          <p>That last check compares decoded strings rather than re-encoding, because
+          <code>encode(decode(ids)) == ids</code> is not a property tokenizers have: it
+          holds for ASCII on both fixtures here and fails on the first emoji. One row
+          is a sample, so a skew that first shows on row 7 passes.</p>
+
+          <div class="seealso">
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
+            <ul>
+              <li><a href="ops.html">Reads, writes, metrics</a> — what a read and a write actually do with the window a position resolves to, and why a ragged read comes back flat</li>
+              <li><a href="locations.html">Locations</a> — the other half of an address: which component and which layer, and how heads and units cut the feature axis</li>
+              <li><a href="documents.html">Documents</a> — where <code>pos</code> sits in a document, and the roles and columns an anchor binds against</li>
+              <li><a href="use-cases/entity-patching.html">Entity patching</a> — <code>entity_patch.json</code> and <code>entity_mean_ablation.json</code> end to end: this vocabulary doing one experiment</li>
+              <li><a href="use-cases/generation.html">Generation</a> — the continuation frame as a worked example, including the per-step sweep</li>
+              <li><a href="remote.html">Remote &amp; NDIF</a> — why the resolver runs in the block, and how it reaches the served checkpoint's own tokenizer</li>
+            </ul>
+          </div>
+
+        </article>
+      </main>
+    </div>
+    <script src="site.js"></script>
+  </body>
+</html>

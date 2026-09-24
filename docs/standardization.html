@@ -1,0 +1,841 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Standardization — causalab-mini</title>
+    <meta name="description" content="What nnterp names, what mini still knows, and why there is no family table.">
+    <link rel="stylesheet" href="site.css">
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to content</a>
+
+    <div class="topbar">
+      <button class="iconbutton" data-nav-toggle aria-expanded="false" aria-controls="sidebar">menu</button>
+      <span class="brand">causalab-mini</span>
+      <button class="iconbutton js-only" data-theme-toggle style="margin-left:auto">dark</button>
+    </div>
+
+    <div class="layout">
+      <aside class="sidebar" id="sidebar">
+        <a class="brand" href="index.html">causalab-mini</a>
+        <span class="brand-sub">a plan is pure data; an engine turns it into tensors</span>
+
+        <nav aria-label="Documentation">
+          <ol>
+            <li><a href="index.html">Home</a></li>
+          </ol>
+
+          <h2>The document</h2>
+          <ol>
+            <li><a href="documents.html">Documents</a></li>
+            <li><a href="locations.html">Locations</a></li>
+            <li><a href="positions.html">Positions</a></li>
+            <li><a href="ops.html">Reads, writes, metrics</a></li>
+          </ol>
+
+          <h2>Use cases</h2>
+          <ol>
+            <li><a href="use-cases/index.html">All use cases</a></li>
+          </ol>
+          <ol class="sub">
+          <li><a href="use-cases/layer-sweep.html">Layer sweep</a></li>
+          <li><a href="use-cases/entity-patching.html">Entity patching</a></li>
+          <li><a href="use-cases/das-fit.html">DAS fit</a></li>
+          <li><a href="use-cases/dbm-fit.html">DBM fit</a></li>
+          <li><a href="use-cases/attention-pattern.html">Attention pattern</a></li>
+          <li><a href="use-cases/logit-lens.html">Logit lens</a></li>
+          <li><a href="use-cases/generation.html">Generation</a></li>
+          <li><a href="use-cases/sae-features.html">SAE features</a></li>
+          <li><a href="use-cases/batching-and-remote.html">Batching &amp; remote</a></li>
+          <li><a href="use-cases/sweeps.html">Sweeps</a></li>
+          </ol>
+
+          <h2>Running</h2>
+          <ol>
+            <li><a href="cli.html">The CLI</a></li>
+          </ol>
+
+          <h2>Understand</h2>
+          <ol>
+            <li><a href="engine.html">The engine</a></li>
+            <li><a href="standardization.html" aria-current="page">Standardization</a></li>
+            <li><a href="remote.html">Remote &amp; NDIF</a></li>
+          </ol>
+        </nav>
+
+        <div class="footer">
+          <p><a href="https://github.com/JadenFiotto-Kaufman/causalab-mini">source on GitHub</a></p>
+          <p><button class="iconbutton js-only" data-theme-toggle>dark</button></p>
+        </div>
+      </aside>
+
+      <main id="content">
+        <article class="page">
+          <header>
+            <p class="eyebrow">Reference</p>
+            <h1>Standardization</h1>
+            <p class="lede">nnterp names and reaches a tensor; mini decides what may
+            be done there.</p>
+          </header>
+
+          <!-- causalab_mini/address.py:1-41 -->
+          <p><code>causalab_mini/address.py</code> is the only file in the project
+          that knows anything about a model's internals, and most of what it knows it
+          asks nnterp for. The split is one sentence: <strong>which module or
+          operation is "the mid-stream of layer 3" on this architecture</strong> is
+          nnterp's question, and <strong>whether a document may name that place, and
+          what happens there</strong> is mini's.</p>
+
+          <!-- nnterp/nnterp/rename_utils.py:502-575 — the Address dataclass -->
+          <p>The mechanism on the nnterp side is one table of <code>Address</code>
+          rows. A row is pure data: a module path in standardized names, which side of
+          it, any <code>.source</code> operations to descend through, where the tensor
+          sits in the value there, where it sits in the forward pass, and why a family
+          has none. A family that differs differs by a row, not by a branch of code.</p>
+
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
+
+          <!-- FINDINGS.md:261-264 for the two raw block paths; the full
+               standardized-to-raw map is tests/test_components.py RAW_PATHS -->
+          <p>One name, two families that spell the block and its children nothing
+          alike — tiny Llama's first block is <code>model.model.layers.0</code>, tiny
+          GPT-2's is <code>model.transformer.h.0</code>:</p>
+
+          <!-- ran 2026-09-23, CPU, fp32, transformers 5.17.0, nnsight 0.8.1.dev125,
+               nnterp 1.3.1.dev64 (worktree ~/wd/nnterp @ 327cae1) -->
+          <pre><code class="language-python">from nnterp import StandardizedTransformer
+
+for key in ["hf-internal-testing/tiny-random-LlamaForCausalLM",
+            "hf-internal-testing/tiny-random-gpt2"]:
+    model = StandardizedTransformer(key, device_map="cpu")
+    row = model.internals["layers_mid"].address
+    print(f"{key:48} {model.block_structure:10} {row.module!r} {row.io.value}")</code></pre>
+
+          <p>prints:</p>
+
+          <pre><code>hf-internal-testing/tiny-random-LlamaForCausalLM pre_norm   &#x27;post_attention_layernorm&#x27; input
+hf-internal-testing/tiny-random-gpt2             pre_norm   &#x27;ln_2&#x27; input</code></pre>
+
+          <!-- tests/test_components.py:92-99 -->
+          <p>Mini's <code>block_mid</code> is that row's name and nothing else, so the
+          address mini compiles is <em>equal</em> on both checkpoints — same component,
+          same layer, same resolved operation. That equality is asserted for every one
+          of mini's components in
+          <code>tests/test_components.py::test_one_address_serves_both_families</code>.
+          Mini has no family axis and no family column; the axis is absorbed by the
+          dependency.</p>
+
+          <h2 id="where-the-line-is">Where the line is <a class="anchor" href="#where-the-line-is" aria-label="Link to this section">#</a></h2>
+
+          <figure>
+            <svg viewBox="0 0 380 470" role="img" aria-labelledby="chain-t chain-d" width="380">
+              <title id="chain-t">From a name in a document to a tensor</title>
+              <desc id="chain-d">A five-stage chain read downwards: the name in the
+              document, mini's component row, nnterp's Address row, the module and side
+              this checkpoint spells it with, and the tensor reached inside a trace. The
+              first two stages belong to mini, the next two to nnterp, the last to the
+              engine.</desc>
+              <defs>
+                <marker id="chain-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+                        markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fg-faint)"/>
+                </marker>
+              </defs>
+              <g fill="var(--bg-raised)" stroke="var(--rule-strong)" stroke-width="1">
+                <rect x="8" y="12"  width="290" height="60" rx="6"/>
+                <rect x="8" y="106" width="290" height="60" rx="6"/>
+                <rect x="8" y="294" width="290" height="60" rx="6"/>
+                <rect x="8" y="388" width="290" height="60" rx="6"/>
+              </g>
+              <rect x="8" y="200" width="290" height="60" rx="6"
+                    fill="var(--bg-raised)" stroke="var(--accent)" stroke-width="1.6"/>
+              <g text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif">
+                <g fill="var(--fg)" font-size="14" font-weight="600">
+                  <text x="153" y="38">"block_mid"</text>
+                  <text x="153" y="132">mini's component row</text>
+                  <text x="153" y="226">nnterp's Address row</text>
+                  <text x="153" y="320">post_attention_layernorm</text>
+                  <text x="153" y="414">the tensor</text>
+                </g>
+                <g fill="var(--fg-muted)" font-size="11">
+                  <text x="153" y="57">a site in the document</text>
+                  <text x="153" y="151">sequence axis · heads · width · writable</text>
+                  <text x="153" y="245">layers_mid: module · side · order</text>
+                  <text x="153" y="339">input side, on this checkpoint</text>
+                  <text x="153" y="433">read or written inside the trace</text>
+                </g>
+              </g>
+              <g font-family="ui-sans-serif, system-ui, sans-serif" font-size="11"
+                 text-anchor="start">
+                <text x="308" y="46"  fill="var(--fg-faint)">you</text>
+                <text x="308" y="140" fill="var(--fg-faint)">mini</text>
+                <text x="308" y="234" fill="var(--accent)">nnterp</text>
+                <text x="308" y="328" fill="var(--fg-faint)">nnterp</text>
+                <text x="308" y="422" fill="var(--fg-faint)">engine</text>
+              </g>
+              <g stroke="var(--fg-faint)" stroke-width="1.4" fill="none"
+                 marker-end="url(#chain-arrow)">
+                <path d="M 153 74  L 153 101"/>
+                <path d="M 153 168 L 153 195"/>
+                <path d="M 153 262 L 153 289"/>
+                <path d="M 153 356 L 153 383"/>
+              </g>
+            </svg>
+            <figcaption>The two middle stages are the hand-off. Everything above the
+            accented box is about what the experiment means; everything below it is
+            about where this particular checkpoint keeps the tensor.</figcaption>
+          </figure>
+
+          <p>What nnterp answers, for every place it addresses:</p>
+
+          <!-- nnterp/nnterp/rename_utils.py:502-575, nnterp/nnterp/internals.py:42-70 -->
+          <ul>
+            <li>which child module this family spells the place with, and which side
+            of it — or which operation inside whose forward;</li>
+            <li>whether the place exists at all on this architecture, and on this
+            layer, with the reason when it does not;</li>
+            <li>where the tensor sits inside the value there;</li>
+            <li>where the place sits in the forward pass;</li>
+            <li>every width and head count — <code>hidden_size</code>,
+            <code>intermediate_size</code>, <code>head_dim</code>,
+            <code>qk_head_dim</code>, <code>num_kv_heads</code>.</li>
+          </ul>
+
+          <!-- causalab_mini/address.py:49-106 — the _Component fields -->
+          <p>What mini keeps beside the accessor's name is policy: which axis of the
+          tensor the sequence runs along, whether it is per head and per which heads
+          (<code>q</code> or <code>kv</code>, which differ under grouped-query
+          attention), whether its last axis is the keys of a padded batch rather than a
+          feature width, which model attribute publishes its width, whether a write
+          there is refused, and the four interiors nnterp does not address.</p>
+
+          <div class="note">
+            <span class="label">why the line is there</span>
+            <!-- FINDINGS.md:1540-1552 records the pass and the list; the gemma-2-2b
+                 number is nnterp/CHANGELOG.md, "attentions_output / mlps_output are
+                 the contributions on Gemma-2/3 and OLMo-2" -->
+            <p>The families disagree about where a block's places are, and the
+            disagreement is invisible from a module name. Gemma-2/3 and OLMo-2
+            normalize a sublayer's output before adding it, so the attention module's
+            raw output is not the contribution — on google/gemma-2-2b its norm is 17x
+            smaller than the stream it would be taken as part of (recorded in nnterp's
+            changelog). GPT-NeoX's second norm exists and normalizes the block
+            <em>input</em>. BLOOM adds the residual inside its sublayers. The
+            <code>o_proj</code> input is <code>heads · head_dim</code> wide, not
+            <code>hidden_size</code>, on Qwen3 and Gemma.</p>
+            <p><code>FINDINGS.md</code> §23 records the exploratory pass over 24
+            families that found these. Each one carried on mini's side is a second
+            family table beside nnterp's, which is the reason there is one.</p>
+          </div>
+
+          <h2 id="what-an-address-row-is">What an Address row is <a class="anchor" href="#what-an-address-row-is" aria-label="Link to this section">#</a></h2>
+
+          <!-- nnterp/nnterp/rename_utils.py:502-575 -->
+          <table>
+            <thead>
+              <tr><th>field</th><th>what it answers</th><th>default</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>module</code></td>
+                <td>Which child, as a dotted path in nnterp's standardized names —
+                under the layer for a per-layer place (<code>""</code> is the layer
+                itself), under the model for a whole-model one.</td>
+                <td><code>""</code></td></tr>
+              <tr><td><code>per_layer</code></td>
+                <td>One per layer, reached as <code>accessor[i]</code>, or one per
+                model, reached as <code>accessor()</code>.</td>
+                <td><code>True</code></td></tr>
+              <tr><td><code>io</code></td>
+                <td>Which side carries the tensor: <code>INPUT</code> (the first
+                positional argument), <code>INPUTS</code> (the whole
+                <code>(args, kwargs)</code> pair, which an argument other than the
+                first is named in), <code>OUTPUT</code>, or <code>None</code> for the
+                module envoy itself.</td>
+                <td><code>OUTPUT</code></td></tr>
+              <tr><td><code>op</code></td>
+                <td>Operations of the module's <code>.source</code> to descend
+                through, outermost first. A callable is accepted for a forward no name
+                can describe.</td>
+                <td><code>()</code></td></tr>
+              <tr><td><code>select</code></td>
+                <td>Where the tensor sits inside the value at that place, when the
+                value is not the tensor itself.</td>
+                <td><code>None</code></td></tr>
+              <tr><td><code>order</code></td>
+                <td>Rank of this place in the block's forward pass.</td>
+                <td class="num"><code>0</code></td></tr>
+              <tr><td><code>unavailable</code></td>
+                <td>Why this family has no such tensor — a reason, or a function of
+                the layer's module for a place some layers have and others do not.</td>
+                <td><code>None</code></td></tr>
+              <tr><td><code>tags</code></td>
+                <td>Facts a consumer or a check needs, such as <code>"sink"</code>:
+                the attention probabilities of a model with attention sinks sum to less
+                than one.</td>
+                <td><code>frozenset()</code></td></tr>
+            </tbody>
+          </table>
+
+          <!-- nnterp/nnterp/standardized_transformer.py:186-200 -->
+          <p>Every row of the table becomes an attribute of the model —
+          <code>model.layers_output[i]</code>, <code>model.lm_head_output()</code> —
+          and a member of <code>model.internals</code>, which is the rows by name in
+          forward order. Adding a place is adding a row and nothing else. A row whose
+          name the model already uses is refused at load with a message saying to
+          rename it, rather than replacing the attribute.</p>
+
+          <!-- nnterp/nnterp/standardized_transformer.py:40-43 -->
+          <p><code>model.logits</code> and <code>model.token_embeddings</code> are the
+          two exceptions, and they are spellings rather than exceptions to the table:
+          each stays the tensor property it is and reads its row
+          (<code>logits</code> and <code>embeddings_output</code>), so there is still
+          one answer per place. <a href="locations.html">Locations</a> has the
+          component table and why <code>logits</code> and <code>lm_head</code> are
+          not the same tensor on every family.</p>
+
+          <h2 id="a-family-that-differs-is-one-row">A family that differs is one row <a class="anchor" href="#a-family-that-differs-is-one-row" aria-label="Link to this section">#</a></h2>
+
+          <!-- nnterp/nnterp/rename_utils.py:1041-1120 -->
+          <p><code>FAMILY_ADDRESSES</code> is a list of
+          <code>(model class or predicate, rows)</code>; the defaults are applied,
+          then every entry that matches, then the user's <code>RenameConfig</code>.
+          Later entries win. Each row is <code>replace()</code> on the default one, so
+          an override states only what differs.</p>
+
+          <table>
+            <thead><tr><th>family</th><th>what its rows say</th></tr></thead>
+            <tbody>
+              <tr><td>OPT</td><td><code>mlps</code>, <code>mlps_input</code>,
+                <code>mlps_output</code> are unavailable: the block has no MLP module,
+                its feed-forward layers are its own <code>fc1</code> /
+                <code>fc2</code>.</td></tr>
+              <tr><td>Gemma-2, Gemma-3, OLMo-2</td><td><code>attentions_output</code>
+                is <code>post_attention_layernorm</code> and <code>mlps_output</code>
+                is <code>post_feedforward_layernorm</code>: these families normalize a
+                sublayer's output before adding it, so the post-norm's output is the
+                tensor added to the stream.</td></tr>
+              <tr><td>BLOOM</td><td><code>attentions_output</code> is
+                <code>self_attn.dense</code>, <code>mlps_output</code> is
+                <code>mlp.dense_4h_to_h</code>, and the pattern is a different
+                <code>.source</code> operation.</td></tr>
+              <tr><td>BLOOM with <code>slow_but_exact</code></td>
+                <td>Both contributions are unavailable: these checkpoints compute the
+                output projections with <code>F.linear</code>, so no module carries the
+                sublayer's additive contribution.</td></tr>
+              <tr><td>MPT</td><td><code>mlps_output</code> is
+                <code>mlp.down_proj</code>; the pattern is a bare
+                <code>nn_functional_dropout_0</code>.</td></tr>
+              <tr><td>DBRX</td><td>Six rows. Its <code>norm_1</code> is inside what
+                nnterp calls <code>self_attn</code>, so it comes <em>after</em> that
+                container's input rather than before it — an order override, not only
+                a path one.</td></tr>
+              <tr><td>Falcon, Falcon with alibi, GPT-J</td>
+                <td>The pattern's operation only: these forwards reach the softmax by
+                a different route.</td></tr>
+              <tr><td>GPT-OSS</td><td>One tag, <code>"sink"</code>: the softmax spans
+                the keys plus a sink and the sink is dropped, so the pattern sums to
+                less than one.</td></tr>
+            </tbody>
+          </table>
+
+          <h2 id="a-place-on-a-child-nnterp-does-not-rename">A place on a child nnterp does not rename <a class="anchor" href="#a-place-on-a-child-nnterp-does-not-rename" aria-label="Link to this section">#</a></h2>
+
+          <!-- nnterp/nnterp/rename_utils.py:942-1006 -->
+          <p>nnterp standardizes the block, the mixer and the MLP. It does not rename
+          their children, and families spell them differently:
+          <code>input_layernorm</code> or <code>ln_1</code>, <code>o_proj</code> or
+          <code>c_proj</code> or <code>dense</code> or <code>out_proj</code>,
+          <code>act_fn</code> or <code>act</code> or <code>gelu_impl</code>. Which
+          spelling a model uses is a question the checkpoint can answer, so
+          <code>STRUCTURAL_ADDRESSES</code> holds the candidates and
+          <code>structural_addresses</code> reads the module tree: the row's
+          <code>{name}</code> becomes the one candidate that exists.</p>
+
+          <!-- nnterp/nnterp/rename_utils.py:1181-1190 -->
+          <p>If none exists, or several do, the place is unavailable with a reason
+          naming the candidates it looked for, the children the layers actually have,
+          and <code>RenameConfig(addresses={…})</code> as the way to say which.
+          Guessing by shape is exactly the silent failure this removes.</p>
+
+          <p>Six rows are resolved this way. On the two fixtures:</p>
+
+          <!-- ran 2026-09-23, CPU, fp32, transformers 5.17.0 -->
+          <table>
+            <thead>
+              <tr><th>row</th><th>side</th><th>tiny Llama</th><th>tiny GPT-2</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>attentions_norm_output</code></td><td>output</td>
+                <td><code>input_layernorm</code></td><td><code>ln_1</code></td></tr>
+              <tr><td><code>attentions_premix</code></td><td>input</td>
+                <td><code>self_attn.o_proj</code></td><td><code>self_attn.c_proj</code></td></tr>
+              <tr><td><code>layers_mid</code></td><td>input</td>
+                <td><code>post_attention_layernorm</code></td><td><code>ln_2</code></td></tr>
+              <tr><td><code>mlps_norm_output</code></td><td>output</td>
+                <td><code>post_attention_layernorm</code></td><td><code>ln_2</code></td></tr>
+              <tr><td><code>mlps_activation</code></td><td>output</td>
+                <td><code>mlp.act_fn</code></td><td><code>mlp.act</code></td></tr>
+              <tr><td><code>mlps_neurons</code></td><td>input</td>
+                <td><code>mlp.down_proj</code></td><td><code>mlp.c_proj</code></td></tr>
+            </tbody>
+          </table>
+
+          <p><code>layers_mid</code> and <code>mlps_norm_output</code> land on the same
+          module and differ by side: the mid-stream is what the pre-MLP norm reads, and
+          the norm's output is what the MLP reads.</p>
+
+          <h2 id="block-structure-and-why-the-tree-alone-is-not-enough">Block structure, and why the tree alone is not enough <a class="anchor" href="#block-structure-and-why-the-tree-alone-is-not-enough" aria-label="Link to this section">#</a></h2>
+
+          <!-- nnterp/nnterp/rename_utils.py:1121-1139 -->
+          <p><code>model.block_structure</code> is how a block combines its two
+          sublayers with the residual stream, read from the model's class and config:
+          <code>pre_norm</code>, <code>sandwich_norm</code> (Gemma-2/3),
+          <code>post_norm</code> (OLMo-2), <code>parallel</code> (GPT-NeoX, GPT-J,
+          Falcon, Phi, StableLM-2) or <code>residual_inside</code> (BLOOM, MPT,
+          DBRX). Each structural row's candidates are keyed by it, and a structure with
+          no such place holds the reason instead of the candidates.</p>
+
+          <!-- nnterp/nnterp/rename_utils.py:933-937 -->
+          <p>Keying by structure rather than by name is the whole point, because the
+          same child name means different things on different blocks:</p>
+
+          <ul>
+            <li>A sandwich-norm block spells the pre-MLP norm
+            <code>pre_feedforward_layernorm</code> and <em>also</em> has a
+            <code>post_attention_layernorm</code> — which there is the attention's
+            post-norm. A candidate-existence rule would pick it and read a real tensor
+            of the right shape from the wrong place.</li>
+            <li>A post-norm block has the children and not the places: attention reads
+            the residual stream itself, and the norm comes after the sublayer.</li>
+            <li>A parallel block has no mid-stream at all, because attention and the
+            MLP both read the block input — and on GPT-NeoX a second norm exists
+            anyway, normalizing that input.</li>
+          </ul>
+
+          <!-- nnterp/tests/test_block_invariants.py:1-16 -->
+          <p>What holds the names to their meanings is that each place is defined by
+          what it is <em>of</em> the block, as an identity over the tensors:</p>
+
+          <pre><code>layers_mid       == layers_input + attentions_output
+layers_output    == layers_mid   + mlps_output
+mlps_norm_output == mlps_input</code></pre>
+
+          <p>and, on a parallel block,
+          <code>layers_output == layers_input + attentions_output + mlps_output</code>.
+          A row that resolved to a plausible neighbour satisfies none of them.</p>
+
+          <h2 id="availability-before-any-trace">Availability, before any trace <a class="anchor" href="#availability-before-any-trace" aria-label="Link to this section">#</a></h2>
+
+          <!-- nnterp/nnterp/internals.py:42-57 -->
+          <p><code>model.internals.status()</code> answers, for every row,
+          <code>None</code> if it is available and otherwise the reason it is not —
+          decided from the address and the module tree, without running the model. On
+          the tiny Llama:</p>
+
+          <!-- ran 2026-09-23, CPU, fp32, transformers 5.17.0 -->
+          <pre><code class="language-python">from nnterp import StandardizedTransformer
+
+model = StandardizedTransformer("hf-internal-testing/tiny-random-LlamaForCausalLM",
+                                device_map="cpu")
+for name, reason in model.internals.status().items():
+    print(f"{name:26} {reason or ''}")</code></pre>
+
+          <pre><code>embeddings_input
+embeddings_output
+layers_input
+attentions_norm_output
+attentions
+attentions_input
+attention_probabilities    Attention probabilities are disabled for this model. Set enable_attention_probs=True when loading the model to enable them.
+attentions_premix
+attentions_output
+layers_mid
+mlps_norm_output
+mlps
+mlps_input
+mlps_activation
+mlps_neurons
+mlps_output
+layers_output
+ln_final_output
+lm_head_output
+logits</code></pre>
+
+          <p>Twenty rows, in forward order, one reason. The tiny GPT-2 prints the same
+          twenty names with the same one reason — the difference between the two
+          families is entirely in what those names resolved to, which is the table
+          above.</p>
+
+          <p>A family that lacks a place says so by name. The tiny GPT-NeoX, whose
+          block is parallel:</p>
+
+          <!-- ran 2026-09-23, CPU, fp32 — the same loop, on
+               hf-internal-testing/tiny-random-GPTNeoXForCausalLM -->
+          <pre><code>…
+attentions_output
+layers_mid                 layers_mid does not exist on this model: its block is &#x27;parallel&#x27;. Attention and the MLP both read the block input, so there is no residual stream between them.
+mlps_norm_output           mlps_norm_output does not exist on this model: its block is &#x27;parallel&#x27;. The MLP reads the block input, so there is no mid-stream for a norm to read (on GPT-NeoX the second norm exists, and normalizes the block input).
+mlps
+…</code></pre>
+
+          <!-- nnterp/nnterp/internals.py:42-57; rename_utils.py:1166-1180 -->
+          <p><code>unavailable</code> may be a function of the layer's module rather
+          than a string, and <code>status(layer=i)</code> answers for one layer — which
+          is what a model whose layers are not all alike needs. On a mixture of
+          experts a token goes through top-k of N experts and has no single activation,
+          so the two MLP interiors say so:</p>
+
+          <!-- ran 2026-09-23, CPU, fp32 — the same loop, on
+               hf-internal-testing/tiny-random-Qwen3MoeForCausalLM -->
+          <pre><code>…
+mlps_input
+mlps_activation            mlps_activation does not exist on a mixture-of-experts layer, where a token goes through top-k of N experts and has no single activation. mlps_input and mlps_output are the block&#x27;s boundaries and work as usual.
+mlps_neurons               mlps_neurons does not exist on a mixture-of-experts layer, where a token goes through top-k of N experts and has no single activation. mlps_input and mlps_output are the block&#x27;s boundaries and work as usual.
+mlps_output
+…</code></pre>
+
+          <!-- nnterp/nnterp/tests/test_config.yaml:117-119 and
+               test_block_invariants.py:84-89 -->
+          <p>Every block of that checkpoint is a mixture, so its model-wide answer and
+          each layer's are the same. The mixed case is
+          <code>yujiepan/deepseek-v3-tiny-random</code>, whose layer 0 is dense and
+          layer 1 a mixture: <code>status(layer=0)["mlps_activation"]</code> is
+          <code>None</code> there and <code>status(layer=1)</code> gives the reason
+          above. That checkpoint is not in this machine's cache, so the split is quoted
+          from <code>nnterp/tests/test_config.yaml</code> and the assertion in
+          <code>test_block_invariants.py</code> rather than run here.</p>
+
+          <h2 id="selection-where-the-tensor-is-inside-the-value">Selection: where the tensor is inside the value <a class="anchor" href="#selection-where-the-tensor-is-inside-the-value" aria-label="Link to this section">#</a></h2>
+
+          <!-- nnterp/nnterp/rename_utils.py:448-500 -->
+          <p>A place does not always hold the tensor directly. A module may return its
+          output beside a cache; the model's own output is an object with a
+          <code>logits</code> field. <code>Address.select</code> is where the tensor is
+          inside that value, and it is a pair — <code>get</code> to read and
+          <code>put</code> to write — because a write has to hand the place back its
+          whole value with one part replaced, rebuilding tuples, named tuples, lists
+          and mappings on the way out.</p>
+
+          <table>
+            <thead><tr><th><code>select</code></th><th>what it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>None</code></td>
+                <td>The value untouched, tuple or not: what the place holds is what you
+                get, and what you write is what it gets.</td></tr>
+              <tr><td><code>Index(*steps)</code></td>
+                <td>Indices and keys walked in and rebuilt on the way out.
+                <code>Index(0, 1)</code> is one step of each; a row may spell it as a
+                bare <code>0</code> or <code>(0, 1)</code>.</td></tr>
+              <tr><td><code>FirstIfTuple()</code></td>
+                <td>The first element where the value is a tuple and the value itself
+                where it is not — decided at <em>each</em> access, since the layers of
+                one model need not agree.</td></tr>
+            </tbody>
+          </table>
+
+          <!-- measured 2026-09-23 on the tiny Llama: the rows whose select is not None -->
+          <p>Four rows of twenty carry one. Three are
+          <code>FirstIfTuple()</code> — <code>attentions_output</code>,
+          <code>mlps_output</code>, <code>layers_output</code> — and one is an
+          <code>Index</code>: <code>logits</code>, which reads the
+          <code>logits</code> field of the model's own output.</p>
+
+          <div class="note">
+            <span class="label">measured, not assumed</span>
+            <!-- nnterp/CHANGELOG.md, "Per-layer tuple detection in the accessors" -->
+            <p>Those three are the places a module returns its tensor in a tuple on
+            some families, over the 26 families of
+            <code>nnterp/tests/test_block_invariants.py</code>. No other place in that
+            sweep is ever a tuple. Deciding per access rather than per model is what
+            lets a model whose layers return different structures be read in any
+            order — and a row that points at a norm or a projection instead returns
+            what that module returns, untouched.</p>
+          </div>
+
+          <h2 id="forward-order">Forward order <a class="anchor" href="#forward-order" aria-label="Link to this section">#</a></h2>
+
+          <!-- nnterp/nnterp/internals.py:59-70 -->
+          <p>nnsight will not reach back to a value the model has already passed:
+          reading layer 8 and then layer 2 in one trace raises, and a write has to go
+          in above the read that observes it. So a place's rank in the forward pass is
+          part of its row. <code>internals.rank(name, layer)</code> is
+          <code>(layer, order)</code> for a per-layer place; a whole-model place gets
+          <code>(-1, order)</code> where its order is negative and
+          <code>(num_layers, order)</code> where it is not, which puts the embeddings
+          below every layer and the final norm and head above.</p>
+
+          <!-- causalab_mini/address.py:374-390, 449-451 -->
+          <p>Mini stamps that answer into the address rather than keeping a second
+          numbering beside it — nnterp moves a place's order per family, and two
+          numberings are how they drift apart with nothing saying so. The four
+          interiors, which nnterp does not address, are mini's own numbers
+          <em>interleaved</em> into nnterp's: 11, 12, 15 and 22, in the gaps nnterp
+          leaves between its 10, 20, 25 and 30 inside the attention. Every component of
+          mini's table on the tiny Llama, sorted by its rank:</p>
+
+          <!-- ran 2026-09-23, CPU, fp32, attn_implementation="eager" so the pattern
+               and the scores resolve; layer 0 of a 2-layer model -->
+          <pre><code>rank        component              kind       nnterp row
+(-1, -2)    input_ids              boundary   embeddings_input
+(-1, -1)    embeddings             boundary   embeddings_output
+(0, 0)      block_input            boundary   layers_input
+(0, 5)      attention_input_norm   boundary   attentions_norm_output
+(0, 11)     attention_query        interior   -
+(0, 12)     attention_key          interior   -
+(0, 15)     attention_scores       interior   -
+(0, 20)     attention_probs        interior   attention_probabilities
+(0, 22)     attention_z            interior   -
+(0, 25)     attention_premix       boundary   attentions_premix
+(0, 30)     attention_output       boundary   attentions_output
+(0, 33)     block_mid              boundary   layers_mid
+(0, 36)     mlp_input_norm         boundary   mlps_norm_output
+(0, 40)     mlp_input              boundary   mlps_input
+(0, 44)     mlp_activation         boundary   mlps_activation
+(0, 47)     mlp_neuron_output      boundary   mlps_neurons
+(0, 50)     mlp_output             boundary   mlps_output
+(0, 60)     block_output           boundary   layers_output
+(2, 1000)   ln_final               boundary   ln_final_output
+(2, 1001)   lm_head                boundary   lm_head_output
+(2, 1002)   logits                 boundary   logits</code></pre>
+
+          <p>Twenty-one components. Seventeen are the name of an nnterp row, and four
+          are interiors nnterp does not address. <code>attention_probs</code> is a row
+          of nnterp's that is itself an operation — its address names two
+          <code>.source</code> operations — so mini marks that address
+          <code>inside</code>, which is what an engine that only knows module
+          boundaries has to be told. The three nnterp rows mini's table does not name
+          (<code>attentions</code>, <code>attentions_input</code>,
+          <code>mlps</code>) are still addressable; see below.</p>
+
+          <h2 id="how-mini-consumes-it">How mini consumes it <a class="anchor" href="#how-mini-consumes-it" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/address.py:417-468 -->
+          <p><code>locate(model, component, layer)</code> is the whole of it. It asks
+          <code>model.internals[accessor]</code> for the row, asks
+          <code>unavailable_on(layer)</code> whether the place exists here, asks
+          <code>internals.rank</code> where it sits, and writes the resolved child, the
+          side and the rank into an <code>Address</code> that stays pure data — so it
+          pickles, sorts, prints, and travels in a plan that an engine without nnterp's
+          accessors can still walk.</p>
+
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:223-263 -->
+          <p>In the trace, a boundary is one line each way:</p>
+
+          <pre><code class="language-python">model.internals[address.accessor][address.layer]            # read
+model.internals[address.accessor][address.layer] = tensor   # write</code></pre>
+
+          <!-- causalab_mini/address.py:452-457 -->
+          <p>Two things are cross-checked rather than trusted. <code>locate</code>
+          compares mini's <code>per_layer</code> against nnterp's and refuses if they
+          disagree, naming the table as mini's to fix; and a place the family or the
+          layer lacks is refused at compile time with nnterp's own reason, rather than
+          inside someone else's process. <code>causalab-mini model</code> is that,
+          for every component at once:</p>
+
+          <!-- ran 2026-09-23 in the repo root, CUDA_VISIBLE_DEVICES=, HF_HUB_OFFLINE=1 -->
+          <pre><code class="language-bash">$ uv run causalab-mini model hf-internal-testing/tiny-random-GPTNeoXForCausalLM
+hf-internal-testing/tiny-random-GPTNeoXForCausalLM via nnterp: 5 layers, padding_side=left
+  attention_query    ok   width=32  op=attention_interface_1
+  attention_key      ok   width=32  op=attention_interface_1
+  attention_scores   --   component &#x27;attention_scores&#x27; exists only under &#x27;eager&#x27; attention, and this model runs &#x27;sdpa&#x27;: say &quot;attn_implementation&quot;: &quot;eager&quot; in the document&#x27;s model block
+  …
+  attention_output   ok   width=32
+  block_mid          --   component &#x27;block_mid&#x27;: layers_mid does not exist on this model: its block is &#x27;parallel&#x27;. Attention and the MLP both read the block input, so there is no residual stream between them.
+  mlp_input_norm     --   component &#x27;mlp_input_norm&#x27;: mlps_norm_output does not exist on this model: its block is &#x27;parallel&#x27;. The MLP reads the block input, so there is no mid-stream for a norm to read (on GPT-NeoX the second norm exists, and normalizes the block input).
+  mlp_input          ok   width=32
+  mlp_activation     ok   width=37
+  …
+  logits             ok   width=1024</code></pre>
+
+          <h3 id="what-is-still-mini-s">What is still mini's <a class="anchor" href="#what-is-still-mini-s" aria-label="Link to this section">#</a></h3>
+
+          <!-- causalab_mini/address.py:108-184 -->
+          <p>Four interiors: <code>attention_query</code>, <code>attention_key</code>,
+          <code>attention_scores</code>, <code>attention_z</code>. The tensor never
+          crosses a module boundary, so the address is a module plus one operation
+          inside its forward, reached through nnsight's <code>.source</code>. The
+          query and the key are positional arguments 1 and 2 of the attention
+          interface call; <code>attention_z</code> is that call's return, element 0.
+          <!-- nnterp/design/internals-addressing.md:1-21, the "What shipped" header -->
+          nnterp's design document lists these among the things its internals layer
+          does not address, along with per-head indexing and a tensor-layout
+          descriptor — so the per-head slicing is mini's too, and a per-head tensor is
+          handed on flat however the model holds it.</p>
+
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:201-220 -->
+          <p>Mini names such an operation by its <em>call site</em>, not by its name,
+          and <code>find_op</code> resolves the name against the loaded checkpoint.
+          nnsight names an operation <code>{callable}_{occurrence}</code> and gives
+          assignments the same namespace as calls, so this forward has both
+          <code>attention_interface_0</code> (the assignment that looks the
+          implementation up) and <code>attention_interface_1</code> (the call). A name
+          match on <code>attention_interface</code> hits both and is refused with the
+          forward's whole operation list; the needle
+          <code>"attention_interface("</code> is call-shaped and hits one.</p>
+
+          <div class="caution">
+            <span class="label">why not a name</span>
+            <!-- FINDINGS.md:290-302 -->
+            <p>A binding's suffix does not survive the trip between families, and
+            <code>FINDINGS.md</code> §1.11 records the measurement:
+            <code>query_states_0</code> is the query on tiny Llama and the
+            <em>cross-attention</em> query on tiny GPT-2 — a branch that checkpoint
+            never runs. An address spelled as the binding reads the right tensor on one
+            family and a never-executed branch on the other, with no error. A call-op
+            suffix counts calls of one symbol, and both forwards call the interface
+            once, so both resolve to <code>attention_interface_1</code> despite GPT-2's
+            forward being much larger.</p>
+          </div>
+
+          <!-- causalab_mini/address.py:139-155, 440-446 -->
+          <p><code>attention_scores</code> is a step further in: the softmax's argument
+          inside the function the interface call dispatches to. nnsight can only open
+          that nested source inside a trace — which function the call dispatches to is
+          a run-time fact — so the table holds the inner operation's <em>name</em> and
+          the engine resolves it where the run runs. It exists only under eager
+          attention, and that <em>is</em> checkable on the client, so
+          <code>locate</code> refuses at compile time and says what to write:
+          <code>"attn_implementation": "eager"</code> in the document's model block.</p>
+
+          <!-- causalab_mini/ops/locate.py:69-83 -->
+          <p>Positions are mini's too, for the same reason the components are nnterp's:
+          Llama's tokenizer prepends a BOS and GPT-2's prepends nothing, so without a
+          content frame <code>{"index": 0}</code> is <code>&lt;s&gt;</code> on one
+          family and the first word on the other — one document addressing two
+          different things, silently. See <a href="positions.html">Positions</a>.</p>
+
+          <h2 id="adding-an-architecture-or-a-place">Adding an architecture, or a place <a class="anchor" href="#adding-an-architecture-or-a-place" aria-label="Link to this section">#</a></h2>
+
+          <!-- nnterp/nnterp/rename_utils.py:51-155 -->
+          <p>An architecture nnterp has never seen is a <code>RenameConfig</code>: the
+          names of its containers (<code>attn_name</code>, <code>mlp_name</code>,
+          <code>ln_final_name</code>, <code>lm_head_name</code>,
+          <code>model_name</code>, <code>layers_name</code>) and, where a place is
+          somewhere else, an <code>Address</code> row for it.
+          <code>addresses={…}</code> is the general form of the three narrower fields
+          beside it: it replaces where an existing accessor reads, or adds one of your
+          own.</p>
+
+          <!-- ran 2026-09-23, CPU, fp32 -->
+          <pre><code class="language-python">from nnterp import StandardizedTransformer
+from nnterp.rename_utils import Address, IOType, RenameConfig
+
+config = RenameConfig(addresses={
+    "attentions_gate": Address("self_attn.q_proj", IOType.OUTPUT, order=15),
+})
+model = StandardizedTransformer("hf-internal-testing/tiny-random-LlamaForCausalLM",
+                                device_map="cpu", rename_config=config)
+print("attentions_gate" in model.internals)
+print(repr(model.internals["attentions_gate"]))</code></pre>
+
+          <pre><code>True
+&lt;attentions_gate: self_attn.q_proj.output, per layer&gt;</code></pre>
+
+          <!-- causalab_mini/address.py:424-438, 224-228; tests/test_address.py:58-70 -->
+          <p>Mini's table is a floor, not a fence. A component name mini has never
+          heard of but <code>model.internals</code> has is addressable, because a
+          document should be able to name what a user added. The same row, through
+          mini, resolves at layer 1 to <code>module='self_attn.q_proj'</code>,
+          <code>io='output'</code>, <code>rank=(1, 15)</code>. Mini claims nothing else
+          about such a place: no width, so a featurizer there is refused rather than
+          sized wrongly, it is not per head, and it is a module boundary.</p>
+
+          <h2 id="when-transformers-moves">When transformers moves <a class="anchor" href="#when-transformers-moves" aria-label="Link to this section">#</a></h2>
+
+          <!-- nnterp/nnterp/tests/test_source_ops.py:1-17 -->
+          <p>A <code>.source</code> row names operations the way nnsight names them,
+          which is a fact about the installed transformers version and not about the
+          architecture. An upgrade that moves a call, renames a local, or routes a
+          family through the shared attention interface invalidates a row. Two suites
+          stand against it:</p>
+
+          <table>
+            <thead><tr><th>suite</th><th>what it asserts</th></tr></thead>
+            <tbody>
+              <tr><td><code>nnterp/tests/test_block_invariants.py</code></td>
+                <td>Over 26 families: the published block structure, what the family
+                lacks known before any trace, every available accessor reading a tensor
+                on every layer, the residual identities, the published sizes checked
+                against the tensors and modules rather than the config, and a write at
+                each new accessor landing.</td></tr>
+              <tr><td><code>nnterp/tests/test_source_ops.py</code></td>
+                <td>The same 26 families loaded with the attention probabilities
+                <em>enabled</em>, so every operation row has to resolve. The tensor is
+                then checked to be a pattern — non-negative,
+                <code>[batch, heads, queries, keys]</code>, summing to one (to less than
+                one where the row is tagged <code>"sink"</code>), and equal to a manual
+                softmax of the scores where the forward makes them reachable.</td></tr>
+            </tbody>
+          </table>
+
+          <p>A row that drifted onto the scores, the values or the post-mix output
+          passes a shape check and fails these. And when a row does break, the error
+          names the row, the module, the transformers version, the model class and
+          every operation that does exist at that level of the source:</p>
+
+          <!-- provoked 2026-09-23 on the tiny GPT-2 by pointing the
+               attention_probabilities row at 'module_attn_dropout_0', the name that
+               forward used before transformers 5. LayerAccessor.get_operation,
+               nnterp/nnterp/rename_utils.py:700-717. Trimmed to the softmax and the
+               dropout. -->
+          <pre><code>attention_probabilities: the forward of layers.0.self_attn.attention_interface_1 has no operation &#x27;module_attn_dropout_0&#x27; with transformers 5.17.0 on GPT2LMHeadModel. Its operations are:
+                             * def eager_attention_forward(module, query, key, value, attention_mask, scaling=None, dropout=0.0, **kwargs):
+                             …
+ nn_functional_softmax_0 -&gt;  8     attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+ attn_weights_2          -&gt;  +     ...
+                             9
+                            10     # Downcast (if necessary) back to V&#x27;s dtype (if in mixed-precision) -- No-Op otherwise
+ attn_weights_type_0     -&gt; 11     attn_weights = attn_weights.type(value.dtype)
+ attn_weights_3          -&gt;  +     ...
+ nn_functional_dropout_0 -&gt; 12     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+ attn_weights_4          -&gt;  +     ...
+                            13
+                            14     return attn_output, attn_weights</code></pre>
+
+          <p>The fix is a one-row edit, and the name this one needs —
+          <code>nn_functional_dropout_0</code> — is in the list the message printed.</p>
+
+          <h2 id="remote">Remote <a class="anchor" href="#remote" aria-label="Link to this section">#</a></h2>
+
+          <!-- nnterp/nnterp/standardized_transformer.py:89-95 (the remote= contract)
+               and :156-164 (what it sets) -->
+          <p>A request carries nothing of nnterp. The package is not registered for
+          by-value serialization, so an NDIF server runs its own installed copy and
+          must have it at the same version as the client. The same flag keeps the
+          checkpoint off the client: <code>remote=True</code> sets
+          <code>allow_dispatch=False</code>, every load-time check runs with
+          <code>scan()</code> on the meta model, and no request is sent during
+          construction.</p>
+
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:22-27; FINDINGS.md §24 -->
+          <p>Mini is on the same side of that line: nothing of it ships by value
+          either, so the server needs <code>causalab_mini</code> installed at the
+          client's version as well as nnterp, and a server without it fails with a
+          <code>ModuleNotFoundError</code> rather than running a different copy.
+          See <a href="remote.html">Remote &amp; NDIF</a>.</p>
+
+          <div class="seealso">
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
+            <ul>
+              <li><a href="locations.html">Locations</a> — the component vocabulary
+                  itself: all 21 names, which are per-layer, which are read-only, and
+                  which need <code>attn_implementation: eager</code></li>
+              <li><a href="positions.html">Positions</a> — the other half of "the same
+                  document means the same thing on two families": the content frame,
+                  and what <code>{"index": 0}</code> anchors to</li>
+              <li><a href="engine.html">The engine</a> — what an engine must answer
+                  about a model, and what the hooks engine has to translate when it has
+                  no nnterp handle</li>
+              <li><a href="remote.html">Remote &amp; NDIF</a> — running the same
+                  document on a server that already has nnterp, and what a request
+                  actually carries</li>
+            </ul>
+          </div>
+
+        </article>
+      </main>
+    </div>
+    <script src="site.js"></script>
+  </body>
+</html>

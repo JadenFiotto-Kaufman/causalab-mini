@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Layer sweep — causalab-mini</title>
+    <meta name="description" content="A worked example end to end: interchange the residual stream at every layer of Llama-3.2-1B and watch the answer cross tokens at layer 12.">
+    <link rel="stylesheet" href="../site.css">
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to content</a>
+
+    <div class="topbar">
+      <button class="iconbutton" data-nav-toggle aria-expanded="false" aria-controls="sidebar">menu</button>
+      <span class="brand">causalab-mini</span>
+      <button class="iconbutton js-only" data-theme-toggle style="margin-left:auto">dark</button>
+    </div>
+
+    <div class="layout">
+      <aside class="sidebar" id="sidebar">
+        <a class="brand" href="../index.html">causalab-mini</a>
+        <span class="brand-sub">a plan is pure data; an engine turns it into tensors</span>
+
+        <nav aria-label="Documentation">
+          <ol>
+            <li><a href="../index.html">Home</a></li>
+          </ol>
+
+          <h2>The document</h2>
+          <ol>
+            <li><a href="../documents.html">Documents</a></li>
+            <li><a href="../locations.html">Locations</a></li>
+            <li><a href="../positions.html">Positions</a></li>
+            <li><a href="../ops.html">Reads, writes, metrics</a></li>
+          </ol>
+
+          <h2>Use cases</h2>
+          <ol>
+            <li><a href="../use-cases/index.html">All use cases</a></li>
+          </ol>
+          <ol class="sub">
+          <li><a href="../use-cases/layer-sweep.html" aria-current="page">Layer sweep</a></li>
+          <li><a href="../use-cases/entity-patching.html">Entity patching</a></li>
+          <li><a href="../use-cases/das-fit.html">DAS fit</a></li>
+          <li><a href="../use-cases/dbm-fit.html">DBM fit</a></li>
+          <li><a href="../use-cases/attention-pattern.html">Attention pattern</a></li>
+          <li><a href="../use-cases/logit-lens.html">Logit lens</a></li>
+          <li><a href="../use-cases/generation.html">Generation</a></li>
+          <li><a href="../use-cases/sae-features.html">SAE features</a></li>
+          <li><a href="../use-cases/batching-and-remote.html">Batching &amp; remote</a></li>
+          <li><a href="../use-cases/sweeps.html">Sweeps</a></li>
+          </ol>
+
+          <h2>Running</h2>
+          <ol>
+            <li><a href="../cli.html">The CLI</a></li>
+          </ol>
+
+          <h2>Understand</h2>
+          <ol>
+            <li><a href="../engine.html">The engine</a></li>
+            <li><a href="../standardization.html">Standardization</a></li>
+            <li><a href="../remote.html">Remote &amp; NDIF</a></li>
+          </ol>
+        </nav>
+
+        <div class="footer">
+          <p><a href="https://github.com/JadenFiotto-Kaufman/causalab-mini">source on GitHub</a></p>
+          <p><button class="iconbutton js-only" data-theme-toggle>dark</button></p>
+        </div>
+      </aside>
+
+      <main id="content">
+        <article class="page">
+          <header>
+            <p class="eyebrow">Use case · worked example</p>
+            <h1>Layer sweep: where is "today" held?</h1>
+            <p class="lede">One document, 32 experiments. Interchange the residual
+            stream between two prompts at every layer, at two positions, and watch the
+            answer cross from one token to the other.</p>
+          </header>
+
+          <!-- behaviour recorded in documents/real/README.md: weekdays_behavior,
+               42/42 correct, p(answer) 0.45 mean -->
+          <p>Llama-3.2-1B completes <em>"If today is Thursday, tomorrow is"</em> with
+          <em>" Friday"</em>. Somewhere inside it, the identity of <em>today</em> has
+          to move from the day word to the last token, where the next-token prediction
+          is made. This page finds out where — by taking the residual stream from a
+          run on a different day and writing it into the same place on this one, at
+          each of the sixteen layers in turn.</p>
+
+          <p>That is an <strong>interchange intervention</strong>. If the patched model
+          now answers the <em>counterfactual</em> day's successor, the thing you
+          swapped was carrying the answer. The metric is <code>iia</code>: the fraction
+          of rows whose top token after the patch is the counterfactual's answer.</p>
+
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
+
+          <figure>
+            <svg viewBox="0 0 640 264" role="img" aria-labelledby="curve-t curve-d" width="640">
+              <title id="curve-t">Interchange accuracy per layer, at two positions</title>
+              <desc id="curve-d">Patching the day token carries the answer for layers 0
+              to 11 and then stops; patching the last token does nothing until layer 12
+              and then carries it. The two curves cross between layer 11 and layer 12.</desc>
+              <g stroke="var(--rule)" stroke-width="1"><line x1="52" y1="206.0" x2="608" y2="206.0"/><line x1="52" y1="162.0" x2="608" y2="162.0"/><line x1="52" y1="118.0" x2="608" y2="118.0"/><line x1="52" y1="74.0" x2="608" y2="74.0"/><line x1="52" y1="30.0" x2="608" y2="30.0"/></g>
+              <g fill="var(--fg-faint)" font-size="10.5" font-family="ui-monospace, monospace" text-anchor="end"><text x="44" y="210.0">0.00</text><text x="44" y="166.0">0.25</text><text x="44" y="122.0">0.50</text><text x="44" y="78.0">0.75</text><text x="44" y="34.0">1.00</text></g>
+              <g fill="var(--fg-faint)" font-size="10.5" font-family="ui-monospace, monospace" text-anchor="middle"><text x="52.0" y="228">0</text><text x="89.1" y="228">1</text><text x="126.1" y="228">2</text><text x="163.2" y="228">3</text><text x="200.3" y="228">4</text><text x="237.3" y="228">5</text><text x="274.4" y="228">6</text><text x="311.5" y="228">7</text><text x="348.5" y="228">8</text><text x="385.6" y="228">9</text><text x="422.7" y="228">10</text><text x="459.7" y="228">11</text><text x="496.8" y="228">12</text><text x="533.9" y="228">13</text><text x="570.9" y="228">14</text><text x="608.0" y="228">15</text></g>
+              <text x="330" y="250" fill="var(--fg-muted)" font-size="11" text-anchor="middle"
+                    font-family="ui-sans-serif, system-ui, sans-serif">layer</text>
+              <polyline points="52.0,30.0 89.1,30.0 126.1,30.0 163.2,30.0 200.3,30.0 237.3,30.0 274.4,30.0 311.5,30.0 348.5,30.0 385.6,30.0 422.7,30.0 459.7,34.2 496.8,189.2 533.9,189.2 570.9,206.0 608.0,206.0" fill="none" stroke="var(--accent)" stroke-width="2"/>
+              <g fill="var(--accent)"><circle cx="52.0" cy="30.0" r="2.6"/><circle cx="89.1" cy="30.0" r="2.6"/><circle cx="126.1" cy="30.0" r="2.6"/><circle cx="163.2" cy="30.0" r="2.6"/><circle cx="200.3" cy="30.0" r="2.6"/><circle cx="237.3" cy="30.0" r="2.6"/><circle cx="274.4" cy="30.0" r="2.6"/><circle cx="311.5" cy="30.0" r="2.6"/><circle cx="348.5" cy="30.0" r="2.6"/><circle cx="385.6" cy="30.0" r="2.6"/><circle cx="422.7" cy="30.0" r="2.6"/><circle cx="459.7" cy="34.2" r="2.6"/><circle cx="496.8" cy="189.2" r="2.6"/><circle cx="533.9" cy="189.2" r="2.6"/><circle cx="570.9" cy="206.0" r="2.6"/><circle cx="608.0" cy="206.0" r="2.6"/></g>
+              <polyline points="52.0,206.0 89.1,206.0 126.1,206.0 163.2,206.0 200.3,206.0 237.3,206.0 274.4,206.0 311.5,206.0 348.5,206.0 385.6,206.0 422.7,206.0 459.7,206.0 496.8,51.0 533.9,51.0 570.9,30.0 608.0,30.0" fill="none" stroke="var(--fg-muted)" stroke-width="2"
+                        stroke-dasharray="5 3"/>
+              <g fill="var(--fg-muted)"><circle cx="52.0" cy="206.0" r="2.6"/><circle cx="89.1" cy="206.0" r="2.6"/><circle cx="126.1" cy="206.0" r="2.6"/><circle cx="163.2" cy="206.0" r="2.6"/><circle cx="200.3" cy="206.0" r="2.6"/><circle cx="237.3" cy="206.0" r="2.6"/><circle cx="274.4" cy="206.0" r="2.6"/><circle cx="311.5" cy="206.0" r="2.6"/><circle cx="348.5" cy="206.0" r="2.6"/><circle cx="385.6" cy="206.0" r="2.6"/><circle cx="422.7" cy="206.0" r="2.6"/><circle cx="459.7" cy="206.0" r="2.6"/><circle cx="496.8" cy="51.0" r="2.6"/><circle cx="533.9" cy="51.0" r="2.6"/><circle cx="570.9" cy="30.0" r="2.6"/><circle cx="608.0" cy="30.0" r="2.6"/></g>
+              <g font-size="11.5" font-family="ui-sans-serif, system-ui, sans-serif">
+                <text x="60" y="24" fill="var(--accent)">— patch the day token (pos -4)</text>
+                <text x="330" y="24" fill="var(--fg-muted)">- - patch the last token (pos -1)</text>
+              </g>
+            </svg>
+            <figcaption>Interchange intervention accuracy, 42 ordered day pairs, one
+            point per (layer, position). Run on CPU, fp32, Llama-3.2-1B — the numbers
+            in the table below.</figcaption>
+          </figure>
+
+          <p>The crossover is between layer 11 and layer 12, and it is sharp. Up to
+          layer 11, "today" is at the day token and the last token holds nothing;
+          from layer 12 it is the other way round.</p>
+
+          <h2 id="the-data">The data <a class="anchor" href="#the-data" aria-label="Link to this section">#</a></h2>
+
+          <p>All 42 ordered pairs of weekdays. Every weekday name is a single token in
+          this tokenizer, which is what makes the task scorable at one position.</p>
+
+          <!-- ran 2026-09-23 in the repo root -->
+          <pre><code class="language-bash">$ uv run causalab-mini data weekdays_full/data
+weekdays_full/data: 42 rows
+  columns: base_answer, cf_answer, cf_entity, counterfactual_inputs, entity, example_id, input, split
+  splits:  test, train
+  sample:  {&quot;example_id&quot;: &quot;Sun-Mon&quot;, &quot;input&quot;: &quot;If today is Sunday, tomorrow is&quot;, &quot;counterfactual_inputs&quot;: [&quot;If today is Monday, tomorrow is&quot;], &quot;entity&quot;: &quot;Sunday&quot;, &quot;cf_entity&quot;: &quot;Monday&quot;, &quot;base_answer&quot;: &quot; Monday&quot;, &quot;cf_answer&quot;: &quot; Tuesday&quot;, &quot;split&quot;: &quot;test&quot;}</code></pre>
+
+          <p>A metric column has to resolve to one token, and the CLI will tell you
+          before you run anything:</p>
+
+          <pre><code class="language-bash">$ uv run causalab-mini tokens meta-llama/Llama-3.2-1B &quot; Monday&quot; &quot; Tuesday&quot; &quot;Sunday&quot;
+&#x27; Monday&#x27;                1 token(s)
+&#x27; Tuesday&#x27;               1 token(s)
+&#x27;Sunday&#x27;                 1 token(s)</code></pre>
+
+
+          <h2 id="the-document">The document <a class="anchor" href="#the-document" aria-label="Link to this section">#</a></h2>
+
+          <figure class="listing">
+            <figcaption><code>documents/real/weekdays_layer_sweep.json</code> <span class="what">— the document this page runs, verbatim</span></figcaption>
+            <pre><code class="language-json">{
+  &quot;header&quot;: {
+    &quot;description&quot;: &quot;Where is &#x27;today&#x27; held? Interchange the residual stream between a base and a counterfactual day at every one of the 16 layers, at two positions: the day token itself (-4 of &#x27;If today is X , tomorrow is&#x27;) and the last token. 32 experiments, one document. `pos` is a NAMED axis: the read and the write move together, so it is 2 positions and not the 4 combinations a cross product would give.&quot;
+  },
+  &quot;model&quot;: {
+    &quot;key&quot;: &quot;meta-llama/Llama-3.2-1B&quot;,
+    &quot;revision&quot;: &quot;4e20de362430cd3b72f300e6b0f18e50e7166e08&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;
+  },
+  &quot;roles&quot;: {
+    &quot;base&quot;: {
+      &quot;field&quot;: &quot;input&quot;
+    },
+    &quot;counterfactual&quot;: {
+      &quot;field&quot;: &quot;counterfactual_inputs[0]&quot;
+    }
+  },
+  &quot;sites&quot;: {
+    &quot;target&quot;: {
+      &quot;component&quot;: &quot;block_output&quot;,
+      &quot;layers&quot;: [
+        {
+          &quot;sweep&quot;: {
+            &quot;range&quot;: [
+              0,
+              16
+            ]
+          }
+        }
+      ]
+    },
+    &quot;head&quot;: {
+      &quot;component&quot;: &quot;lm_head&quot;
+    }
+  },
+  &quot;interventions&quot;: {
+    &quot;patching&quot;: {
+      &quot;reads&quot;: {
+        &quot;v_cf&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: {
+            &quot;sweep&quot;: [
+              -4,
+              -1
+            ],
+            &quot;as&quot;: &quot;pos&quot;
+          },
+          &quot;model&quot;: &quot;original&quot;,
+          &quot;input&quot;: &quot;counterfactual&quot;
+        },
+        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;patched&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        }
+      },
+      &quot;writes&quot;: {
+        &quot;patch&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: {
+            &quot;sweep&quot;: [
+              -4,
+              -1
+            ],
+            &quot;as&quot;: &quot;pos&quot;
+          },
+          &quot;mechanism&quot;: &quot;swap&quot;,
+          &quot;operand&quot;: &quot;v_cf&quot;
+        }
+      },
+      &quot;models&quot;: {
+        &quot;patched&quot;: {
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;writes&quot;: [
+            &quot;patch&quot;
+          ]
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;iia&quot;: {
+          &quot;kind&quot;: &quot;match&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;,
+          &quot;expected&quot;: &quot;cf_answer&quot;
+        },
+        &quot;logit_diff&quot;: {
+          &quot;kind&quot;: &quot;logit_diff&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;,
+          &quot;a&quot;: &quot;cf_answer&quot;,
+          &quot;b&quot;: &quot;base_answer&quot;
+        }
+      }
+    }
+  },
+  &quot;steps&quot;: {
+    &quot;score&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;interventions&quot;: &quot;patching&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays_full/data&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays_full/data&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;iia&quot;,
+          &quot;file_path&quot;: &quot;iia.json&quot;
+        },
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;logit_diff.json&quot;
+        }
+      ]
+    }
+  }
+}</code></pre>
+          </figure>
+
+          <p>Reading it in the order the compiler does:</p>
+
+          <ul>
+            <li><code>model</code> pins the checkpoint by revision and the dtype. The
+            revision is part of the experiment, not a convenience.</li>
+            <li><code>roles</code> maps each input role to a column:
+            <code>base</code> is <code>input</code>, <code>counterfactual</code> is
+            <code>counterfactual_inputs[0]</code>. Every step supplies rows for both.</li>
+            <li><code>sites</code> names two places. <code>target</code> is
+            <code>block_output</code> — the residual stream leaving a layer — at a
+            layer the sweep fills in. <code>head</code> is <code>lm_head</code>, which
+            takes no layer because it is not per-layer.</li>
+            <li><code>interventions.patching</code> is the experiment. It reads
+            <code>v_cf</code> from the <em>unmodified</em> model on the counterfactual
+            prompt; it writes <code>patch</code>, a <code>swap</code> whose operand is
+            that read; and <code>models.patched</code> is the base prompt run with that
+            write applied. The second read, <code>logits</code>, is taken from the
+            patched model.</li>
+            <li><code>metrics</code> scores the <code>logits</code> read.
+            <code>iia</code> is a <code>match</code> against the <code>cf_answer</code>
+            column; <code>logit_diff</code> is the counterfactual answer's logit minus
+            the base answer's.</li>
+            <li><code>steps.score</code> is one observation pass over
+            <code>weekdays_full/data</code> for both roles, saving the two metric
+            tables.</li>
+          </ul>
+
+          <div class="note">
+            <span class="label">the sweep axis is named</span>
+            <p>Two fields carry <code>{"sweep": [-4, -1], "as": "pos"}</code> — the
+            read's position and the write's. Because they share the name
+            <code>pos</code>, they move <em>together</em>: two points, not the four a
+            cross product would give. The layer sweep is unnamed, so it is an axis of
+            its own. 16 layers × 2 positions = 32 experiments, one document.</p>
+          </div>
+
+          <h2 id="what-it-compiles-to">What it compiles to <a class="anchor" href="#what-it-compiles-to" aria-label="Link to this section">#</a></h2>
+
+          <p>A sweep is lowered on the raw JSON before anything is compiled: each point
+          becomes an ordinary document and is compiled on its own, with its own
+          addresses, its own tokenization and its own digest. <code>explain</code>
+          prints the whole tree, and it needs no weights:</p>
+
+          <!-- ran 2026-09-23; 225 lines, two points and the last shown -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/real/weekdays_layer_sweep.json
+&lt;root&gt;: Plan
+  layers=0,pos=-4: Plan
+    score: Observe  metrics=[&#x27;iia/match&#x27;, &#x27;logit_diff/logit_diff&#x27;]  saves=[&#x27;iia.json&#x27;, &#x27;logit_diff.json&#x27;]
+        forward &#x27;original&#x27; on &#x27;counterfactual&#x27;  (42 rows x 8 tokens)
+          read  &#x27;v_cf&#x27; at block_output[0] pos={index:-4} via &#x27;identity&#x27;
+        forward &#x27;patched&#x27; on &#x27;base&#x27;  (42 rows x 8 tokens)
+          write &#x27;patch&#x27; at block_output[0] pos={index:-4} swap(v_cf) via &#x27;identity&#x27;
+          read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
+  layers=0,pos=-1: Plan
+    score: Observe  metrics=[&#x27;iia/match&#x27;, &#x27;logit_diff/logit_diff&#x27;]  saves=[&#x27;iia.json&#x27;, &#x27;logit_diff.json&#x27;]
+        forward &#x27;original&#x27; on &#x27;counterfactual&#x27;  (42 rows x 8 tokens)
+          read  &#x27;v_cf&#x27; at block_output[0] pos={index:-1} via &#x27;identity&#x27;
+        forward &#x27;patched&#x27; on &#x27;base&#x27;  (42 rows x 8 tokens)
+          write &#x27;patch&#x27; at block_output[0] pos={index:-1} swap(v_cf) via &#x27;identity&#x27;
+          read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
+…
+  layers=15,pos=-1: Plan
+    score: Observe  metrics=[&#x27;iia/match&#x27;, &#x27;logit_diff/logit_diff&#x27;]  saves=[&#x27;iia.json&#x27;, &#x27;logit_diff.json&#x27;]
+        forward &#x27;original&#x27; on &#x27;counterfactual&#x27;  (42 rows x 8 tokens)
+          read  &#x27;v_cf&#x27; at block_output[15] pos={index:-1} via &#x27;identity&#x27;
+        forward &#x27;patched&#x27; on &#x27;base&#x27;  (42 rows x 8 tokens)
+          write &#x27;patch&#x27; at block_output[15] pos={index:-1} swap(v_cf) via &#x27;identity&#x27;
+          read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;</code></pre>
+
+          <p>Each point is two forwards over the same 42 rows: the counterfactual
+          prompts through the unmodified model to get the value, then the base prompts
+          with that value written in. <code>pos={index:-4}</code> is the day word —
+          the prompts are <code>If today is X , tomorrow is</code>, so it is four
+          tokens from the end — and <code>pos={index:-1}</code> is the token the
+          prediction is read from.</p>
+
+          <h2 id="running-it">Running it <a class="anchor" href="#running-it" aria-label="Link to this section">#</a></h2>
+
+          <pre><code class="language-bash">$ uv run causalab-mini validate documents/real/weekdays_layer_sweep.json
+ok: documents/real/weekdays_layer_sweep.json is a valid plan-shaped document</code></pre>
+
+
+          <!-- run 2026-09-23 on CPU, weights from the local HF cache -->
+          <pre><code class="language-bash">$ time uv run causalab-mini run documents/real/weekdays_layer_sweep.json \
+      --device-map cpu --out out/sweep
+out/sweep/document.json
+out/sweep/run.json
+out/sweep/layers=0,pos=-4/document.json
+out/sweep/layers=0,pos=-4/iia.json
+out/sweep/layers=0,pos=-4/logit_diff.json
+out/sweep/layers=0,pos=-1/document.json
+…
+out/sweep/layers=15,pos=-1/logit_diff.json
+
+real	1m33.389s</code></pre>
+
+          <div class="note">
+            <span class="label">what you need to reproduce this</span>
+            <p>Llama-3.2-1B is a gated checkpoint, so the first run needs
+            <code>huggingface-cli login</code>. No GPU: the run above is CPU-only,
+            fp32, 93 seconds wall clock including the model load, on a 12-core Ryzen 9
+            5900X. With
+            <code>--device-map cuda</code> it is about 12 seconds
+            (<code>documents/real/README.md</code>).</p>
+          </div>
+
+          <h3 id="what-lands-on-disk">What lands on disk <a class="anchor" href="#what-lands-on-disk" aria-label="Link to this section">#</a></h3>
+
+          <p>A swept document's root plan holds one child plan per point, and a plan's
+          path in the tree is its path on disk — which is where
+          <code>layers=12,pos=-1/</code> comes from. The root carries the document and
+          the run record; each point carries its own compiled document and its two
+          metric tables.</p>
+
+          <pre><code>out/sweep/
+├── document.json          the document as written, sweeps and all
+├── run.json               engine, library versions, package digest, served dtype
+├── layers=0,pos=-4/
+│   ├── document.json      this point&#x27;s document, the sweep lowered out
+│   ├── iia.json           42 rows
+│   └── logit_diff.json    42 rows
+├── layers=0,pos=-1/
+…
+└── layers=15,pos=-1/</code></pre>
+
+          <pre><code class="language-json">$ cat out/sweep/run.json
+{
+ &quot;engine&quot;: &quot;NNterpEngine&quot;,
+ &quot;remote&quot;: false,
+ &quot;batch_size&quot;: null,
+ &quot;versions&quot;: {
+  &quot;torch&quot;: &quot;2.14.0&quot;,
+  &quot;transformers&quot;: &quot;5.17.0&quot;,
+  &quot;nnsight&quot;: &quot;0.8.1.dev125+ga8ee93782&quot;,
+  &quot;nnterp&quot;: &quot;1.3.1.dev64+g0e4b401af&quot;,
+  &quot;pydantic&quot;: &quot;2.13.5&quot;
+ },
+ &quot;causalab_mini&quot;: &quot;76c8c9d0c0d1f3e0b8e2eaeb09564107d1c0a70cb9e8b7d6cecab09fdc92d8a1&quot;,
+ &quot;served_dtype&quot;: &quot;torch.float32&quot;
+}</code></pre>
+
+          <p>One row of a metric table, from the point where the crossover has just
+          happened:</p>
+
+          <pre><code class="language-json">$ head -13 out/sweep/layers=12,pos=-1/iia.json
+[
+ {
+  &quot;example_id&quot;: &quot;Sun-Mon&quot;,
+  &quot;metric&quot;: &quot;iia&quot;,
+  &quot;value&quot;: 1.0,
+  &quot;eligible&quot;: true,
+  &quot;positions&quot;: null,
+  &quot;reason&quot;: &quot;&quot;,
+  &quot;unit&quot;: &quot;fraction&quot;,
+  &quot;estimand_version&quot;: &quot;match/v1&quot;,
+  &quot;produced_by&quot;: &quot;d62e457f5a2e46afc0d95bc208ea5112f589c5bbf5a555421be6a16f421c5724&quot;
+ },
+…</code></pre>
+
+          <p><code>value</code> is per row, not per point: <code>1.0</code> means this
+          pair's patched model did answer the counterfactual's day.
+          <code>positions</code> is <code>null</code> and <code>reason</code> empty
+          because every position in this document is a fixed integer — there was
+          nothing the run had to resolve against the text, and nothing that could fail
+          to be placed. <code>produced_by</code> is this <em>point</em>'s digest, so
+          two points of one sweep are never confusable.</p>
+
+          <h2 id="the-curve">The curve <a class="anchor" href="#the-curve" aria-label="Link to this section">#</a></h2>
+
+          <p>The mean over the 42 rows, per point. Both metrics, both positions:</p>
+
+          <table>
+            <thead><tr><th class="num">layer</th><th class="num">IIA, day token</th><th class="num">IIA, last token</th><th class="num">logit diff, day</th><th class="num">logit diff, last</th></tr></thead>
+            <tbody>
+              <tr><td class="num">0</td><td class="num">1.00</td><td class="num">0.00</td><td class="num">+2.40</td><td class="num">-2.40</td></tr>
+              <tr><td class="num">1</td><td class="num">1.00</td><td class="num">0.00</td><td class="num">+2.40</td><td class="num">-2.41</td></tr>
+              <tr><td class="num">2</td><td class="num">1.00</td><td class="num">0.00</td><td class="num">+2.38</td><td class="num">-2.41</td></tr>
+              <tr><td class="num">3</td><td class="num">1.00</td><td class="num">0.00</td><td class="num">+2.39</td><td class="num">-2.40</td></tr>
+              <tr><td class="num">4</td><td class="num">1.00</td><td class="num">0.00</td><td class="num">+2.43</td><td class="num">-2.40</td></tr>
+              <tr><td class="num">5</td><td class="num">1.00</td><td class="num">0.00</td><td class="num">+2.42</td><td class="num">-2.39</td></tr>
+              <tr><td class="num">6</td><td class="num">1.00</td><td class="num">0.00</td><td class="num">+2.40</td><td class="num">-2.37</td></tr>
+              <tr><td class="num">7</td><td class="num">1.00</td><td class="num">0.00</td><td class="num">+2.37</td><td class="num">-2.33</td></tr>
+              <tr><td class="num">8</td><td class="num">1.00</td><td class="num">0.00</td><td class="num">+2.28</td><td class="num">-2.26</td></tr>
+              <tr><td class="num">9</td><td class="num">1.00</td><td class="num">0.00</td><td class="num">+2.23</td><td class="num">-2.21</td></tr>
+              <tr><td class="num">10</td><td class="num">1.00</td><td class="num">0.00</td><td class="num">+2.14</td><td class="num">-2.10</td></tr>
+              <tr><td class="num">11</td><td class="num">0.98</td><td class="num">0.00</td><td class="num">+1.24</td><td class="num">-1.21</td></tr>
+              <tr><td class="num">12</td><td class="num">0.10</td><td class="num">0.88</td><td class="num">-1.18</td><td class="num">+1.15</td></tr>
+              <tr><td class="num">13</td><td class="num">0.10</td><td class="num">0.88</td><td class="num">-1.18</td><td class="num">+1.16</td></tr>
+              <tr><td class="num">14</td><td class="num">0.00</td><td class="num">1.00</td><td class="num">-2.32</td><td class="num">+2.31</td></tr>
+              <tr><td class="num">15</td><td class="num">0.00</td><td class="num">1.00</td><td class="num">-2.40</td><td class="num">+2.40</td></tr>
+            </tbody>
+          </table>
+
+          <h2 id="what-the-numbers-mean">What the numbers mean <a class="anchor" href="#what-the-numbers-mean" aria-label="Link to this section">#</a></h2>
+
+          <p>Three things are visible, and each of them is a claim about the model.</p>
+
+          <p><strong>The day token holds "today" through layer 11.</strong> Swapping
+          <code>block_output[0..10]</code> at position −4 moves every one of the 42
+          rows to the counterfactual's answer — IIA 1.00, logit difference about
+          +2.4 in favour of the counterfactual day. Early in the stack, the day word's
+          own residual stream <em>is</em> the fact.</p>
+
+          <p><strong>It crosses to the last token at layer 12.</strong> Between layer
+          11 and layer 12 the day token's IIA falls from 0.98 to 0.10 and the last
+          token's rises from 0.00 to 0.88; by layer 14 it is 1.00 at the last token and
+          0.00 at the day token. The two curves are close to mirror images, which is
+          what you want to see: the information has not been destroyed, it has moved.
+          Layers 12 and 13 are the transition — 0.88, not 1.00 — so the move is not
+          quite instantaneous.</p>
+
+          <p><strong>Before layer 12, the last token holds nothing.</strong> IIA 0.00
+          and a logit difference of −2.4: patching it leaves the base answer exactly
+          where it was. That is the control this sweep gets for free, and it is why
+          sweeping the position alongside the layer is worth the second axis.</p>
+
+          <div class="caution">
+            <span class="label">what this does not say</span>
+            <p>An interchange result localizes <em>a</em> place where the counterfactual
+            value is sufficient to change the answer. It does not say the model computes
+            the answer there, it does not say the representation is a direction rather
+            than a whole activation, and at layer 15 — the last block output, one norm
+            away from the logits — a perfect IIA is close to tautological. The
+            neighbouring documents in <code>documents/real/</code> are what narrow it:
+            head patching finds <em>which</em> head does the moving, DAS finds how many
+            dimensions carry it.</p>
+          </div>
+
+          <h2 id="recorded-results-for-the-same-document">Recorded results for the same document <a class="anchor" href="#recorded-results-for-the-same-document" aria-label="Link to this section">#</a></h2>
+
+          <p>The numbers above were produced by running the document on CPU while
+          writing this page. <code>documents/real/README.md</code> records an earlier
+          run of the same file on an A100 and through a self-hosted NDIF, and reports
+          the surrounding experiments:</p>
+
+          <table>
+            <thead><tr><th>document</th><th>what it asks</th><th>recorded result</th></tr></thead>
+            <tbody>
+              <tr><td><code>weekdays_behavior</code></td><td>does the model do the task at all?</td>
+                  <td>42/42 correct, p(answer) 0.45 mean</td></tr>
+              <tr><td><code>weekdays_layer_sweep</code></td><td>this page</td>
+                  <td>day token 1.00 to layer 10, 0.98 at 11, then 0.10, 0.10, 0.00, 0.00;
+                      last token 0.00 to layer 11, then 0.88, 0.88, 1.00, 1.00</td></tr>
+              <tr><td><code>weekdays_head_patching</code></td><td>one head's result at the last
+                  token, 32 heads × layers 10–12</td>
+                  <td>one head of 96 stands out: <strong>L12 H28</strong>, mean logit
+                      difference −2.40 (median head) to +0.05</td></tr>
+              <tr><td><code>weekdays_das</code></td><td>a k-dim subspace of the day token at
+                  layer 8, fit on 30 pairs</td>
+                  <td>held-out IIA 0.00 / 0.83 / 1.00 / 1.00 at k = 1 / 4 / 16 / 64</td></tr>
+              <tr><td><code>weekdays_pattern_patching</code></td><td>swap only a head's
+                  attention pattern at the last token</td>
+                  <td>nothing moves: L12 H28 gives −2.396 against a −2.403 median</td></tr>
+            </tbody>
+          </table>
+
+          <p>Read together: "today" sits at the day token through layer 11, crosses to
+          the last token at layer 12 largely through one head, and is a roughly
+          16-dimensional subspace of a 2048-wide stream. And it is <em>what</em> that
+          head moves, not <em>where</em> it looks — its pattern from another prompt
+          changes nothing, while its values from another prompt change the answer.</p>
+
+          <p>The recorded run also notes that a self-hosted NDIF served bf16 whatever
+          the document asked, so the remote numbers are close but not equal: the
+          last-token sweep reads 0.86 there where fp32 reads 0.88. The two local
+          <em>engines</em> — nnsight and plain forward hooks — agree exactly on all 672
+          numbers of a layer sweep.</p>
+
+          <div class="seealso">
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
+            <ul>
+              <li><a href="sweeps.html">Sweeps</a> — named axes, the range form, and what a sweep may not touch</li>
+              <li><a href="../positions.html">Positions</a> — why <code>-4</code> is a fixed
+                  integer here and what to write when it cannot be</li>
+              <li><a href="../locations.html">Locations</a> — <code>block_output</code>,
+                  <code>lm_head</code>, and the rest of the component vocabulary</li>
+              <li><a href="attention-pattern.html">Attention pattern</a> — the follow-up
+                  that separates what a head moves from where it looks</li>
+              <li><a href="das-fit.html">DAS fit</a> — the follow-up that asks how many
+                  dimensions carry it</li>
+            </ul>
+          </div>
+
+        </article>
+      </main>
+    </div>
+    <script src="../site.js"></script>
+  </body>
+</html>

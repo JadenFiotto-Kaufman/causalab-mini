@@ -1,0 +1,1049 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Locations — causalab-mini</title>
+    <meta name="description" content="Naming where a tensor lives: components, layers, heads, units, and the interiors.">
+    <link rel="stylesheet" href="site.css">
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to content</a>
+
+    <div class="topbar">
+      <button class="iconbutton" data-nav-toggle aria-expanded="false" aria-controls="sidebar">menu</button>
+      <span class="brand">causalab-mini</span>
+      <button class="iconbutton js-only" data-theme-toggle style="margin-left:auto">dark</button>
+    </div>
+
+    <div class="layout">
+      <aside class="sidebar" id="sidebar">
+        <a class="brand" href="index.html">causalab-mini</a>
+        <span class="brand-sub">a plan is pure data; an engine turns it into tensors</span>
+
+        <nav aria-label="Documentation">
+          <ol>
+            <li><a href="index.html">Home</a></li>
+          </ol>
+
+          <h2>The document</h2>
+          <ol>
+            <li><a href="documents.html">Documents</a></li>
+            <li><a href="locations.html" aria-current="page">Locations</a></li>
+            <li><a href="positions.html">Positions</a></li>
+            <li><a href="ops.html">Reads, writes, metrics</a></li>
+          </ol>
+
+          <h2>Use cases</h2>
+          <ol>
+            <li><a href="use-cases/index.html">All use cases</a></li>
+          </ol>
+          <ol class="sub">
+          <li><a href="use-cases/layer-sweep.html">Layer sweep</a></li>
+          <li><a href="use-cases/entity-patching.html">Entity patching</a></li>
+          <li><a href="use-cases/das-fit.html">DAS fit</a></li>
+          <li><a href="use-cases/dbm-fit.html">DBM fit</a></li>
+          <li><a href="use-cases/attention-pattern.html">Attention pattern</a></li>
+          <li><a href="use-cases/logit-lens.html">Logit lens</a></li>
+          <li><a href="use-cases/generation.html">Generation</a></li>
+          <li><a href="use-cases/sae-features.html">SAE features</a></li>
+          <li><a href="use-cases/batching-and-remote.html">Batching &amp; remote</a></li>
+          <li><a href="use-cases/sweeps.html">Sweeps</a></li>
+          </ol>
+
+          <h2>Running</h2>
+          <ol>
+            <li><a href="cli.html">The CLI</a></li>
+          </ol>
+
+          <h2>Understand</h2>
+          <ol>
+            <li><a href="engine.html">The engine</a></li>
+            <li><a href="standardization.html">Standardization</a></li>
+            <li><a href="remote.html">Remote &amp; NDIF</a></li>
+          </ol>
+        </nav>
+
+        <div class="footer">
+          <p><a href="https://github.com/JadenFiotto-Kaufman/causalab-mini">source on GitHub</a></p>
+          <p><button class="iconbutton js-only" data-theme-toggle>dark</button></p>
+        </div>
+      </aside>
+
+      <main id="content">
+        <article class="page">
+          <header>
+            <p class="eyebrow">Reference</p>
+            <h1>Locations</h1>
+            <p class="lede">Naming where in a model a read or a write acts.</p>
+          </header>
+
+          <!-- causalab_mini/plan/spec.py:76 -->
+          <p>A document names a place in a <code>sites</code> entry: a
+          <strong>component</strong>, a <strong>layer</strong> where that component is
+          one per layer, and optionally which <strong>heads</strong> or
+          <strong>units</strong> of it. That is all the document says. Which child
+          module spells the place on this checkpoint, which side of that module carries
+          the tensor, how wide it is and where it sits in the forward pass are facts
+          about the architecture, and the compiler asks nnterp for them before any
+          weights are loaded.</p>
+
+          <!-- causalab_mini/address.py:1-41 -->
+          <p>There are 21 component names. Seventeen go through an nnterp accessor;
+          four are mini's own <em>interior</em> rows — a tensor that never crosses a
+          module boundary, addressed as one call inside a forward through nnsight's
+          <code>.source</code>. (One accessor, the attention pattern, is an operation
+          on nnterp's side too; mini does not have to know, because nnterp reaches it.)
+          The table is a floor and not a fence: a name mini has never heard of but
+          <code>model.internals</code> has is addressable as well.</p>
+
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
+
+          <p><code>explain</code> compiles a document against the model, with no
+          weights, and prints the place every read and every write resolved to.
+          <code>documents/v2/head_patching.json</code> patches one attention head at a
+          time and scores the result at the model's head:</p>
+
+          <!-- ran 2026-09-23 in the repo root, CPU, fp32 -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/head_patching.json
+&lt;root&gt;: Plan
+  heads=0: Plan
+    score: Observe  metrics=['iia/match', 'logit_diff/logit_diff']  saves=['iia.json', 'logit_diff.json']
+        forward 'original' on 'counterfactual'  (4 rows x 11 tokens)
+          read  'v_cf' at attention_premix[0] pos={index:-1} features=[0]/4 via 'identity'
+        forward 'patched' on 'base'  (4 rows x 11 tokens)
+          write 'patch' at attention_premix[0] pos={index:-1} features=[0]/4 swap(v_cf) via 'identity'
+          read  'logits' at lm_head pos={index:-1} via 'identity'
+  …
+  heads=3: Plan
+    score: Observe  metrics=['iia/match', 'logit_diff/logit_diff']  saves=['iia.json', 'logit_diff.json']
+        forward 'original' on 'counterfactual'  (4 rows x 11 tokens)
+          read  'v_cf' at attention_premix[0] pos={index:-1} features=[3]/4 via 'identity'
+        forward 'patched' on 'base'  (4 rows x 11 tokens)
+          write 'patch' at attention_premix[0] pos={index:-1} features=[3]/4 swap(v_cf) via 'identity'
+          read  'logits' at lm_head pos={index:-1} via 'identity'</code></pre>
+
+          <!-- causalab_mini/plan/explain.py:18 prints `features=[take]/groups` -->
+          <p><code>attention_premix[0]</code> is a component and a layer;
+          <code>features=[0]/4</code> is head 0 of four; <code>lm_head</code> carries no
+          layer because there is only one of it. The whole document, and what it
+          produces, is <a href="#worked">at the bottom of this page</a>.</p>
+
+          <h2 id="site">The <code>site</code> field <a class="anchor" href="#site" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/plan/spec.py:76-108 -->
+          <table>
+            <thead>
+              <tr><th>key</th><th>what it is</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>component</code></td>
+                  <td>One of the 21 names below, or any accessor in this model's
+                  <code>model.internals</code>. Required.</td></tr>
+              <tr><td><code>layers</code></td>
+                  <td>A one-element list, at a per-layer component. What happens when
+                  it is missing or spurious is <a href="#whole-model">below</a>.</td></tr>
+              <tr><td><code>heads</code></td>
+                  <td>A non-empty list of distinct head indices. Only at a per-head
+                  tensor.</td></tr>
+              <tr><td><code>units</code></td>
+                  <td>A non-empty list of distinct feature indices, anywhere the width
+                  is known. Not together with <code>heads</code>.</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/plan/spec.py:104-109 and
+               causalab_mini/plan/document.py:204-208 -->
+          <p>Both authoring formats spell the layer as a one-element list, and both
+          refuse a longer one: <q>layers must be a one-element band; a band spanning
+          several layers is one address and is not implemented</q>. To sweep depth,
+          sweep the site — see <a href="use-cases/layer-sweep.html">Layer sweep</a>.</p>
+
+          <!-- causalab_mini/plan/build.py:62-67 -->
+          <p>A layer outside the model's stack is refused when the document is compiled,
+          by number: <code>site 'target': layer 24 is outside the model's 16 layers</code>.</p>
+
+          <h2 id="components">The component list <a class="anchor" href="#components" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/address.py:108-221 -->
+          <p>What each name is, and what the tensor at it is. <em>Width</em> is the
+          model attribute nnterp publishes the feature axis as; a per-head tensor's
+          width is that attribute times the head count, because every head is handed on
+          side by side.</p>
+
+          <table>
+            <thead>
+              <tr><th>component</th><th>the tensor</th><th>width</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>input_ids</code></td>
+                  <td>The token ids going into the embedding table. Read-only.</td>
+                  <td>—</td></tr>
+              <tr><td><code>embeddings</code></td>
+                  <td>The embedding table's output, before layer 0.</td>
+                  <td><code>hidden_size</code></td></tr>
+              <tr><td><code>block_input</code></td>
+                  <td>The residual stream entering the block.</td>
+                  <td><code>hidden_size</code></td></tr>
+              <tr><td><code>attention_input_norm</code></td>
+                  <td>The norm the attention reads.</td>
+                  <td><code>hidden_size</code></td></tr>
+              <tr><td><code>attention_query</code></td>
+                  <td>Interior. The query handed to the attention implementation:
+                  already projected, reshaped and rotated.</td>
+                  <td><code>qk_head_dim</code> × query heads</td></tr>
+              <tr><td><code>attention_key</code></td>
+                  <td>Interior. The same call's argument 2 — the keys
+                  <em>before</em> grouped-query attention repeats them, so this is
+                  key-head space.</td>
+                  <td><code>qk_head_dim</code> × key/value heads</td></tr>
+              <tr><td><code>attention_scores</code></td>
+                  <td>Interior, eager only. The softmax's argument: QKᵀ·scale with the
+                  causal and padding masks already added.</td>
+                  <td>— (the last axis is keys)</td></tr>
+              <tr><td><code>attention_probs</code></td>
+                  <td>Eager only. The attention pattern the values are actually mixed
+                  with.</td>
+                  <td>— (the last axis is keys)</td></tr>
+              <tr><td><code>attention_z</code></td>
+                  <td>Interior. The mixer's per-head result, before the output
+                  projection.</td>
+                  <td><code>head_dim</code> × query heads</td></tr>
+              <tr><td><code>attention_premix</code></td>
+                  <td>The output projection's input — every head's result side by
+                  side. The same numbers as <code>attention_z</code>, at a module
+                  boundary.</td>
+                  <td><code>head_dim</code> × query heads</td></tr>
+              <tr><td><code>attention_output</code></td>
+                  <td>The attention's additive contribution to the residual stream,
+                  never including the stream itself.</td>
+                  <td><code>hidden_size</code></td></tr>
+              <tr><td><code>block_mid</code></td>
+                  <td><code>block_input + attention_output</code>.</td>
+                  <td><code>hidden_size</code></td></tr>
+              <tr><td><code>mlp_input_norm</code></td>
+                  <td>The norm the MLP reads. Equals <code>mlp_input</code>.</td>
+                  <td><code>hidden_size</code></td></tr>
+              <tr><td><code>mlp_input</code></td>
+                  <td>What the MLP module is called with.</td>
+                  <td><code>hidden_size</code></td></tr>
+              <tr><td><code>mlp_activation</code></td>
+                  <td>The activation function's output.</td>
+                  <td><code>intermediate_size</code></td></tr>
+              <tr><td><code>mlp_neuron_output</code></td>
+                  <td>The down projection's input: <code>act(gate)·up</code> on a gated
+                  MLP, the activation itself on GPT-2, which has no gate.</td>
+                  <td><code>intermediate_size</code></td></tr>
+              <tr><td><code>mlp_output</code></td>
+                  <td>The MLP's additive contribution to the residual stream.</td>
+                  <td><code>hidden_size</code></td></tr>
+              <tr><td><code>block_output</code></td>
+                  <td><code>block_mid + mlp_output</code>.</td>
+                  <td><code>hidden_size</code></td></tr>
+              <tr><td><code>ln_final</code></td>
+                  <td>The final norm's output.</td>
+                  <td><code>hidden_size</code></td></tr>
+              <tr><td><code>lm_head</code></td>
+                  <td>The unembedding's output.</td>
+                  <td><code>vocab_size</code></td></tr>
+              <tr><td><code>logits</code></td>
+                  <td>What the model predicts from, which is not always the head's
+                  output.</td>
+                  <td><code>vocab_size</code></td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/address.py:192-194: the three definitions are nnterp's,
+               asserted there across 26 families -->
+          <div class="note">
+            <span class="label">the block, as three equations</span>
+            <p><code>block_mid == block_input + attention_output</code>,
+            <code>block_output == block_mid + mlp_output</code>,
+            <code>mlp_input_norm == mlp_input</code>. These are nnterp's definitions,
+            asserted on its side over 26 families, and they are what makes
+            <code>attention_output</code> mean the sublayer's contribution on a family
+            that adds the residual inside the attention module.</p>
+          </div>
+
+          <!-- causalab_mini/plan/spec.py:151-153 -->
+          <p>Four of these are the residual stream — <code>embeddings</code>,
+          <code>block_input</code>, <code>block_output</code>, <code>ln_final</code> —
+          and a read with <code>"view": "logits"</code> is refused anywhere else,
+          because pushing a tensor through the final norm and the head only means
+          something for a tensor those two expect.</p>
+
+          <h3 id="where-each-one-lands-on-a-checkpoint">Where each one lands on a checkpoint <a class="anchor" href="#where-each-one-lands-on-a-checkpoint" aria-label="Link to this section">#</a></h3>
+
+          <!-- causalab_mini/address.py:417-468: `locate` stamps nnterp's module, io
+               and rank into the address -->
+          <p><code>locate</code> is what turns a name into an address, and what it
+          stamps in comes from nnterp: the module this family spells the place with,
+          which side of it, and the rank that puts reads in forward order.
+          <code>module</code> is relative to the layer for a per-layer place and to the
+          model for a whole-model one; an interior has no module, and carries the
+          <code>.source</code> operation instead.</p>
+
+          <!-- ran 2026-09-23, CPU, fp32, both fixtures loaded with dispatch=False -->
+          <pre><code class="language-python">from causalab_mini import address
+from causalab_mini.engine import NNterpEngine
+from causalab_mini.plan.spec import Model
+
+e = NNterpEngine.load(Model(key="hf-internal-testing/tiny-random-LlamaForCausalLM",
+    revision="9fb191250dd56d0ba7ec9785a025ed29c03d5998", dtype="fp32",
+    attn_implementation="eager"), dispatch=False)
+g = NNterpEngine.load(Model(key="hf-internal-testing/tiny-random-gpt2",
+    revision="71034c5d8bde858ff824298bdedc65515b97d2b9", dtype="fp32",
+    attn_implementation="eager"), dispatch=False)
+for name, row in address.describe().items():
+    layer = 0 if row["layered"] else None
+    a, b = e.locate(name, layer), g.locate(name, layer)
+    print(f"{name:22s} rank={str(a.rank):8s} io={str(a.io):7s} llama={a.module!r:32s} gpt2={b.module!r}")</code></pre>
+
+          <pre><code>attention_query        rank=(0, 11)  io=None    llama=None                             gpt2=None
+attention_key          rank=(0, 12)  io=None    llama=None                             gpt2=None
+attention_scores       rank=(0, 15)  io=None    llama=None                             gpt2=None
+attention_probs        rank=(0, 20)  io=output  llama='self_attn'                      gpt2='self_attn'
+attention_z            rank=(0, 22)  io=None    llama=None                             gpt2=None
+input_ids              rank=(-1, -2) io=input   llama='embed_tokens'                   gpt2='embed_tokens'
+embeddings             rank=(-1, -1) io=output  llama='embed_tokens'                   gpt2='embed_tokens'
+block_input            rank=(0, 0)   io=input   llama=''                               gpt2=''
+attention_input_norm   rank=(0, 5)   io=output  llama='input_layernorm'                gpt2='ln_1'
+attention_premix       rank=(0, 25)  io=input   llama='self_attn.o_proj'               gpt2='self_attn.c_proj'
+attention_output       rank=(0, 30)  io=output  llama='self_attn'                      gpt2='self_attn'
+block_mid              rank=(0, 33)  io=input   llama='post_attention_layernorm'       gpt2='ln_2'
+mlp_input_norm         rank=(0, 36)  io=output  llama='post_attention_layernorm'       gpt2='ln_2'
+mlp_input              rank=(0, 40)  io=input   llama='mlp'                            gpt2='mlp'
+mlp_activation         rank=(0, 44)  io=output  llama='mlp.act_fn'                     gpt2='mlp.act'
+mlp_neuron_output      rank=(0, 47)  io=input   llama='mlp.down_proj'                  gpt2='mlp.c_proj'
+mlp_output             rank=(0, 50)  io=output  llama='mlp'                            gpt2='mlp'
+block_output           rank=(0, 60)  io=output  llama=''                               gpt2=''
+ln_final               rank=(2, 1000) io=output  llama='ln_final'                       gpt2='ln_final'
+lm_head                rank=(2, 1001) io=output  llama='lm_head'                        gpt2='lm_head'
+logits                 rank=(2, 1002) io=output  llama=''                               gpt2=''</code></pre>
+
+          <!-- tests/test_components.py:92-98 asserts equality of `.where` across the
+               two families; tests/test_components.py:103-139 is the raw-path table -->
+          <p>Two families whose module trees share no path, one set of names. The
+          module column is the whole of what standardization buys here:
+          <code>block_mid</code> is the input of <code>post_attention_layernorm</code>
+          on Llama and of <code>ln_2</code> on GPT-2, and the document says
+          <code>block_mid</code> either way.</p>
+
+          <!-- causalab_mini/address.py:374-390, nnterp/nnterp/internals.py:59-70 -->
+          <p><code>rank</code> is <code>(layer, order)</code>, nnterp's
+          <code>internals.rank</code>, and reads are issued in that order because
+          nnsight cannot reach back to a value the model has already passed. The
+          whole-model places sort outside the stack: the embeddings at layer −1, the final
+          norm and the two head rows at layer <em>N</em>. Mini keeps its own numbering
+          only for the four interiors nnterp does not address, interleaved into
+          nnterp's.</p>
+
+          <div class="note">
+            <span class="label"><code>vocab --json</code> and <code>side</code></span>
+            <!-- causalab_mini/address.py:496-514 returns entry.side; only an interior's
+                 row sets it, every boundary row keeps the default "output" -->
+            <p><code>causalab-mini vocab --json</code> reports a <code>side</code> per
+            component. That is the row's own field, which only an interior sets; at a
+            boundary the side is nnterp's and arrives with <code>locate</code>, as the
+            <code>io</code> column above. They disagree for
+            <code>input_ids</code>, <code>block_input</code>, <code>block_mid</code>,
+            <code>mlp_input</code>, <code>attention_premix</code> and
+            <code>mlp_neuron_output</code>, all of which are read on the way in.</p>
+          </div>
+
+          <h2 id="whole-model">The whole-model places <a class="anchor" href="#whole-model" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/plan/document.py:56 and 188-194 -->
+          <p>Five components are one per model and take no <code>layers</code>:
+          <code>input_ids</code>, <code>embeddings</code>, <code>ln_final</code>,
+          <code>lm_head</code> and <code>logits</code>. The protocol format checks both
+          directions — <code>lm_head takes no layers</code>,
+          <code>block_output is addressed at one layer</code>.</p>
+
+          <!-- causalab_mini/plan/spec.py:76-108 has no such check;
+               nnterp/nnterp/rename_utils.py:650 is the assert that catches it -->
+          <div class="caution">
+            <span class="label">the plan-shaped format does not check this</span>
+            <p>A plan-shaped site may carry a <code>layers</code> key at a whole-model
+            component, and it is ignored. A per-layer component with no
+            <code>layers</code> gets no refusal of mini's either: it reaches nnterp's
+            assertion, <code>layers_output is per layer: say which</code>, which names
+            the accessor rather than the site.</p>
+          </div>
+
+          <!-- causalab_mini/address.py:185-191 -->
+          <p><code>input_ids</code> is the only read-only place: it is the model's
+          input, and swapping a float activation into a tensor of token ids means
+          nothing, so a write naming it is refused. <code>embeddings</code> is the
+          embedding table's output — the same tensor as <code>block_input</code> at
+          layer 0 on a model with nothing between them, and not on GPT-2, which adds
+          position embeddings.</p>
+
+          <h3 id="lm-head-and-logits"><code>lm_head</code> and <code>logits</code> <a class="anchor" href="#lm-head-and-logits" aria-label="Link to this section">#</a></h3>
+
+          <!-- causalab_mini/address.py:215-220; nnterp/nnterp/rename_utils.py:900-904 -->
+          <p>nnterp carries the head's output and the model's output as two rows,
+          because on Gemma-2 they are two tensors: <code>final_logit_softcapping</code>
+          bounds what the model predicts from and leaves the head's own output alone.
+          Mini has both, <code>lm_head</code> and <code>logits</code>, and a token-space
+          metric binds to either — the document says which.</p>
+
+          <!-- tests/test_components.py:437-459, run here 2026-09-23: both tests pass -->
+          <p>Measured on <code>trl-internal-testing/tiny-Gemma2ForCausalLM</code>, whose
+          cap is 30.0: a swap of 100.0 into the head reads back 100.0 at
+          <code>lm_head</code> and 29.924 at <code>logits</code>, which is
+          <code>tanh(100/30)·30</code>.
+          On a family with no cap the two reads are the same tensor,
+          <code>torch.equal</code>, which is why every shipped document goes on saying
+          <code>lm_head</code>.</p>
+
+          <!-- causalab_mini/engine/engines/hooks/engine.py:310-320 — selection()
+               asks the shell's row; :193 — an empty path is the model -->
+          <p>Both engines reach it. nnterp's <code>logits</code> row is the model
+          itself — an empty module path — with a <code>Selection</code> saying the
+          tensor is the value's <code>logits</code> field. The nnterp engine reads it
+          through <code>model.internals</code>; the hooks engine hooks the root and
+          applies the same <code>Selection</code>, which is the one rule it uses
+          everywhere, unwrapping a tuple's first element being another
+          <code>Selection</code> (<code>FirstIfTuple</code>) rather than a special
+          case.</p>
+
+          <!-- ran 2026-09-24, CPU, fp32 -->
+          <pre><code class="language-python">from causalab_mini.engine.engines.hooks import HooksEngine, engine as hooks
+from causalab_mini.plan.document import ModelSpec
+
+e = HooksEngine.load(ModelSpec("hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "9fb191250dd56d0ba7ec9785a025ed29c03d5998", "fp32"), device_map="cpu")
+for name in ("lm_head", "logits"):
+    a = e.locate(name)
+    print(name, "module=", repr(a.module), "io=", a.io)
+    print("   resolves to", type(hooks.resolve(a, e._names)).__name__,
+          "| select", hooks.selection(a, e._names))</code></pre>
+
+          <pre><code>lm_head module= 'lm_head' io= output
+   resolves to Linear | select None
+logits module= '' io= output
+   resolves to LlamaForCausalLM | select Index('logits',)</code></pre>
+
+          <h2 id="attention">The attention pattern, and the scores under it <a class="anchor" href="#attention" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/address.py:139-169 -->
+          <p>Two places name the attention matrix, and they are on either side of the
+          softmax.</p>
+
+          <ul>
+            <!-- causalab_mini/address.py:139-155 -->
+            <li><code>attention_scores</code> is the softmax's <em>argument</em>:
+            QKᵀ·scale with the causal and padding masks already added, so a masked key
+            is −inf here and 0 after. It is mini's own interior row, reached through
+            the <code>.source</code> of the function the attention call dispatches to.</li>
+            <!-- causalab_mini/address.py:156-169; nnterp/nnterp/rename_utils.py:908-915 -->
+            <li><code>attention_probs</code> is nnterp's
+            <code>attention_probabilities</code>: the dropout call's output rather than
+            the softmax's, which is the pattern the values are actually mixed with on
+            every family — after the cast, and after an attention sink has been dropped
+            — and the identity in eval mode. nnterp carries six per-family overrides,
+            a sink tag and a load-time validator behind that one name. A write here is <q>make
+            this head attend there</q>.</li>
+          </ul>
+
+          <!-- causalab_mini/address.py:440-446 -->
+          <p>Both exist only under eager attention: sdpa and flash never materialize the
+          matrix, so there is no tensor to address. The refusal says so and says what to
+          write:</p>
+
+          <pre><code>component 'attention_probs' exists only under 'eager' attention, and this model runs 'sdpa': say "attn_implementation": "eager" in the document's model block</code></pre>
+
+          <!-- causalab_mini/plan/spec.py:60-68 has attn_implementation;
+               causalab_mini/plan/document.py:149-151 rejects any extra model key -->
+          <p><code>attn_implementation</code> is a field of the plan-shaped document's
+          <code>model</code> block. The protocol format's model block takes
+          <code>key</code>, <code>revision</code> and <code>dtype</code> and rejects
+          anything else, so the pattern is reachable only from the plan-shaped format.</p>
+
+          <!-- causalab_mini/engine/engines/nnterp/loading.py:39-43 -->
+          <p>Saying <code>eager</code> also turns on nnterp's
+          <code>enable_attention_probs</code>, which puts nnterp's own shape, sum and
+          causality check behind the accessor. A document says <code>eager</code> for
+          exactly one reason, and that is the one.</p>
+
+          <!-- causalab_mini/address.py:96-98, causalab_mini/plan/build.py:807-850 -->
+          <div class="caution">
+            <span class="label">the last axis is keys, not features</span>
+            <p>At both of these the last axis is the keys of the <em>padded batch</em>,
+            not a feature width. Key <em>j</em> of a pattern swapped in from another
+            prompt lands on key <em>j</em> here, which is the same token only if the two
+            prompts are laid out identically — the same padded width and, row by row,
+            the same number of real tokens. The compiler checks that before any forward
+            and refuses otherwise. It is also why neither has a width, so a featurizer
+            at either is refused.</p>
+          </div>
+
+          <!-- documents/v2/attention_pattern_patching.json header.description -->
+          <p><code>documents/data/weekdays_aligned</code> exists for that reason: it is
+          the subset of the weekdays pairs that tokenize to the same length under this
+          tokenizer, and it is what
+          <code>documents/v2/attention_pattern_patching.json</code> runs on. See
+          <a href="use-cases/attention-pattern.html">Attention pattern</a>.</p>
+
+          <h2 id="interiors">Inside a forward <a class="anchor" href="#interiors" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/address.py:16-26 -->
+          <p>Four components — <code>attention_query</code>,
+          <code>attention_key</code>, <code>attention_scores</code>,
+          <code>attention_z</code> — name a tensor that never crosses a module boundary.
+          The address is a module <em>plus one operation inside its forward</em>, which
+          nnsight's <code>.source</code> exposes. All four hang off one call: the one
+          that hands the query, the keys and the values to whichever attention
+          implementation the checkpoint runs. Three are its arguments,
+          <code>attention_z</code> is its return, and <code>attention_scores</code> is
+          an operation inside the function it dispatches to.</p>
+
+          <!-- causalab_mini/engine/engines/nnterp/engine.py:202-223 -->
+          <p>The operation is named by the <em>call site</em> — the needle
+          <code>"attention_interface("</code> — and resolved against the loaded
+          checkpoint, not tabulated, because the occurrence suffix is a property of the
+          transformers version. nnsight gives assignments the same namespace as calls,
+          so the attention forward has both an
+          <code>attention_interface_0</code> (the assignment
+          <code>attention_interface = ALL_ATTENTION_FUNCTIONS.get_interface(...)</code>)
+          and an <code>attention_interface_1</code> (the call). A name match would hit
+          both; a call-shaped needle hits one, and <code>find_op</code> refuses unless
+          exactly one matches, listing every operation the forward does have.</p>
+
+          <!-- ran 2026-09-23, CPU, fp32, dispatch=False -->
+          <pre><code class="language-python">from causalab_mini.engine import NNterpEngine
+from causalab_mini.plan.document import ModelSpec
+
+engine = NNterpEngine.load(ModelSpec(
+    "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "9fb191250dd56d0ba7ec9785a025ed29c03d5998", "fp32"), dispatch=False)
+print(engine.locate("block_mid", 0))
+print(engine.locate("attention_z", 0))
+print([n for n in engine.model.attentions[0].source.names if "attention_interface" in n])</code></pre>
+
+          <pre><code>Address(component='block_mid', layer=0, op=None, module='post_attention_layernorm', io='input', rank=(0, 33), inside=False)
+Address(component='attention_z', layer=0, op='attention_interface_1', module=None, io=None, rank=(0, 22), inside=False)
+['attention_interface_0', 'attention_interface_1']</code></pre>
+
+          <!-- causalab_mini/address.py:139-155 -->
+          <p><code>attention_scores</code> goes one level deeper: it is
+          <code>nn_functional_softmax_0</code> inside the function
+          <code>attention_interface_1</code> dispatches to. That inner name is resolved
+          <em>in</em> the trace, because which function the call dispatches to is a
+          run-time fact; unlike the outer one it is a name and not a needle.</p>
+
+          <!-- causalab_mini/engine/engines/hooks/engine.py:65-84 -->
+          <div class="note">
+            <span class="label">interiors are nnterp-engine only</span>
+            <p>A forward hook sees a module's boundary and nothing between, so the hooks
+            engine refuses all four by name rather than approximating them. The two ways
+            to build one — patch the module's <code>forward</code>, or hook
+            <code>q_proj</code> and reimplement the reshape and the rotary embedding
+            here — would both be a different engine.
+            <code>attention_premix</code> is the way out: it is the same numbers as
+            <code>attention_z</code> at a module boundary, which is why
+            <code>documents/v2/head_patching.json</code> uses it and runs on both
+            engines.</p>
+          </div>
+
+          <h2 id="features">Heads and units <a class="anchor" href="#features" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/shapes.py:166-201 -->
+          <p><code>heads</code> and <code>units</code> are one mechanism at two grains.
+          Both compile into a <code>Selection</code>: positions along the sequence, plus
+          <code>groups</code> and <code>take</code> over the feature axis. The rule is
+          one line — view the features as <code>(groups, -1)</code> and keep
+          <code>take</code> of the groups.</p>
+
+          <!-- causalab_mini/plan/build.py:70-82 -->
+          <table>
+            <thead>
+              <tr><th></th><th><code>groups</code> is</th><th>each group is</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>heads</code></td><td>the head count at this address</td>
+                  <td><code>width / heads</code> features</td></tr>
+              <tr><td><code>units</code></td><td>the width at this address</td>
+                  <td>one feature</td></tr>
+            </tbody>
+          </table>
+
+          <!-- causalab_mini/ops/intervene.py:236-241 and 274-283 -->
+          <p>What is gathered comes back <strong>flat</strong>:
+          <code>(…, len(take) · per_group)</code>, however the model holds it. A tensor
+          the model keeps as two axes — the query, which is
+          <code>(batch, head, seq, head_dim)</code> — and one it keeps flat —
+          <code>attention_premix</code>, which is <code>o_proj</code>'s input — look the
+          same to a featurizer, a mechanism and a metric. A scatter puts the named
+          groups back and leaves the others as they were.</p>
+
+          <!-- causalab_mini/address.py:99 and 368-371;
+               causalab_mini/ops/intervene.py:229-233 -->
+          <p>Which axis the sequence runs along is a fact about the address too, not
+          about the tensor: 1 at a module boundary, 2 inside the attention, where the
+          tensor is <code>(batch, head, seq, head_dim)</code>. It is passed to the
+          gather rather than guessed from the shape. What the positions along that axis
+          are is <a href="positions.html">Positions</a>.</p>
+
+          <!-- causalab_mini/address.py:471-493 -->
+          <p>Per-head width is <code>head_dim</code> (or <code>qk_head_dim</code>) times
+          the head count, and <em>which</em> head count depends on the address:
+          <code>attention_key</code> is per key/value head and everything else per query
+          head. On a model with grouped-query attention those differ. On
+          <code>hf-internal-testing/tiny-random-GptOssForCausalLM</code> — 4 query
+          heads, 2 key/value heads, <code>head_dim</code> 16 —
+          <code>causalab-mini model</code> reports <code>attention_query</code> at width
+          64 and <code>attention_key</code> at width 32.</p>
+
+          <!-- causalab_mini/plan/build.py:79-81 -->
+          <p>A head or unit index past the end is refused when the document is compiled,
+          against the real count: <code>site 'target': head 3 of a 2-head tensor</code>.</p>
+
+          <h2 id="asking">Asking a model what it has <a class="anchor" href="#asking" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/cli.py:96-124 -->
+          <p><code>causalab-mini vocab</code> prints the table itself — the names, which
+          nnterp accessor each is, which are per head, which need eager, which are
+          read-only. It loads nothing:</p>
+
+          <!-- ran 2026-09-23 in the repo root -->
+          <pre><code class="language-bash">$ uv run causalab-mini vocab
+components:
+  attention_query        interior  [heads]
+  attention_key          interior  [heads]
+  attention_scores       interior  [heads]  needs eager attention
+  attention_probs        nnterp attention_probabilities  [heads]  needs eager attention
+  attention_z            interior  [heads]
+  input_ids              nnterp embeddings_input  (read-only)
+  embeddings             nnterp embeddings_output
+  …
+  ln_final               nnterp ln_final_output
+  lm_head                nnterp lm_head_output
+  logits                 nnterp logits
+…</code></pre>
+
+          <!-- causalab_mini/cli.py:126-156 -->
+          <p><code>causalab-mini model &lt;key&gt;</code> asks the checkpoint. It loads
+          the config, the module tree and the tokenizer and no weights, and tries every
+          component: the width where there is one, the resolved
+          <code>.source</code> operation for an interior, and the reason where the place
+          is not there.</p>
+
+          <!-- ran 2026-09-23 in the repo root, no weights downloaded (HF_HUB_OFFLINE=1) -->
+          <pre><code class="language-bash">$ uv run causalab-mini model hf-internal-testing/tiny-random-LlamaForCausalLM \
+      --revision 9fb191250dd56d0ba7ec9785a025ed29c03d5998
+hf-internal-testing/tiny-random-LlamaForCausalLM via nnterp: 2 layers, padding_side=left
+  attention_query    ok   width=16  op=attention_interface_1
+  attention_key      ok   width=16  op=attention_interface_1
+  attention_scores   --   component 'attention_scores' exists only under 'eager' attention, and this model runs 'sdpa': say "attn_implementation": "eager" in the document's model block
+  attention_probs    --   component 'attention_probs' exists only under 'eager' attention, and this model runs 'sdpa': say "attn_implementation": "eager" in the document's model block
+  attention_z        ok   width=16  op=attention_interface_1
+  input_ids          ok   no width (no featurizer here)
+  embeddings         ok   width=16
+  …
+  ln_final           ok   width=16
+  lm_head            ok   width=32000
+  logits             ok   width=32000</code></pre>
+
+          <!-- causalab_mini/cli.py:129-131: `layer = 0 if entry["layered"] else None`;
+               the verb has no --attn-implementation argument (cli.py:48-52) -->
+          <div class="note">
+            <span class="label">two limits of the <code>model</code> verb</span>
+            <p>It asks every per-layer component at <strong>layer 0</strong>, so a model
+            whose layers are not all alike is only half answered. And it has no
+            <code>attn_implementation</code> flag, so it reports whatever the family
+            defaults to — which is why the two eager-only rows are refused above even
+            though the document that names them would load the model eager.</p>
+            <p>For the per-layer answer, nnterp's own
+            <code>model.internals.status(layer=i)</code> gives a reason or
+            <code>None</code> for every accessor, without running the model.</p>
+          </div>
+
+          <h2 id="unavailable">When a place is not there <a class="anchor" href="#unavailable" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/address.py:458-460; nnterp/nnterp/rename_utils.py:644-670 -->
+          <p>Every refusal about existence is nnterp's <code>unavailable_on</code>,
+          decided from the address and the module tree and answered before any trace.
+          <code>locate</code> passes the reason through unchanged. Three kinds happen.</p>
+
+          <p><strong>A mixture of experts has no single activation.</strong> A token goes
+          through top-<em>k</em> of <em>N</em> experts, so there is no one activation
+          function's output and no one down projection's input. The block's boundaries
+          are unaffected:</p>
+
+          <!-- ran 2026-09-23 in the repo root, trimmed to the rows that differ -->
+          <pre><code class="language-bash">$ uv run causalab-mini model hf-internal-testing/tiny-random-GptOssForCausalLM
+hf-internal-testing/tiny-random-GptOssForCausalLM via nnterp: 2 layers, padding_side=left
+  attention_query    ok   width=64  op=attention_interface_1
+  attention_key      ok   width=32  op=attention_interface_1
+  attention_scores   ok   no width (no featurizer here)  op=attention_interface_1
+  attention_probs    --   component 'attention_probs': Attention probabilities are disabled for this model. Set enable_attention_probs=True when loading the model to enable them.
+  …
+  mlp_input          ok   width=64
+  mlp_activation     --   component 'mlp_activation': mlps_activation does not exist on a mixture-of-experts layer, where a token goes through top-k of N experts and has no single activation. mlps_input and mlps_output are the block's boundaries and work as usual.
+  mlp_neuron_output  --   component 'mlp_neuron_output': mlps_neurons does not exist on a mixture-of-experts layer, where a token goes through top-k of N experts and has no single activation. mlps_input and mlps_output are the block's boundaries and work as usual.
+  mlp_output         ok   width=64
+  …</code></pre>
+
+          <!-- nnterp/nnterp/rename_utils.py:1159-1179: the reason is a callable on the
+               block, so it is asked per layer -->
+          <p>That reason is a function of the block, not a fact about the model, because
+          a model may be dense for its first blocks and a mixture of experts after —
+          DeepSeek's <code>first_k_dense_replace</code> is exactly that. So
+          <code>mlp_activation</code> can resolve at layer 0 and be refused at layer 12
+          of the same model, and the answer is per layer.</p>
+
+          <!-- nnterp/nnterp/standardized_transformer.py:96-98; confirmed here
+               2026-09-23: loading this model with attn_implementation="eager" makes
+               attention_probs resolve at layer 0 -->
+          <p>The <code>attention_probs</code> row above is refused for a different
+          reason. This family runs eager by default, which is why
+          <code>attention_scores</code> — mini's own interior — resolves; nnterp keeps
+          its pattern row disabled until <code>enable_attention_probs</code> is asked
+          for, and a document asks for it by saying
+          <code>"attn_implementation": "eager"</code>. Loaded that way the row resolves
+          here too.</p>
+
+          <!-- nnterp/nnterp/rename_utils.py:440-445 and
+               nnterp/nnterp/standardized_transformer.py:71-75 -->
+          <p><strong>A hybrid's linear-attention blocks have no attention.</strong> On
+          Qwen3-Next and Qwen3.5 hybrids some blocks mix with Gated DeltaNet rather than
+          softmax attention. nnterp splits the stack into
+          <code>attention_layers</code> and <code>linear_attention_layers</code>, and
+          every attention accessor and the pattern raise on the latter: <q>layer <em>i</em>
+          is a linear-attention layer (<em>Mixer</em>); attentions/attention_probabilities
+          are only defined on softmax-attention layers</q>.</p>
+
+          <!-- nnterp/nnterp/rename_utils.py:952-1006 -->
+          <p><strong>A block structure that has no such place.</strong> On a parallel
+          block, attention and the MLP both read the block input, so there is no
+          residual stream between them: <code>block_mid</code> and
+          <code>mlp_input_norm</code> are refused. On a post-norm block each sublayer
+          reads the residual stream itself and the norm comes after, so
+          <code>attention_input_norm</code> and <code>mlp_input_norm</code> are refused.
+          nnterp keys those rows by block structure and holds the reason where the
+          structure has no such place, so they are refused with a sentence rather than
+          resolving to a neighbouring tensor.</p>
+
+          <div class="caution">
+            <span class="label">a place that is only half missing</span>
+            <!-- causalab_mini/address.py:452-457 -->
+            <p>If nnterp says a place is per layer and mini's table says it is not, or
+            the other way round, <code>locate</code> refuses rather than picking one:
+            <q>nnterp says per_layer=… and this table says …. One of them moved; the
+            table is mini's to fix</q>. A family override that moves a place cannot
+            move one side only.</p>
+          </div>
+
+          <h2 id="custom">A name only nnterp knows <a class="anchor" href="#custom" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/address.py:34-36 and 432-438;
+               nnterp/nnterp/rename_utils.py:123-128 -->
+          <p><code>RenameConfig(addresses={...})</code> is nnterp's extension point: a
+          row of the address table, by accessor name, either replacing where an existing
+          accessor reads or adding one of your own. An accessor added that way appears
+          in <code>model.internals</code>, and a document may name it — mini's table is
+          a floor, and a component it has never heard of is accepted as long as this
+          model's internals have an accessor of that name.</p>
+
+          <!-- ran 2026-09-23, CPU, fp32, dispatch=False; the refusal is
+               causalab_mini/address.py:479-493 -->
+          <pre><code class="language-python">from nnterp.rename_utils import Address as NnterpAddress, RenameConfig
+from causalab_mini.address import AddressError
+from causalab_mini.engine import NNterpEngine
+from causalab_mini.plan.document import ModelSpec
+
+engine = NNterpEngine.load(
+    ModelSpec("hf-internal-testing/tiny-random-LlamaForCausalLM",
+              "9fb191250dd56d0ba7ec9785a025ed29c03d5998", "fp32"),
+    dispatch=False,
+    rename_config=RenameConfig(addresses={
+        "mlp_gate_output": NnterpAddress("mlp.gate_proj", order=42),
+    }),
+)
+located = engine.locate("mlp_gate_output", 0)
+print(located)
+try:
+    engine.width(located)
+except AddressError as refusal:
+    print("--", refusal)</code></pre>
+
+          <pre><code>Address(component='mlp_gate_output', layer=0, op=None, module='mlp.gate_proj', io='output', rank=(0, 42), inside=False)
+-- the width of 'mlp_gate_output' is not a fact about the model: it depends on the batch (the attention pattern's key axis) or is not a tensor's</code></pre>
+
+          <!-- causalab_mini/address.py:224-228 -->
+          <p>Mini claims nothing else about such a place. It is a module boundary, read
+          at the accessor's own side, one per layer or not as nnterp says, not per head,
+          and it has no width — so a featurizer, which needs one, is refused there rather
+          than sized wrongly. The <code>order</code> in the row is what puts it in
+          forward order beside everything else; give it one that reflects where the place
+          actually is.</p>
+
+          <!-- causalab_mini/cli.py:34-38 and 126-131: the CLI builds the engine with a
+               fixed option set; causalab_mini/engine/engines/nnterp/loading.py:20-46
+               passes everything else through to StandardizedTransformer -->
+          <div class="note">
+            <span class="label">not from the command line</span>
+            <p>The <code>rename_config</code> has to reach the engine when the model is
+            loaded, and the CLI builds its engines with a fixed set of options. So a
+            custom row is a Python path today: <code>NNterpEngine.load(spec,
+            rename_config=…)</code>, then <code>plan.build_request(...)</code> and
+            <code>engine.execute(...)</code> as the CLI does.</p>
+          </div>
+
+          <h2 id="refused">What is refused <a class="anchor" href="#refused" aria-label="Link to this section">#</a></h2>
+
+          <p>Every one of these happens before a forward runs — most at validation, the
+          rest when the document is compiled against the model.</p>
+
+          <table>
+            <thead>
+              <tr><th>naming</th><th>the refusal</th></tr>
+            </thead>
+            <tbody>
+              <!-- causalab_mini/address.py:434-438 -->
+              <tr><td>a component neither table has</td>
+                  <td><code>component 'attention_pattern' has no address here, and this
+                  model's internals have no accessor of that name either</code> — and it
+                  lists mini's names</td></tr>
+              <!-- causalab_mini/plan/spec.py:104-109 -->
+              <tr><td><code>layers</code> with more than one entry</td>
+                  <td><code>layers must be a one-element band; a band spanning several
+                  layers is one address and is not implemented</code></td></tr>
+              <!-- causalab_mini/plan/build.py:62-67 -->
+              <tr><td>a layer past the stack</td>
+                  <td><code>site 'target': layer 24 is outside the model's 16
+                  layers</code></td></tr>
+              <!-- causalab_mini/plan/spec.py:90-91 -->
+              <tr><td><code>heads</code> and <code>units</code> together</td>
+                  <td><code>a site names heads or units, not both: they slice the same
+                  axis</code></td></tr>
+              <!-- causalab_mini/plan/spec.py:96-101 -->
+              <tr><td><code>heads</code> at a tensor that is not per head</td>
+                  <td><code>'block_output' is not a per-head tensor; `heads` applies
+                  at …</code> — and it lists the ones it does</td></tr>
+              <!-- causalab_mini/plan/spec.py:92-95 and 102-103 -->
+              <tr><td>an empty or repeating <code>heads</code> / <code>units</code></td>
+                  <td><code>heads is a non-empty list of distinct head indices</code></td></tr>
+              <!-- causalab_mini/plan/build.py:79-81 -->
+              <tr><td>a head or unit past the end</td>
+                  <td><code>site 'target': head 3 of a 2-head tensor</code></td></tr>
+              <!-- causalab_mini/plan/spec.py:641-647 -->
+              <tr><td>a write at <code>input_ids</code></td>
+                  <td><code>'input_ids' is read-only — the model's input</code></td></tr>
+              <!-- causalab_mini/plan/spec.py:621-629 -->
+              <tr><td><code>"view": "logits"</code> off the residual stream</td>
+                  <td><code>view 'logits' projects the residual stream through the head,
+                  and 'mlp_activation' is not the residual stream</code></td></tr>
+              <!-- causalab_mini/address.py:440-446 -->
+              <tr><td>the pattern under sdpa</td>
+                  <td><code>exists only under 'eager' attention … say
+                  "attn_implementation": "eager"</code></td></tr>
+              <!-- causalab_mini/address.py:479-493 -->
+              <tr><td>a featurizer where there is no width</td>
+                  <td><code>the width of … is not a fact about the model</code></td></tr>
+              <!-- causalab_mini/engine/engines/hooks/engine.py:65-84 -->
+              <tr><td>an interior on the hooks engine</td>
+                  <td><code>… is an interior … a forward hook only sees the module's
+                  boundary … run this document on the nnterp engine</code></td></tr>
+            </tbody>
+          </table>
+
+          <h2 id="worked">A read of four heads, and a read of the whole model <a class="anchor" href="#worked" aria-label="Link to this section">#</a></h2>
+
+          <p><code>documents/v2/head_patching.json</code> is the interchange of
+          <code>patching.json</code> done one attention head at a time. Two sites:
+          <code>target</code> is <code>attention_premix</code> at layer 0 with a sweep
+          over which head, and <code>head</code> is <code>lm_head</code>, which names no
+          layer because there is only one of it.</p>
+
+          <details class="listing">
+            <summary><code>documents/v2/head_patching.json</code> <span class="what">— the whole document</span></summary>
+            <pre><code class="language-json">{
+  &quot;header&quot;: {
+    &quot;description&quot;: &quot;Head-by-head activation patching: the interchange of patching.json, but of ONE attention head&#x27;s result at a time, swept over the four heads of layer 0. The site is `attention_premix` \u2014 the output projection&#x27;s input, which is every head&#x27;s result side by side \u2014 so this runs on the hooks engine too; `attention_z` is the same tensor held as (heads, head_dim) and gives the same numbers bit for bit on nnterp.&quot;
+  },
+  &quot;model&quot;: {
+    &quot;key&quot;: &quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;,
+    &quot;revision&quot;: &quot;9fb191250dd56d0ba7ec9785a025ed29c03d5998&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;
+  },
+  &quot;roles&quot;: {
+    &quot;base&quot;: {
+      &quot;field&quot;: &quot;input&quot;
+    },
+    &quot;counterfactual&quot;: {
+      &quot;field&quot;: &quot;counterfactual_inputs[0]&quot;
+    }
+  },
+  &quot;sites&quot;: {
+    &quot;target&quot;: {
+      &quot;component&quot;: &quot;attention_premix&quot;,
+      &quot;layers&quot;: [
+        0
+      ],
+      &quot;heads&quot;: {
+        &quot;sweep&quot;: [
+          [
+            0
+          ],
+          [
+            1
+          ],
+          [
+            2
+          ],
+          [
+            3
+          ]
+        ]
+      }
+    },
+    &quot;head&quot;: {
+      &quot;component&quot;: &quot;lm_head&quot;
+    }
+  },
+  &quot;interventions&quot;: {
+    &quot;patching&quot;: {
+      &quot;reads&quot;: {
+        &quot;v_cf&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;original&quot;,
+          &quot;input&quot;: &quot;counterfactual&quot;
+        },
+        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;patched&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        }
+      },
+      &quot;writes&quot;: {
+        &quot;patch&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;mechanism&quot;: &quot;swap&quot;,
+          &quot;operand&quot;: &quot;v_cf&quot;
+        }
+      },
+      &quot;models&quot;: {
+        &quot;patched&quot;: {
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;writes&quot;: [
+            &quot;patch&quot;
+          ]
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;iia&quot;: {
+          &quot;kind&quot;: &quot;match&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;expected&quot;: &quot;cf_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
+        },
+        &quot;logit_diff&quot;: {
+          &quot;kind&quot;: &quot;logit_diff&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;a&quot;: &quot;cf_answer&quot;,
+          &quot;b&quot;: &quot;base_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
+        }
+      }
+    }
+  },
+  &quot;steps&quot;: {
+    &quot;score&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;interventions&quot;: &quot;patching&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;iia&quot;,
+          &quot;file_path&quot;: &quot;iia.json&quot;
+        },
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;logit_diff.json&quot;
+        }
+      ]
+    }
+  }
+}</code></pre>
+          </details>
+
+          <!-- documents/v2/head_patching.json header.description -->
+          <p>The document's own note says why the site is <code>attention_premix</code>
+          and not <code>attention_z</code>: the two are the same tensor held differently,
+          <code>attention_premix</code> is a module boundary and so runs on the hooks
+          engine too, and on nnterp the two give the same numbers bit for bit.</p>
+
+          <!-- ran 2026-09-23, CPU, fp32, 12-core Ryzen 9 5900X; 5.5 s wall including
+               the model load -->
+          <pre><code class="language-bash">$ uv run causalab-mini run documents/v2/head_patching.json --device-map cpu --out out/heads
+out/heads/document.json
+out/heads/run.json
+out/heads/heads=0/document.json
+out/heads/heads=0/iia.json
+out/heads/heads=0/logit_diff.json
+…
+out/heads/heads=3/document.json
+out/heads/heads=3/iia.json
+out/heads/heads=3/logit_diff.json</code></pre>
+
+          <p>Four points, one per head, each a directory named by the swept axis. One row
+          of <code>out/heads/heads=1/iia.json</code>:</p>
+
+          <pre><code class="language-json">{
+ "example_id": "0",
+ "metric": "iia",
+ "value": 0.0,
+ "eligible": true,
+ "positions": null,
+ "reason": "",
+ "unit": "fraction",
+ "estimand_version": "match/v1",
+ "produced_by": "8334fa82ec1ce2f26e9a178eebb003c9898cdb6ee445448f25c5be4d2297865a"
+}</code></pre>
+
+          <div class="caution">
+            <span class="label">these numbers say nothing</span>
+            <p><code>hf-internal-testing/tiny-random-LlamaForCausalLM</code> has random
+            weights. It is a fixture that proves the addressing, not a model that knows
+            which day follows Monday. For a per-head result that means something, run the
+            same shape on a real checkpoint — see
+            <a href="use-cases/layer-sweep.html">Layer sweep</a>, which does that for
+            depth.</p>
+          </div>
+
+          <div class="seealso">
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
+            <ul>
+              <li><a href="positions.html">Positions</a> — the other half of a
+              selection: which tokens along the sequence, and why the sequence axis is a
+              fact about the address rather than about the tensor</li>
+              <li><a href="standardization.html">Standardization</a> — what nnterp names,
+              what <code>model.internals</code> holds, and what it costs an engine not to
+              have those names</li>
+              <li><a href="ops.html">Reads, writes, metrics</a> — what you then do at a
+              location, and which featurizers need a width</li>
+              <li><a href="use-cases/attention-pattern.html">Attention pattern</a> — the
+              two eager-only places, run end to end</li>
+              <li><a href="use-cases/sweeps.html">Sweeps</a> — sweeping a site's layer,
+              heads or units, which is how a document names more than one place</li>
+              <li><a href="engine.html">The engine</a> — <code>locate</code>,
+              <code>heads</code> and <code>width</code> are three of the eight members an
+              engine has to answer</li>
+            </ul>
+          </div>
+
+        </article>
+      </main>
+    </div>
+    <script src="site.js"></script>
+  </body>
+</html>

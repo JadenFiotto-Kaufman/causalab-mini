@@ -1,0 +1,703 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Remote &amp; NDIF — causalab-mini</title>
+    <meta name="description" content="The same document with no local weights: --engine ndif, and what changes.">
+    <link rel="stylesheet" href="site.css">
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to content</a>
+
+    <div class="topbar">
+      <button class="iconbutton" data-nav-toggle aria-expanded="false" aria-controls="sidebar">menu</button>
+      <span class="brand">causalab-mini</span>
+      <button class="iconbutton js-only" data-theme-toggle style="margin-left:auto">dark</button>
+    </div>
+
+    <div class="layout">
+      <aside class="sidebar" id="sidebar">
+        <a class="brand" href="index.html">causalab-mini</a>
+        <span class="brand-sub">a plan is pure data; an engine turns it into tensors</span>
+
+        <nav aria-label="Documentation">
+          <ol>
+            <li><a href="index.html">Home</a></li>
+          </ol>
+
+          <h2>The document</h2>
+          <ol>
+            <li><a href="documents.html">Documents</a></li>
+            <li><a href="locations.html">Locations</a></li>
+            <li><a href="positions.html">Positions</a></li>
+            <li><a href="ops.html">Reads, writes, metrics</a></li>
+          </ol>
+
+          <h2>Use cases</h2>
+          <ol>
+            <li><a href="use-cases/index.html">All use cases</a></li>
+          </ol>
+          <ol class="sub">
+          <li><a href="use-cases/layer-sweep.html">Layer sweep</a></li>
+          <li><a href="use-cases/entity-patching.html">Entity patching</a></li>
+          <li><a href="use-cases/das-fit.html">DAS fit</a></li>
+          <li><a href="use-cases/dbm-fit.html">DBM fit</a></li>
+          <li><a href="use-cases/attention-pattern.html">Attention pattern</a></li>
+          <li><a href="use-cases/logit-lens.html">Logit lens</a></li>
+          <li><a href="use-cases/generation.html">Generation</a></li>
+          <li><a href="use-cases/sae-features.html">SAE features</a></li>
+          <li><a href="use-cases/batching-and-remote.html">Batching &amp; remote</a></li>
+          <li><a href="use-cases/sweeps.html">Sweeps</a></li>
+          </ol>
+
+          <h2>Running</h2>
+          <ol>
+            <li><a href="cli.html">The CLI</a></li>
+          </ol>
+
+          <h2>Understand</h2>
+          <ol>
+            <li><a href="engine.html">The engine</a></li>
+            <li><a href="standardization.html">Standardization</a></li>
+            <li><a href="remote.html" aria-current="page">Remote &amp; NDIF</a></li>
+          </ol>
+        </nav>
+
+        <div class="footer">
+          <p><a href="https://github.com/JadenFiotto-Kaufman/causalab-mini">source on GitHub</a></p>
+          <p><button class="iconbutton js-only" data-theme-toggle>dark</button></p>
+        </div>
+      </aside>
+
+      <main id="content">
+        <article class="page">
+          <header>
+            <p class="eyebrow">Reference</p>
+            <h1>Remote &amp; NDIF</h1>
+            <p class="lede">The same document with no local weights:
+            <code>--engine ndif</code>, and what changes.</p>
+          </header>
+
+          <!-- causalab_mini/cli.py:34-38, the ENGINES table; engine.py:82-103 -->
+          <p><code>--engine ndif</code> changes one thing in the run: the one
+          <code>model.session(...)</code> is opened with <code>remote=True</code>.
+          The client still compiles the document — the widths, the module paths, an
+          interior's operation, the token ids of every prompt and every metric
+          column — against a meta-device shell with no weights in it. What comes out
+          is a plan of strings, integers and tuples, and that is what travels. The
+          server runs the block on the checkpoint it already has loaded, against its
+          own installed copy of causalab_mini, and only what fills the plan in comes
+          home.</p>
+
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
+
+          <!-- ran 2026-09-23 on bippu (RTX A6000), against the local NDIF at
+               localhost:8001 serving the tiny Llama in fp32 -->
+          <pre><code class="language-bash">$ NDIF_HOST=http://localhost:8001 causalab-mini run documents/v2/entity_patch.json --engine ndif --out out/entity-ndif
+✓ [ae1d1705ad59466198dcd56bb1b92c9a] COMPLETED    (0.4s) Your job has been completed.
+out/entity-ndif/document.json
+out/entity-ndif/run.json
+out/entity-ndif/iia.json
+out/entity-ndif/logit_diff.json</code></pre>
+
+          <p>The same four files a local run writes, with the same bytes in the two
+          metric tables. In <code>run.json</code> exactly one field differs, and it
+          is <code>remote</code>.</p>
+
+          <div class="note">
+            <span class="label">how the blocks on this page were produced</span>
+            <!-- causalab_mini/engine/engines/nnterp/engine.py:22-27; FINDINGS.md §24 -->
+            <p>The server this page talks to has causalab_mini and nnterp installed,
+            so the block imports them rather than carrying them: nothing of either
+            ships by value
+            (<a href="https://github.com/JadenFiotto-Kaufman/causalab-mini/pull/1">PR&nbsp;#1</a>
+            deleted the <code>nnsight.register("causalab_mini")</code> call that used
+            to ship the package's source). The blocks that show <em>which copy
+            ran</em> — the payload sizes and the server-side traceback — were
+            produced before that PR merged, with the call rebound to a no-op from
+            outside the checkout, which is the code as it is now. Every number and
+            every written file is byte-identical with the call on; only the payload
+            size and the file paths in a traceback are not.</p>
+          </div>
+
+          <h2 id="what-runs-where">What runs where <a class="anchor" href="#what-runs-where" aria-label="Link to this section">#</a></h2>
+
+          <figure>
+            <svg viewBox="0 0 640 180" role="img" aria-labelledby="rem-t rem-d" width="640">
+              <title id="rem-t">What crosses the wire</title>
+              <desc id="rem-d">The client compiles the document into a plan of
+              strings and integers and sends it; the NDIF server runs the block
+              against the loaded checkpoint and its own installed causalab_mini, and
+              sends back only the values that fill the plan in.</desc>
+              <defs>
+                <marker id="rem-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+                        markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fg-faint)"/>
+                </marker>
+              </defs>
+              <g fill="var(--bg-raised)" stroke="var(--rule-strong)" stroke-width="1">
+                <rect x="10"  y="30" width="200" height="120" rx="8"/>
+                <rect x="430" y="30" width="200" height="120" rx="8"/>
+              </g>
+              <g text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif">
+                <g fill="var(--fg)" font-size="13" font-weight="600">
+                  <text x="110" y="58">your machine</text>
+                  <text x="530" y="58">NDIF server</text>
+                </g>
+                <g fill="var(--fg-muted)" font-size="10.5">
+                  <text x="110" y="84">a meta shell, no weights</text>
+                  <text x="110" y="104">compiles the document</text>
+                  <text x="110" y="124">keeps the plan</text>
+                  <text x="530" y="84">the checkpoint, loaded</text>
+                  <text x="530" y="124">its own causalab_mini</text>
+                </g>
+                <text x="530" y="104" fill="var(--accent)" font-size="11" font-weight="600">one session</text>
+                <g fill="var(--fg-faint)" font-size="11">
+                  <text x="320" y="72">the plan — 14.5 KB</text>
+                  <text x="320" y="138">results — 7.7 KB</text>
+                </g>
+              </g>
+              <g stroke="var(--fg-faint)" stroke-width="1.4" fill="none" marker-end="url(#rem-arrow)">
+                <path d="M 214 84 L 426 84"/>
+                <path d="M 426 120 L 214 120"/>
+              </g>
+            </svg>
+            <figcaption>Sizes measured for
+            <code>documents/real/weekdays_layer_sweep.json</code>, 32 experiments of
+            42 rows: 14,471 bytes out, 7,746 bytes back.</figcaption>
+          </figure>
+
+          <!-- cli.py:223-227; loading.py:20-30 (dispatch=False ⇒ device_map=None) -->
+          <table>
+            <thead><tr><th></th><th><code>--engine nnterp</code></th><th><code>--engine ndif</code></th></tr></thead>
+            <tbody>
+            <tr><td>weights</td><td>dispatched on this machine</td><td>the server's; the client holds a meta shell</td></tr>
+            <tr><td>the session</td><td><code>session(remote=False)</code></td><td><code>session(remote=True)</code></td></tr>
+            <tr><td><code>--device-map</code></td><td>passed to the loader</td><td>ignored — <code>run</code> only adds it when the engine is local</td></tr>
+            <tr><td>the tokenizer the block reaches</td><td>the loaded model's</td><td>the served checkpoint's own</td></tr>
+            <tr><td>what compiles the document</td><td colspan="2">the same meta shell, on the client, either way</td></tr>
+            </tbody>
+          </table>
+
+          <!-- tests/test_structure.py:26-32 and :147-154 -->
+          <p>The tokenizer row is a rule, not an accident. A traced block ships every
+          name it loads, so a block that closed over the client's tokenizer would
+          carry that object to the server and resolve positions against it. The block
+          reaches <code>model.tokenizer</code> instead — an attribute, and one of
+          nnsight's persistent objects, which a server resolves to the served
+          checkpoint's own. <code>tests/test_structure.py</code> reads the package's
+          own source and fails if any trace body loads the bare name
+          <code>tokenizer</code>, <code>self</code>, or a client-side module.</p>
+
+          <h2 id="pointing-at-a-server">Pointing at a server <a class="anchor" href="#pointing-at-a-server" aria-label="Link to this section">#</a></h2>
+
+          <!-- nnsight: src/nnsight/schema/config.py:16-20 and :118-130 -->
+          <p>mini has no host setting of its own. The host and the key are nnsight's,
+          read from the environment at import:</p>
+
+          <table>
+            <thead><tr><th>variable</th><th>what it does</th></tr></thead>
+            <tbody>
+            <tr><td><code>NDIF_HOST</code></td><td>the base URL of the API. Default <code>https://api.ndif.us</code></td></tr>
+            <tr><td><code>NDIF_API_KEY</code></td><td>the key sent with every request. A server running without auth accepts anything, including nothing</td></tr>
+            </tbody>
+          </table>
+
+          <p>Both can also live in <code>$XDG_CONFIG_HOME/nnsight/config.yaml</code>,
+          which the environment overrides. What a server is serving, and at what
+          dtype, is on its <code>/status</code>:</p>
+
+          <!-- ran 2026-09-23 against the local stack -->
+          <pre><code class="language-bash">$ curl -s $NDIF_HOST/status | jq -r '.deployments[] | select(.deployment_level=="HOT") | [.repo_id, .dtype, .application_state] | @tsv'
+hf-internal-testing/tiny-random-LlamaForCausalLM	float32	RUNNING
+meta-llama/Llama-3.2-1B	float32	RUNNING</code></pre>
+
+          <p>That listing had 553 entries; the other 551 are COLD, and a COLD record
+          carries no <code>dtype</code>, because nothing has been loaded to have one.
+          A document's <code>model.key</code> and <code>model.revision</code> have to
+          match a record here, and its <code>dtype</code> is a request the server is
+          free to ignore — see below.</p>
+
+          <h2 id="the-server-needs-the-same-packages">The server needs the same packages <a class="anchor" href="#the-server-needs-the-same-packages" aria-label="Link to this section">#</a></h2>
+
+          <p>A remote block is recompiled on the server and the modules it names are
+          <em>imported there</em>. So the server must have causalab_mini and nnterp
+          installed, at the versions the client has. <code>/env</code> says what it
+          has:</p>
+
+          <!-- ran 2026-09-23; fields picked out of the JSON -->
+          <pre><code class="language-bash">$ curl -s $NDIF_HOST/env | jq -r '.python_version, (.packages | {torch, transformers, nnsight, nnterp, causalab_mini, pydantic} | to_entries[] | "\(.key) \(.value)")'
+3.12.14 (main, Sep  1 2026, 00:10:07) [GCC 14.2.0]
+torch 2.14.0+cu126
+transformers 5.17.0
+nnsight 0.8.1.dev125+g524c33fc
+nnterp 0.5.0.dev0+internalsaccessors
+causalab_mini 0.0.1
+pydantic 2.13.4</code></pre>
+
+          <!-- causalab_mini/engine/provenance.py:44-52, code_digest() -->
+          <p>A version string is coarse for a package installed from a checkout, so
+          the sharper check is mini's own digest — a sha256 over every
+          <code>.py</code> file in the package, which <code>run.json</code> already
+          records. Read from inside a remote block against this stack, the server's
+          install and the client's agree:</p>
+
+          <pre><code class="language-bash">SERVER /usr/local/lib/python3.12/site-packages/causalab_mini/__init__.py
+SERVER_DIGEST 76c8c9d0c0d1f3e0b8e2eaeb09564107d1c0a70cb9e8b7d6cecab09fdc92d8a1
+CLIENT_DIGEST 76c8c9d0c0d1f3e0b8e2eaeb09564107d1c0a70cb9e8b7d6cecab09fdc92d8a1
+MATCH True</code></pre>
+
+          <p>The <code>__file__</code> on the first line is the other half of it: the
+          server's path, not the client's, which is what says the module was imported
+          rather than rebuilt from the request.</p>
+
+          <h3 id="what-a-mismatch-looks-like">What a mismatch looks like <a class="anchor" href="#what-a-mismatch-looks-like" aria-label="Link to this section">#</a></h3>
+
+          <p>Nothing checks the two sides against each other. A skew shows up as a
+          missing name, at the moment the block reaches for it — here, a client
+          calling a function its server's copy does not have:</p>
+
+          <!-- ran 2026-09-23; the traceback is the server's, trimmed to its last
+               frames -->
+          <pre><code class="language-bash">nnsight.intervention.backends.remote.RemoteError: Traceback (most recent call last):
+…
+  File "/usr/local/lib/python3.12/site-packages/ndif/services/ray/deployments/modeling/nns.py", line 183, in execute_traced_block
+    tracer.execute(tracer.info.code)
+  File "[skewed:25] …/probe_versions.py", line 27, in skewed
+    return steps.a_function_added_after_the_server_was_built()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'causalab_mini.engine.steps' has no attribute 'a_function_added_after_the_server_was_built'</code></pre>
+
+          <div class="caution">
+            <span class="label">a skew that changes a number is silent</span>
+            <p>A missing name is loud. A function whose body changed is not: the
+            server runs its own and the run completes. What the record does show
+            is the two sides side by side — <code>versions</code> is the
+            client's and <code>server.versions</code> is what
+            <code>/env</code> answered — and on this stack that is how the
+            <code>pydantic</code> skew below turns up: <code>2.13.5</code> here,
+            <code>2.13.4</code> there. The code digest is still the client's
+            reading of its own files; the server computing it too is what
+            <a href="#what-came-home">the record</a> shows.</p>
+          </div>
+
+          <h3 id="what-the-request-weighs">What the request weighs <a class="anchor" href="#what-the-request-weighs" aria-label="Link to this section">#</a></h3>
+
+          <p>Measured with nnsight's own report (<code>NNSIGHT_DEBUG=1</code> prints
+          the payload and the result blob, both after compression), and with
+          cloudpickle's by-value set read at serialize time:</p>
+
+          <!-- ran 2026-09-23, local NDIF -->
+          <table>
+            <thead><tr><th>request</th><th class="num">out</th><th class="num">back</th></tr></thead>
+            <tbody>
+            <tr><td><code>entity_patch</code> — 4 rows, one swap, two metrics</td><td class="num">5,069 B</td><td class="num">998 B</td></tr>
+            <tr><td><code>weekdays_layer_sweep</code> — 32 experiments x 42 rows</td><td class="num">14,471 B</td><td class="num">7,746 B</td></tr>
+            <tr><td><code>entity_patch</code>, with <code>register("causalab_mini")</code> put back</td><td class="num">69,085 B</td><td class="num">—</td></tr>
+            </tbody>
+          </table>
+
+          <p>The third row is the package travelling with the request: 13.6x the
+          first, and the same ~64 KB of source on every request whatever the document
+          asks. A plan is cheap to
+          ship because it is only strings, integers and tuples — an anchored position
+          costs a handful of them, and the code that resolves it is on the server
+          already.</p>
+
+          <h2 id="the-dtype-is-the-server-s">The dtype is the server's <a class="anchor" href="#the-dtype-is-the-server-s" aria-label="Link to this section">#</a></h2>
+
+          <!-- engine/engines/nnterp/engine.py:99-102 -->
+          <p>A document's <code>model.dtype</code> is a request. The deployment
+          decides what it serves, and dtype is not part of the model key, so a client
+          cannot ask for one and cannot see what it got from the outside. The block
+          therefore reads <code>model.lm_head.weight.dtype</code> on the server and
+          brings the string home, where it lands in <code>run.json</code> as
+          <code>served_dtype</code>.</p>
+
+          <p>It matters more than a rounding note. Recorded on this stack, the same
+          32-point sweep run locally in fp32 and through NDIF, 2,688 values per
+          comparison:</p>
+
+          <table>
+            <thead><tr><th>deployment</th><th>metric</th><th class="num">identical</th><th class="num">max abs diff</th></tr></thead>
+            <tbody>
+            <tr><td rowspan="2">NDIF default (bf16)</td><td><code>iia</code></td><td class="num">1341 / 1344</td><td class="num">1</td></tr>
+            <tr><td><code>logit_diff</code></td><td class="num">0 / 1344</td><td class="num">0.231</td></tr>
+            <tr><td rowspan="2"><code>ndif deploy … --dtype float32</code></td><td><code>iia</code></td><td class="num">1344 / 1344</td><td class="num">0</td></tr>
+            <tr><td><code>logit_diff</code></td><td class="num">1344 / 1344</td><td class="num">0</td></tr>
+            </tbody>
+          </table>
+
+          <p>So "close, not equal" is entirely the served dtype. At fp32 every one of
+          the 2,688 numbers is bit-identical to the local GPU run: neither the
+          serialization round trip nor running in someone else's process perturbs the
+          arithmetic. The three <code>iia</code> flips under bf16 are all at layers
+          12–13 at the last token, the two points where the sweep crosses over and the
+          argmax between the two answers is nearly tied.</p>
+
+          <!-- documents/real/README.md:33-38 -->
+          <p><code>documents/real/README.md</code> records the same comparison against
+          a bf16 deployment on an A100: last-token IIA 0.86 where local reads 0.88,
+          p(answer) differing by up to 0.018, L12 H28 at +0.051 against +0.054 — and
+          the DAS rank curve identical.</p>
+
+          <h2 id="what-came-home">What came home <a class="anchor" href="#what-came-home" aria-label="Link to this section">#</a></h2>
+
+          <p>The layer sweep, which is the largest document in the repository — 32
+          experiments, 42 rows each, a read, a swap write and two metrics, all in one
+          job:</p>
+
+          <!-- ran 2026-09-23 on bippu against the local NDIF (Llama-3.2-1B pinned
+               HOT at fp32); 99 lines of output, trimmed -->
+          <pre><code class="language-bash">$ NDIF_HOST=http://localhost:8001 causalab-mini run documents/real/weekdays_layer_sweep.json --engine ndif --out out/sweep-ndif
+✓ [d7ac06dc7def47da8d16f3dd77f10276] COMPLETED    (4.6s) Your job has been completed.
+out/sweep-ndif/document.json
+out/sweep-ndif/run.json
+out/sweep-ndif/layers=0,pos=-4/document.json
+out/sweep-ndif/layers=0,pos=-4/iia.json
+out/sweep-ndif/layers=0,pos=-4/logit_diff.json
+…
+out/sweep-ndif/layers=15,pos=-1/document.json
+out/sweep-ndif/layers=15,pos=-1/iia.json
+out/sweep-ndif/layers=15,pos=-1/logit_diff.json</code></pre>
+
+          <p>Against the same document run locally on the GPU, fp32, everything but
+          the run record is byte-for-byte the same file:</p>
+
+          <pre><code class="language-bash">$ diff -r -x run.json out/sweep-local out/sweep-ndif &amp;&amp; echo &quot;ALL 64 FILES IDENTICAL&quot;
+ALL 64 FILES IDENTICAL
+
+$ diff out/sweep-local/run.json out/sweep-ndif/run.json
+3c3
+&lt;  &quot;remote&quot;: false,
+---
+&gt;  &quot;remote&quot;: true,</code></pre>
+
+          <p>One field. The server here is deployed at the document's own dtype, so
+          <code>served_dtype</code> reads <code>torch.float32</code> on both sides;
+          against the default deployment it would be the second field to differ, and
+          the only one that would move a number. The whole record:</p>
+
+          <!-- ran 2026-09-23 against the local NDIF, positions @ 2f7d4f7:
+               out/sweep/run.json from `causalab-mini run
+               documents/real/weekdays_layer_sweep.json --engine ndif` -->
+          <pre><code class="language-json">{
+ &quot;engine&quot;: &quot;NNterpEngine&quot;,
+ &quot;remote&quot;: true,
+ &quot;batch_size&quot;: null,
+ &quot;versions&quot;: {
+  &quot;torch&quot;: &quot;2.14.0+cu126&quot;,
+  &quot;transformers&quot;: &quot;5.17.0&quot;,
+  &quot;nnsight&quot;: &quot;0.8.1.dev125+g524c33fc&quot;,
+  &quot;nnterp&quot;: &quot;0.5.0.dev0+internalsaccessors&quot;,
+  &quot;pydantic&quot;: &quot;2.13.5&quot;
+ },
+ &quot;causalab_mini&quot;: &quot;d52d3c7757ac30d38e9990ba441d563756235e6b6d4312351110acec46185e73&quot;,
+ &quot;server&quot;: {
+  &quot;asked&quot;: &quot;http://localhost:8001&quot;,
+  &quot;python&quot;: &quot;3.12.14&quot;,
+  &quot;versions&quot;: {
+   &quot;torch&quot;: &quot;2.14.0+cu126&quot;,
+   &quot;transformers&quot;: &quot;5.17.0&quot;,
+   &quot;nnsight&quot;: &quot;0.8.1.dev125+g524c33fc&quot;,
+   &quot;nnterp&quot;: &quot;0.5.0.dev0+internalsaccessors&quot;,
+   &quot;pydantic&quot;: &quot;2.13.4&quot;
+  }
+ },
+ &quot;served_dtype&quot;: &quot;torch.float32&quot;
+}</code></pre>
+
+          <!-- causalab_mini/engine/provenance.py:56-77 (_served) — one
+               GET /env through nnsight's per-host cache, at the top of execute -->
+          <p>Those <code>versions</code> are read with
+          <code>importlib.metadata</code>, in the client's process, which on a
+          remote run is an assumption about a machine the record has never
+          spoken to. A remote run asks: nnsight's <code>/env</code> lookup,
+          cached per host, and what comes back is recorded under
+          <code>server</code> beside them, filtered to the same five names so
+          the two compare line for line. A server that will not answer is
+          recorded as not having answered. <code>asked</code> is the host the
+          client resolved, so a run against the public service reads
+          <code>&quot;asked&quot;: &quot;https://api.ndif.us&quot;</code>. The
+          same command with <code>--engine nnterp</code> writes the same file
+          without the key: a local run has no server to ask.</p>
+
+          <p>Read the two <code>pydantic</code> lines. The client has
+          <code>2.13.5</code> and the server <code>2.13.4</code>, on a stack
+          built to match — every other watched package agrees. That skew was
+          invisible before this key existed, and finding it is what the key is
+          for.</p>
+
+          <!-- ran 2026-09-23: the digest computed inside the block on the
+               server, against the client's, causalab_mini/engine/provenance.py:47-54 -->
+          <p><code>causalab_mini</code> is a sha256 over every
+          <code>.py</code> file in the package, and it is not in
+          <code>WATCHED</code> because a version string is coarse for a package
+          installed from a checkout. On this run the server computed it inside
+          the block and it matched, from a different path:</p>
+
+          <pre><code class="language-bash">server digest: d52d3c7757ac30d38e9990ba441d563756235e6b6d4312351110acec46185e73
+client digest: d52d3c7757ac30d38e9990ba441d563756235e6b6d4312351110acec46185e73
+server file  : /usr/local/lib/python3.12/site-packages/causalab_mini/engine/provenance.py
+client file  : /home/localjadenfk/wd/causalab-mini/causalab_mini/engine/provenance.py</code></pre>
+
+          <p>Two paths, one digest. That is the claim the record's
+          <code>causalab_mini</code> field makes, checked end to end rather than
+          assumed: the server ran its own installed copy and it is byte-identical
+          to the client's.</p>
+
+          <!-- ran 2026-09-23 against the local NDIF: entity_patch and
+               chat_turn, each local and remote, results compared leaf by leaf -->
+          <p>Ragged results come home too, not just tensors. An anchored document's
+          <code>positions</code> record — each row's window, its decoded tokens and
+          its reason code — and the per-row <code>eligible</code> mask are nested
+          dicts of integers and strings, and they arrive with nothing lost and
+          nothing reordered. <code>documents/v2/entity_patch.json</code>, whose
+          position is <code>{"index": -1, "scope": {"variable": "entity"}}</code>,
+          writes the same <code>positions</code> column locally and remotely.</p>
+
+          <p>So does a chat document, whose spans are the client's alone: the
+          compiler renders the conversation through the template and records
+          where each turn landed, and those travel in the plan rather than being
+          worked out on the server. <code>documents/v2/chat_turn.json</code>
+          through NDIF is the local run leaf for leaf — all 46 of them — and
+          <code>{"index": -1, "scope": {"segment": "user[1]"}}</code> comes back
+          as <code>' is'</code>, the question's own last token, on both.</p>
+
+          <h3 id="timings">Timings <a class="anchor" href="#timings" aria-label="Link to this section">#</a></h3>
+
+          <!-- measured 2026-09-23 on bippu: one RTX A6000 shared between the local
+               run and the container; each figure the lower of two runs -->
+          <table>
+            <thead><tr><th>document</th><th class="num">local, GPU</th><th class="num">NDIF, end to end</th><th class="num">of which server-side</th></tr></thead>
+            <tbody>
+            <tr><td><code>entity_patch</code> (tiny Llama, 4 rows)</td><td class="num">9.0 s</td><td class="num">8.4 s</td><td class="num">0.31 s</td></tr>
+            <tr><td><code>weekdays_layer_sweep</code> (Llama-3.2-1B, 32 points)</td><td class="num">16.9 s</td><td class="num">15.0 s</td><td class="num">4.6 s</td></tr>
+            </tbody>
+          </table>
+
+          <p>The server-side figure is the model actor's own log line
+          (<code>prev_stage_ms</code> between <code>running</code> and
+          <code>completed</code>). The rest is the client: importing torch, building
+          the meta shell, compiling 32 documents and tokenizing. That is why a remote
+          run of a small document is not faster — the weights were never the slow
+          part. The model was already HOT for both figures; a cold deployment adds
+          its load time to the first request.</p>
+
+          <h2 id="when-the-server-refuses">When the server refuses <a class="anchor" href="#when-the-server-refuses" aria-label="Link to this section">#</a></h2>
+
+          <p>A document whose write has nothing to write on some row is refused at run
+          time, because whether a row's entity text is in that row's prompt is not
+          known until the prompt is tokenized. Locally the CLI catches it and
+          prints what it says:</p>
+
+          <!-- ran 2026-09-23 on the local box, --engine nnterp --device-map cuda -->
+          <pre><code class="language-bash">$ causalab-mini run entity_patch_absent.json --engine nnterp --device-map cuda \
+    --data-root data --out out/absent
+PlanError: write 'patch' has nothing to write on row(s) {1: 'alignment_missing'}. A read may skip a row; a write may not — writing nothing somewhere is not an intervention, and the row would score as if one had happened. `alignment_ambiguous` is a value that is in the prompt more than once, and scoping the anchor is what makes it one
+$ echo $?
+1</code></pre>
+
+          <p>Through NDIF the same refusal arrives, with the same text and the
+          same exit code, at the bottom of a 45-line double traceback:</p>
+
+          <!-- ran 2026-09-23 against the local NDIF: documents/v2/entity_patch.json
+               over a four-row table whose row 1 names an entity its own prompt
+               does not contain. The CLI's own stderr, trimmed at the two ellipses. -->
+          <pre><code class="language-bash">$ NDIF_HOST=http://localhost:8001 causalab-mini run entity_patch_absent.json \
+    --engine ndif --data-root data --out out/absent
+Traceback (most recent call last):
+  ...
+  File "causalab_mini/cli.py", line 331, in run
+    written = engine.execute(built, remote=remote, batch_size=args.batch_size).write(args.out)
+  File "causalab_mini/engine/engines/nnterp/engine.py", line 89, in execute
+    with model.session(remote=remote):
+  File "nnsight/tracing/tracer.py", line 580, in __exit__
+    raise exception.with_traceback(
+nnsight.intervention.backends.remote.RemoteError: Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/site-packages/ndif/services/ray/deployments/modeling/nns.py", line 183, in execute_traced_block
+    tracer.execute(tracer.info.code)
+  File "causalab_mini/engine/engines/nnterp/engine.py", line 96, in execute
+    steps.run(engine, plan, batch_size=batch_size)
+  File "/usr/local/lib/python3.12/site-packages/causalab_mini/engine/steps.py", line 76, in run
+    run(engine, child, state.child() if isinstance(child, Plan) else state)
+  ...
+  File "/usr/local/lib/python3.12/site-packages/causalab_mini/engine/steps.py", line 481, in _writes_land
+    raise PlanError(
+causalab_mini.plan.plan.PlanError: write 'patch' has nothing to write on row(s) {1: 'alignment_missing'}. A read may skip a row; a write may not — writing nothing somewhere is not an intervention, and the row would score as if one had happened. `alignment_ambiguous` is a value that is in the prompt more than once, and scoping the anchor is what makes it one
+$ echo $?
+1</code></pre>
+
+          <p>Three things to read off it. The message survives whole, down to the
+          trailing advice, and the server's traceback comes with it. The frames say
+          which copy ran: every mini frame below the block is the image's
+          <code>site-packages</code>, and the one client-path frame is the traced
+          block itself, which nnsight registers under the client's filename so the
+          traceback can show the offending line. And the server knew what it was —
+          its own log says <code>error_type=PlanError</code>:</p>
+
+          <pre><code class="language-bash">ERROR [ndif.modeling] model execution errored … request_id=b645c48f52574292a39b1764223b7b23
+  api_key=local stage=running error_type=PlanError fatal=False exec_ms=21.31</code></pre>
+
+          <div class="caution">
+            <span class="label">the type does not survive, so neither does the message</span>
+            <!-- causalab_mini/cli.py:56-66 (REFUSALS) has the nine types; the
+                 client raises nnsight.intervention.backends.remote.RemoteError,
+                 whose MRO is RemoteError -> Exception -->
+            <p>The client raises <code>RemoteError</code>, whose bases are
+            <code>Exception</code> and nothing else, so <code>except PlanError:</code>
+            on the client does not catch a refusal that came from a server. The text
+            and the traceback are intact; the class is not.</p>
+            <p>That is why the remote transcript above is a traceback where the
+            local one is a line. The CLI catches its own nine refusal types and
+            prints what they say — <code>RemoteError</code> is not one of them,
+            and cannot be, because it is the wrapper rather than the refusal. The
+            fix is nnsight's: the server already names the class in its own log
+            (<code>error_type=PlanError</code>), so re-raising the server's
+            exception as its real type wherever that type is importable on the
+            client would give a remote run the same one line a local one gets.
+            With causalab_mini installed on both sides, as it is here, it always
+            would be.</p>
+          </div>
+
+          <!-- engine/engines/hooks/engine.py:106-112 -->
+          <p>The other refusal worth knowing is the hooks engine's: it raises rather
+          than run <code>remote</code>, because a hook is a Python callable on a
+          module object in this process and there is nothing to ship. Remote is the
+          nnterp engine's. <code>--engine hooks</code> never sets it, so you meet this
+          one only from Python.</p>
+
+          <h2 id="remote-local"><code>remote="local"</code> <a class="anchor" href="#remote-local" aria-label="Link to this section">#</a></h2>
+
+          <!-- engine.py:82, remote: bool | str; tests/test_patching.py:171-179 -->
+          <p><code>execute</code> takes <code>remote</code> as
+          <code>bool | str</code> and passes it straight to the session, so
+          <code>remote="local"</code> is nnsight's local simulation of a remote run:
+          the session is serialized exactly as it would be for a server, this
+          project's modules are hidden, and it is deserialized against the persistent
+          objects a server supplies — which is how <code>model.tokenizer</code>
+          resolves to the served checkpoint's. It is not reachable from the command
+          line; the tests use it, and it costs no server:</p>
+
+          <!-- ran 2026-09-23, CPU, tiny Llama -->
+          <pre><code class="language-bash">$ uv run pytest tests/test_patching.py::test_remote_local_runs_the_same_plan_and_gets_the_same_numbers \
+    tests/test_ragged.py::test_a_text_anchor_resolves_the_same_way_through_the_serialized_path -q
+..                                                                       [100%]
+2 passed, 1 warning in 13.79s</code></pre>
+
+          <p>What it pins is the way out: a block that closed over something it should
+          not, an anchor that resolved against the wrong tokenizer, a plan carrying
+          something unpicklable.</p>
+
+          <!-- FINDINGS.md:1374 §19 — the seven defects the first real runs found -->
+          <p>What it does not cover is everything that is a fact about the other
+          machine. It does not serialize the way home, so nothing it does proves a
+          result can come back. It has one Python, one nnsight and one install, so no
+          version skew can appear. It runs at the dtype you loaded, on the device you
+          loaded, and not inside NDIF's autocast region. The first runs against a real
+          server found seven defects invisible to the suite for exactly these reasons
+          — among them that a filled-in plan cannot be pickled home at all, which is
+          why <code>execute</code> brings back a flat
+          <code>{step path: {name: tensor}}</code> and fills in the plan the client
+          never gave up, and that NDIF runs a request under autocast, which downcast
+          half of a Cayley solve until featurizer math was pinned outside it.</p>
+
+          <h2 id="running-your-own-server">Running your own server <a class="anchor" href="#running-your-own-server" aria-label="Link to this section">#</a></h2>
+
+          <p>Two stages: NDIF's own image, then the three checkouts on top of it, so
+          the server can import what a block names. From a checkout of
+          <a href="https://github.com/ndif-team/ndif">ndif</a>:</p>
+
+          <!-- the recipe that built the image this page ran against, 2026-09-23 -->
+          <pre><code class="language-bash">V=$(git describe --tags | sed -E 's/^v//; s/-([0-9]+)-g/.post\1+g/')
+docker build -f docker/Dockerfile --build-arg TORCH_CUDA=cu126 --build-arg NDIF_VERSION="$V" -t ndif-local:base .</code></pre>
+
+          <p>Stage two installs nnsight, nnterp and causalab_mini with
+          <code>--no-deps</code> — every dependency is pinned in the base image, and
+          letting pip resolve here pulls a different torch — and passes each version
+          in, because setuptools-scm cannot see a git history in a build context:</p>
+
+          <pre><code class="language-bash">FROM ndif-local:base
+COPY nnsight/ /src/nnsight/
+RUN SETUPTOOLS_SCM_PRETEND_VERSION_FOR_NNSIGHT="0.8.1.dev125+g524c33fc" \
+    pip install --no-deps --force-reinstall /src/nnsight \
+ &amp;&amp; python -c "import nnsight._c.py_mount"
+COPY nnterp/ /src/nnterp/
+RUN SETUPTOOLS_SCM_PRETEND_VERSION_FOR_NNTERP="0.5.0.dev0+internalsaccessors" \
+    pip install --no-deps /src/nnterp
+COPY causalab_mini_src/ /src/causalab_mini/
+RUN pip install --no-deps /src/causalab_mini
+RUN python -c "import nnsight, nnterp, causalab_mini, causalab_mini.engine.steps"</code></pre>
+
+          <p>Build the context with <code>git archive</code> out of each checkout, so
+          the image is a function of three commits and nothing else. Then run it and
+          deploy the checkpoints the documents name:</p>
+
+          <pre><code class="language-bash">docker run -d --name ndif-mini --gpus all --shm-size 4g -p 8001:8001 -p 9000:9000 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface -e HF_TOKEN="$(cat ~/.cache/huggingface/token)" \
+  ndif-local:mini
+
+docker exec ndif-mini ndif deploy meta-llama/Llama-3.2-1B \
+  --revision 4e20de362430cd3b72f300e6b0f18e50e7166e08 --dtype float32 --pinned</code></pre>
+
+          <div class="caution">
+            <span class="label">two things that bite</span>
+            <p><code>TORCH_CUDA</code> has to match the box's driver. This machine's
+            is 555.42.02 (CUDA 12.5), so <code>cu126</code>; a cu130 build produces a
+            server that reports <code>cuda_memory_bytes: 0</code> and no error at
+            all. And a server started without a Postgres URL has <strong>auth
+            off</strong>, which means every request is trusted and runs in-process
+            inside the model actor with <code>trust_remote_code=True</code>. That is
+            fine on <code>localhost</code> and nowhere else.</p>
+          </div>
+
+          <p>The HOT set lives in the controller's memory, so
+          <code>docker start</code> brings the stack back without the deployments;
+          re-run <code>ndif deploy</code>. The <code>import nnsight._c.py_mount</code>
+          check in stage two is deliberate: without the C extension
+          <code>.save()</code> fails on the server with an error that names neither.</p>
+
+          <h2 id="the-public-service">The public service <a class="anchor" href="#the-public-service" aria-label="Link to this section">#</a></h2>
+
+          <p><code>https://api.ndif.us</code> is the default host, and the same
+          <code>/env</code> call says what it has:</p>
+
+          <!-- ran 2026-09-23 against the public service -->
+          <pre><code class="language-bash">$ curl -s https://api.ndif.us/env | jq -r '.python_version, (.packages | {nnsight, nnterp, causalab_mini, torch, transformers} | to_entries[] | "\(.key) \(.value)")'
+3.12.14 (main, Aug 14 2026, 15:34:45) [Clang 22.1.3 ]
+nnsight 0.7.0
+nnterp 1.3.0
+causalab_mini null
+torch 2.6.0+cu126
+transformers 5.8.0</code></pre>
+
+          <p><code>null</code> is the answer: mini is not installed there, so a
+          document cannot run on the public service — the block names modules the
+          server cannot import. The nnsight line is a second reason, since a block
+          from a 0.8 client is not something a 0.7 server can run. Remote means a
+          server you or your group control, which is what the numbers on this page
+          were measured against.</p>
+
+          <div class="seealso">
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
+            <ul>
+              <li><a href="engine.html">The engine</a> — the one session this page
+                  passes <code>remote</code> to, and why a block may name only plan
+                  data and the model</li>
+              <li><a href="cli.html">The CLI</a> — <code>--engine</code>,
+                  <code>--batch-size</code> and what <code>run</code> writes</li>
+              <li><a href="use-cases/layer-sweep.html">Layer sweep</a> — the document
+                  run here, read end to end with its result</li>
+              <li><a href="positions.html">Positions</a> — the <code>Where</code> spec
+                  the server resolves per row against the served checkpoint's
+                  tokenizer</li>
+            </ul>
+          </div>
+
+        </article>
+      </main>
+    </div>
+    <script src="site.js"></script>
+  </body>
+</html>

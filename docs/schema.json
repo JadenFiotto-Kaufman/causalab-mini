@@ -1,0 +1,1136 @@
+{
+ "$defs": {
+  "Anchor": {
+   "additionalProperties": false,
+   "description": "A run of tokens located in this row by its *text*.\n\n`variable` is the row's own value for a name: the `<column>_variables`\nsibling of the role's own field first, a top-level column of that name\notherwise. That rule is why a pair-native document writes one spec and\neach role resolves its own text.\n\n`segment` is a run the *frame* located, and its name comes from the same\nplace the run does. In the prompt frame that is a chat turn, named by\nthe message's own `role` \u2014 `\"user\"`, `\"assistant\"`, whatever the\nconversation says \u2014 so nothing here enumerates them. A conversation with\ntwo user turns names them `\"user[0]\"` and `\"user[1]\"`, the bracket\n`rows.field_text` already uses for a list, and the bare `\"user\"` is\n`alignment_ambiguous`: the same rule a variable occurring twice gets,\nand the same fix \u2014 say which. In the generated frame the one run the\nframe locates is `eos`.\n\nBoth keys together is the composition \u2014 the variable's run searched\n*inside* the segment's \u2014 which is also how a value occurring twice\nbecomes unique, and why there is no `occurrence` field.",
+   "properties": {
+    "variable": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Variable"
+    },
+    "segment": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Segment"
+    }
+   },
+   "title": "Anchor",
+   "type": "object"
+  },
+  "Anneal": {
+   "additionalProperties": false,
+   "description": "A gate's temperature across a fit: `start` on the first update, `end`\non the last, geometric between. Toward zero the soft mask the optimizer\nsees becomes the hard mask the score uses.",
+   "properties": {
+    "start": {
+     "exclusiveMinimum": 0,
+     "title": "Start",
+     "type": "number"
+    },
+    "end": {
+     "exclusiveMinimum": 0,
+     "title": "End",
+     "type": "number"
+    }
+   },
+   "required": [
+    "start",
+    "end"
+   ],
+   "title": "Anneal",
+   "type": "object"
+  },
+  "CrossEntropy": {
+   "additionalProperties": false,
+   "properties": {
+    "kind": {
+     "const": "cross_entropy",
+     "title": "Kind",
+     "type": "string"
+    },
+    "of": {
+     "title": "Of",
+     "type": "string"
+    },
+    "target": {
+     "title": "Target",
+     "type": "string"
+    },
+    "token_form": {
+     "const": "space_prefixed",
+     "default": "space_prefixed",
+     "title": "Token Form",
+     "type": "string"
+    }
+   },
+   "required": [
+    "kind",
+    "of",
+    "target"
+   ],
+   "title": "CrossEntropy",
+   "type": "object"
+  },
+  "EarlyStop": {
+   "additionalProperties": false,
+   "properties": {
+    "metric": {
+     "title": "Metric",
+     "type": "string"
+    },
+    "mode": {
+     "default": "max",
+     "enum": [
+      "max",
+      "min"
+     ],
+     "title": "Mode",
+     "type": "string"
+    },
+    "patience": {
+     "exclusiveMinimum": 0,
+     "title": "Patience",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "metric",
+    "patience"
+   ],
+   "title": "EarlyStop",
+   "type": "object"
+  },
+  "Evaluation": {
+   "additionalProperties": false,
+   "description": "The fit's held-out pass: its own rows, and its own saves. This is the\nwhole reason the format changed \u2014 the held-out score is a result of a\nplace, not a name that has to avoid colliding with another.",
+   "properties": {
+    "rows": {
+     "additionalProperties": {
+      "type": "string"
+     },
+     "title": "Rows",
+     "type": "object"
+    },
+    "saves": {
+     "items": {
+      "$ref": "#/$defs/Save"
+     },
+     "title": "Saves",
+     "type": "array"
+    }
+   },
+   "required": [
+    "rows"
+   ],
+   "title": "Evaluation",
+   "type": "object"
+  },
+  "Featurizer": {
+   "additionalProperties": false,
+   "description": "A parameter set. `subspace` is a Cayley-parametrized rotation, drawn\nfrom a seed or loaded, and trainable; `pca` is a fixed basis, always\nloaded, never trained \u2014 the control a fit is compared against; `gate` is\na learned binary mask over the site's units (DBM), soft while a fit\nupdates it and hard whenever it is scored.",
+   "properties": {
+    "kind": {
+     "enum": [
+      "subspace",
+      "pca",
+      "gate",
+      "sae",
+      "linear"
+     ],
+     "title": "Kind",
+     "type": "string"
+    },
+    "k": {
+     "anyOf": [
+      {
+       "exclusiveMinimum": 0,
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "K"
+    },
+    "parametrization": {
+     "const": "cayley",
+     "default": "cayley",
+     "title": "Parametrization",
+     "type": "string"
+    },
+    "seed": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Seed"
+    },
+    "file_path": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "File Path"
+    }
+   },
+   "required": [
+    "kind"
+   ],
+   "title": "Featurizer",
+   "type": "object"
+  },
+  "Fit": {
+   "additionalProperties": false,
+   "properties": {
+    "kind": {
+     "const": "fit",
+     "title": "Kind",
+     "type": "string"
+    },
+    "rows": {
+     "additionalProperties": {
+      "type": "string"
+     },
+     "title": "Rows",
+     "type": "object"
+    },
+    "interventions": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "$ref": "#/$defs/Intervention"
+      },
+      {
+       "items": {
+        "anyOf": [
+         {
+          "type": "string"
+         },
+         {
+          "$ref": "#/$defs/Intervention"
+         }
+        ]
+       },
+       "type": "array"
+      }
+     ],
+     "title": "Interventions"
+    },
+    "params": {
+     "items": {
+      "type": "string"
+     },
+     "title": "Params",
+     "type": "array"
+    },
+    "objective": {
+     "items": {
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "string"
+       }
+      ],
+      "type": "array"
+     },
+     "title": "Objective",
+     "type": "array"
+    },
+    "anneal": {
+     "additionalProperties": {
+      "$ref": "#/$defs/Anneal"
+     },
+     "title": "Anneal",
+     "type": "object"
+    },
+    "epochs": {
+     "exclusiveMinimum": 0,
+     "title": "Epochs",
+     "type": "integer"
+    },
+    "pairs": {
+     "exclusiveMinimum": 0,
+     "title": "Pairs",
+     "type": "integer"
+    },
+    "seed": {
+     "default": 0,
+     "title": "Seed",
+     "type": "integer"
+    },
+    "optimizer": {
+     "$ref": "#/$defs/Optimizer"
+    },
+    "early_stop": {
+     "$ref": "#/$defs/EarlyStop"
+    },
+    "eval": {
+     "$ref": "#/$defs/Evaluation"
+    },
+    "saves": {
+     "items": {
+      "$ref": "#/$defs/Save"
+     },
+     "title": "Saves",
+     "type": "array"
+    }
+   },
+   "required": [
+    "kind",
+    "rows",
+    "interventions",
+    "params",
+    "objective",
+    "epochs",
+    "pairs",
+    "optimizer",
+    "early_stop",
+    "eval"
+   ],
+   "title": "Fit",
+   "type": "object"
+  },
+  "Header": {
+   "additionalProperties": false,
+   "properties": {
+    "description": {
+     "default": "",
+     "title": "Description",
+     "type": "string"
+    }
+   },
+   "title": "Header",
+   "type": "object"
+  },
+  "IntervenedModel": {
+   "additionalProperties": false,
+   "properties": {
+    "input": {
+     "title": "Input",
+     "type": "string"
+    },
+    "writes": {
+     "items": {
+      "type": "string"
+     },
+     "title": "Writes",
+     "type": "array"
+    }
+   },
+   "required": [
+    "input",
+    "writes"
+   ],
+   "title": "IntervenedModel",
+   "type": "object"
+  },
+  "Intervention": {
+   "additionalProperties": false,
+   "description": "The experiment, declared once. Every step runs *this*, over its own\nrows \u2014 which is why a fit and the run it scores cannot drift apart.",
+   "properties": {
+    "reads": {
+     "additionalProperties": {
+      "$ref": "#/$defs/Read"
+     },
+     "title": "Reads",
+     "type": "object"
+    },
+    "writes": {
+     "additionalProperties": {
+      "$ref": "#/$defs/Write"
+     },
+     "title": "Writes",
+     "type": "object"
+    },
+    "models": {
+     "additionalProperties": {
+      "$ref": "#/$defs/IntervenedModel"
+     },
+     "title": "Models",
+     "type": "object"
+    },
+    "metrics": {
+     "additionalProperties": {
+      "discriminator": {
+       "mapping": {
+        "cross_entropy": "#/$defs/CrossEntropy",
+        "logit_diff": "#/$defs/LogitDiff",
+        "match": "#/$defs/Match",
+        "token_logit": "#/$defs/TokenLogit",
+        "token_prob": "#/$defs/TokenProb"
+       },
+       "propertyName": "kind"
+      },
+      "oneOf": [
+       {
+        "$ref": "#/$defs/Match"
+       },
+       {
+        "$ref": "#/$defs/LogitDiff"
+       },
+       {
+        "$ref": "#/$defs/CrossEntropy"
+       },
+       {
+        "$ref": "#/$defs/TokenLogit"
+       },
+       {
+        "$ref": "#/$defs/TokenProb"
+       }
+      ]
+     },
+     "title": "Metrics",
+     "type": "object"
+    },
+    "decode": {
+     "default": 0,
+     "minimum": 0,
+     "title": "Decode",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "reads"
+   ],
+   "title": "Intervention",
+   "type": "object"
+  },
+  "LogitDiff": {
+   "additionalProperties": false,
+   "properties": {
+    "kind": {
+     "const": "logit_diff",
+     "title": "Kind",
+     "type": "string"
+    },
+    "of": {
+     "title": "Of",
+     "type": "string"
+    },
+    "a": {
+     "title": "A",
+     "type": "string"
+    },
+    "b": {
+     "title": "B",
+     "type": "string"
+    },
+    "token_form": {
+     "const": "space_prefixed",
+     "default": "space_prefixed",
+     "title": "Token Form",
+     "type": "string"
+    }
+   },
+   "required": [
+    "kind",
+    "of",
+    "a",
+    "b"
+   ],
+   "title": "LogitDiff",
+   "type": "object"
+  },
+  "Match": {
+   "additionalProperties": false,
+   "properties": {
+    "kind": {
+     "const": "match",
+     "title": "Kind",
+     "type": "string"
+    },
+    "of": {
+     "title": "Of",
+     "type": "string"
+    },
+    "expected": {
+     "title": "Expected",
+     "type": "string"
+    },
+    "token_form": {
+     "const": "space_prefixed",
+     "default": "space_prefixed",
+     "title": "Token Form",
+     "type": "string"
+    }
+   },
+   "required": [
+    "kind",
+    "of",
+    "expected"
+   ],
+   "title": "Match",
+   "type": "object"
+  },
+  "Model": {
+   "additionalProperties": false,
+   "properties": {
+    "key": {
+     "title": "Key",
+     "type": "string"
+    },
+    "revision": {
+     "title": "Revision",
+     "type": "string"
+    },
+    "dtype": {
+     "enum": [
+      "fp32",
+      "bf16"
+     ],
+     "title": "Dtype",
+     "type": "string"
+    },
+    "attn_implementation": {
+     "anyOf": [
+      {
+       "enum": [
+        "eager",
+        "sdpa"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Attn Implementation"
+    }
+   },
+   "required": [
+    "key",
+    "revision",
+    "dtype"
+   ],
+   "title": "Model",
+   "type": "object"
+  },
+  "Observe": {
+   "additionalProperties": false,
+   "properties": {
+    "kind": {
+     "const": "observe",
+     "title": "Kind",
+     "type": "string"
+    },
+    "rows": {
+     "additionalProperties": {
+      "type": "string"
+     },
+     "title": "Rows",
+     "type": "object"
+    },
+    "interventions": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "$ref": "#/$defs/Intervention"
+      },
+      {
+       "items": {
+        "anyOf": [
+         {
+          "type": "string"
+         },
+         {
+          "$ref": "#/$defs/Intervention"
+         }
+        ]
+       },
+       "type": "array"
+      }
+     ],
+     "title": "Interventions"
+    },
+    "outputs": {
+     "additionalProperties": {
+      "$ref": "#/$defs/Output"
+     },
+     "title": "Outputs",
+     "type": "object"
+    },
+    "saves": {
+     "items": {
+      "$ref": "#/$defs/Save"
+     },
+     "title": "Saves",
+     "type": "array"
+    }
+   },
+   "required": [
+    "kind",
+    "rows",
+    "interventions"
+   ],
+   "title": "Observe",
+   "type": "object"
+  },
+  "Optimizer": {
+   "additionalProperties": false,
+   "properties": {
+    "name": {
+     "const": "adamw",
+     "default": "adamw",
+     "title": "Name",
+     "type": "string"
+    },
+    "lr": {
+     "title": "Lr",
+     "type": "number"
+    },
+    "weight_decay": {
+     "default": 0.0,
+     "title": "Weight Decay",
+     "type": "number"
+    }
+   },
+   "required": [
+    "lr"
+   ],
+   "title": "Optimizer",
+   "type": "object"
+  },
+  "Output": {
+   "additionalProperties": false,
+   "description": "One value a pass publishes for the steps after it: a read, kept as it\nis (`rows x width`), averaged over rows to one vector \u2014 which is how a\ncorpus mean gets made without the un-reduced activations ever leaving \u2014\nor reduced to its top-k principal directions, a basis a later document\nloads as a `pca` featurizer.",
+   "properties": {
+    "read": {
+     "title": "Read",
+     "type": "string"
+    },
+    "reduce": {
+     "default": "none",
+     "enum": [
+      "none",
+      "mean",
+      "pca"
+     ],
+     "title": "Reduce",
+     "type": "string"
+    },
+    "k": {
+     "anyOf": [
+      {
+       "exclusiveMinimum": 0,
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "K"
+    }
+   },
+   "required": [
+    "read"
+   ],
+   "title": "Output",
+   "type": "object"
+  },
+  "Read": {
+   "additionalProperties": false,
+   "properties": {
+    "site": {
+     "title": "Site",
+     "type": "string"
+    },
+    "pos": {
+     "$ref": "#/$defs/Where"
+    },
+    "model": {
+     "default": "original",
+     "title": "Model",
+     "type": "string"
+    },
+    "input": {
+     "title": "Input",
+     "type": "string"
+    },
+    "featurizer": {
+     "default": "identity",
+     "title": "Featurizer",
+     "type": "string"
+    },
+    "view": {
+     "default": "raw",
+     "enum": [
+      "raw",
+      "logits"
+     ],
+     "title": "View",
+     "type": "string"
+    }
+   },
+   "required": [
+    "site",
+    "pos",
+    "input"
+   ],
+   "title": "Read",
+   "type": "object"
+  },
+  "Reference": {
+   "additionalProperties": false,
+   "description": "A value an earlier sibling step published under `outputs`.",
+   "properties": {
+    "ref": {
+     "title": "Ref",
+     "type": "string"
+    }
+   },
+   "required": [
+    "ref"
+   ],
+   "title": "Reference",
+   "type": "object"
+  },
+  "Role": {
+   "additionalProperties": false,
+   "properties": {
+    "field": {
+     "title": "Field",
+     "type": "string"
+    }
+   },
+   "required": [
+    "field"
+   ],
+   "title": "Role",
+   "type": "object"
+  },
+  "Save": {
+   "additionalProperties": false,
+   "description": "One file. `value` names a result **of the step this sits on**.\n\nThe field that holds these is `saves`, not `save`, for a reason worth\nknowing: nnsight mounts a `.save()` method onto `object`, so every\npydantic model in a process that imports nnsight inherits one, and a\nfield called `save` shadows it. FINDINGS \u00a79.",
+   "properties": {
+    "value": {
+     "title": "Value",
+     "type": "string"
+    },
+    "file_path": {
+     "title": "File Path",
+     "type": "string"
+    }
+   },
+   "required": [
+    "value",
+    "file_path"
+   ],
+   "title": "Save",
+   "type": "object"
+  },
+  "Site": {
+   "additionalProperties": false,
+   "properties": {
+    "component": {
+     "title": "Component",
+     "type": "string"
+    },
+    "layers": {
+     "anyOf": [
+      {
+       "items": {
+        "type": "integer"
+       },
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Layers"
+    },
+    "heads": {
+     "anyOf": [
+      {
+       "items": {
+        "type": "integer"
+       },
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Heads"
+    },
+    "units": {
+     "anyOf": [
+      {
+       "items": {
+        "type": "integer"
+       },
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Units"
+    }
+   },
+   "required": [
+    "component"
+   ],
+   "title": "Site",
+   "type": "object"
+  },
+  "TokenLogit": {
+   "additionalProperties": false,
+   "properties": {
+    "kind": {
+     "const": "token_logit",
+     "title": "Kind",
+     "type": "string"
+    },
+    "of": {
+     "title": "Of",
+     "type": "string"
+    },
+    "token": {
+     "title": "Token",
+     "type": "string"
+    },
+    "token_form": {
+     "const": "space_prefixed",
+     "default": "space_prefixed",
+     "title": "Token Form",
+     "type": "string"
+    }
+   },
+   "required": [
+    "kind",
+    "of",
+    "token"
+   ],
+   "title": "TokenLogit",
+   "type": "object"
+  },
+  "TokenProb": {
+   "additionalProperties": false,
+   "properties": {
+    "kind": {
+     "const": "token_prob",
+     "title": "Kind",
+     "type": "string"
+    },
+    "of": {
+     "title": "Of",
+     "type": "string"
+    },
+    "token": {
+     "title": "Token",
+     "type": "string"
+    },
+    "token_form": {
+     "const": "space_prefixed",
+     "default": "space_prefixed",
+     "title": "Token Form",
+     "type": "string"
+    }
+   },
+   "required": [
+    "kind",
+    "of",
+    "token"
+   ],
+   "title": "TokenProb",
+   "type": "object"
+  },
+  "Weights": {
+   "additionalProperties": false,
+   "properties": {
+    "kind": {
+     "const": "weights",
+     "title": "Kind",
+     "type": "string"
+    },
+    "names": {
+     "items": {
+      "type": "string"
+     },
+     "title": "Names",
+     "type": "array"
+    },
+    "saves": {
+     "items": {
+      "$ref": "#/$defs/Save"
+     },
+     "title": "Saves",
+     "type": "array"
+    }
+   },
+   "required": [
+    "kind",
+    "names"
+   ],
+   "title": "Weights",
+   "type": "object"
+  },
+  "Where": {
+   "additionalProperties": false,
+   "description": "Where along the sequence, per row \u2014 a spec, never an integer.\n\nThree independent questions, one field each:\n\n    frame                 which sequence: the prompt, or what was generated\n    scope                 which run of it: the row's content, or an anchor's\n    index/span/last/all   how much of that run\n\nExactly one of index/span/last/all; negatives count from the end of the\nrun. Resolution happens where the model is, per row, against its\ntokenizer, so `{\"index\": -1, \"scope\": {\"variable\": \"entity\"}}` is the\nlast token of *this row's* entity \u2014 whatever text that is, and however\nmany tokens it takes. That is the whole point: the spec is the same for\nevery row and the integer is not.",
+   "properties": {
+    "index": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Index"
+    },
+    "span": {
+     "anyOf": [
+      {
+       "maxItems": 2,
+       "minItems": 2,
+       "prefixItems": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "integer"
+        }
+       ],
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Span"
+    },
+    "last": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Last"
+    },
+    "all": {
+     "default": false,
+     "title": "All",
+     "type": "boolean"
+    },
+    "scope": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/Anchor"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "frame": {
+     "default": "prompt",
+     "enum": [
+      "prompt",
+      "generated"
+     ],
+     "title": "Frame",
+     "type": "string"
+    }
+   },
+   "title": "Where",
+   "type": "object"
+  },
+  "Write": {
+   "additionalProperties": false,
+   "description": "`mechanism` and `operand` are two fields, not the protocol's\n`{\"swap\": \"v_cf\"}`, because a key that is itself the mechanism's name\ncannot be enumerated by a schema \u2014 and the schema is what an agent\nreads. The operand is a read of this intervention, or a reference to\nwhat an earlier step output.",
+   "properties": {
+    "site": {
+     "title": "Site",
+     "type": "string"
+    },
+    "pos": {
+     "$ref": "#/$defs/Where"
+    },
+    "mechanism": {
+     "enum": [
+      "swap",
+      "add_scaled",
+      "lerp",
+      "gaussian",
+      "clamp",
+      "renormalize"
+     ],
+     "title": "Mechanism",
+     "type": "string"
+    },
+    "operand": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "number"
+      },
+      {
+       "$ref": "#/$defs/Reference"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Operand"
+    },
+    "featurizer": {
+     "default": "identity",
+     "title": "Featurizer",
+     "type": "string"
+    },
+    "features": {
+     "anyOf": [
+      {
+       "items": {
+        "type": "integer"
+       },
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Features"
+    },
+    "params": {
+     "additionalProperties": {
+      "type": "number"
+     },
+     "title": "Params",
+     "type": "object"
+    }
+   },
+   "required": [
+    "site",
+    "pos",
+    "mechanism"
+   ],
+   "title": "Write",
+   "type": "object"
+  }
+ },
+ "additionalProperties": false,
+ "description": "A document. `steps` run in the order written, and that order is\nchecked: a step may not use a featurizer before the step that trains it\nhas run, or it would score an untrained rotation without complaint.",
+ "properties": {
+  "header": {
+   "$ref": "#/$defs/Header"
+  },
+  "model": {
+   "$ref": "#/$defs/Model"
+  },
+  "roles": {
+   "additionalProperties": {
+    "$ref": "#/$defs/Role"
+   },
+   "title": "Roles",
+   "type": "object"
+  },
+  "sites": {
+   "additionalProperties": {
+    "$ref": "#/$defs/Site"
+   },
+   "title": "Sites",
+   "type": "object"
+  },
+  "interventions": {
+   "additionalProperties": {
+    "$ref": "#/$defs/Intervention"
+   },
+   "title": "Interventions",
+   "type": "object"
+  },
+  "steps": {
+   "additionalProperties": {
+    "discriminator": {
+     "mapping": {
+      "fit": "#/$defs/Fit",
+      "observe": "#/$defs/Observe",
+      "weights": "#/$defs/Weights"
+     },
+     "propertyName": "kind"
+    },
+    "oneOf": [
+     {
+      "$ref": "#/$defs/Observe"
+     },
+     {
+      "$ref": "#/$defs/Fit"
+     },
+     {
+      "$ref": "#/$defs/Weights"
+     }
+    ]
+   },
+   "title": "Steps",
+   "type": "object"
+  },
+  "featurizers": {
+   "additionalProperties": {
+    "$ref": "#/$defs/Featurizer"
+   },
+   "title": "Featurizers",
+   "type": "object"
+  }
+ },
+ "required": [
+  "model",
+  "roles",
+  "sites",
+  "interventions",
+  "steps"
+ ],
+ "title": "Spec",
+ "type": "object"
+}

@@ -1,0 +1,688 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Attention pattern — causalab-mini</title>
+    <meta name="description" content="Swap where a head looks, separately from what it moves.">
+    <link rel="stylesheet" href="../site.css">
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to content</a>
+
+    <div class="topbar">
+      <button class="iconbutton" data-nav-toggle aria-expanded="false" aria-controls="sidebar">menu</button>
+      <span class="brand">causalab-mini</span>
+      <button class="iconbutton js-only" data-theme-toggle style="margin-left:auto">dark</button>
+    </div>
+
+    <div class="layout">
+      <aside class="sidebar" id="sidebar">
+        <a class="brand" href="../index.html">causalab-mini</a>
+        <span class="brand-sub">a plan is pure data; an engine turns it into tensors</span>
+
+        <nav aria-label="Documentation">
+          <ol>
+            <li><a href="../index.html">Home</a></li>
+          </ol>
+
+          <h2>The document</h2>
+          <ol>
+            <li><a href="../documents.html">Documents</a></li>
+            <li><a href="../locations.html">Locations</a></li>
+            <li><a href="../positions.html">Positions</a></li>
+            <li><a href="../ops.html">Reads, writes, metrics</a></li>
+          </ol>
+
+          <h2>Use cases</h2>
+          <ol>
+            <li><a href="../use-cases/index.html">All use cases</a></li>
+          </ol>
+          <ol class="sub">
+          <li><a href="../use-cases/layer-sweep.html">Layer sweep</a></li>
+          <li><a href="../use-cases/entity-patching.html">Entity patching</a></li>
+          <li><a href="../use-cases/das-fit.html">DAS fit</a></li>
+          <li><a href="../use-cases/dbm-fit.html">DBM fit</a></li>
+          <li><a href="../use-cases/attention-pattern.html" aria-current="page">Attention pattern</a></li>
+          <li><a href="../use-cases/logit-lens.html">Logit lens</a></li>
+          <li><a href="../use-cases/generation.html">Generation</a></li>
+          <li><a href="../use-cases/sae-features.html">SAE features</a></li>
+          <li><a href="../use-cases/batching-and-remote.html">Batching &amp; remote</a></li>
+          <li><a href="../use-cases/sweeps.html">Sweeps</a></li>
+          </ol>
+
+          <h2>Running</h2>
+          <ol>
+            <li><a href="../cli.html">The CLI</a></li>
+          </ol>
+
+          <h2>Understand</h2>
+          <ol>
+            <li><a href="../engine.html">The engine</a></li>
+            <li><a href="../standardization.html">Standardization</a></li>
+            <li><a href="../remote.html">Remote &amp; NDIF</a></li>
+          </ol>
+        </nav>
+
+        <div class="footer">
+          <p><a href="https://github.com/JadenFiotto-Kaufman/causalab-mini">source on GitHub</a></p>
+          <p><button class="iconbutton js-only" data-theme-toggle>dark</button></p>
+        </div>
+      </aside>
+
+      <main id="content">
+        <article class="page">
+          <header>
+            <p class="eyebrow">Use case</p>
+            <h1>Attention pattern</h1>
+            <p class="lede">Patching the attention pattern: does <em>where</em> a head looks carry the answer?</p>
+          </header>
+
+          <p>Head patching says one head of Llama-3.2-1B carries "today" to the last
+          token: L12 H28. A head does two things there — it decides <em>where</em> to
+          look, and it moves <em>what</em> it finds. A patch of the head's result
+          changes both at once, so it cannot tell you which.</p>
+
+          <p>The attention pattern is the first half on its own. Swap it from the
+          counterfactual prompt and the head looks where it would have looked on
+          <em>that</em> prompt, while the values it mixes are still this prompt's. If
+          "today" travels by the head's aim, the answer moves. This page runs that,
+          per head of layer 12, on the real model.</p>
+
+          <h2 id="at-a-glance">At a glance <a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
+
+          <!-- measured here 2026-09-23, CPU, fp32, out/pattern_real/heads=*/logit_diff.json -->
+          <p>Nothing moves. All 32 heads of layer 12, mean logit difference over the 42
+          pairs, counterfactual answer minus base answer:</p>
+
+          <div class="bars">
+            <div class="row head"><span class="key">head</span><span>logit difference, measured from −2.409</span><span class="val"></span></div>
+            <div class="row"><span class="key">L12 H28</span>
+              <span class="track"><span class="fill" style="width:100%"></span></span>
+              <span class="val">−2.396</span></div>
+            <div class="row"><span class="key">L12 H18</span>
+              <span class="track"><span class="fill" style="width:84%"></span></span>
+              <span class="val">−2.398</span></div>
+            <div class="row"><span class="key">median head</span>
+              <span class="track"><span class="fill" style="width:44%"></span></span>
+              <span class="val">−2.403</span></div>
+            <div class="row"><span class="key">L12 H15</span>
+              <span class="track"><span class="fill" style="width:0%"></span></span>
+              <span class="val">−2.409</span></div>
+          </div>
+
+          <p>The bars are measured from −2.409, the lowest of the 32, because measured
+          from zero all 32 are the same bar. The whole spread across every head of the
+          layer is 0.013 logits, and the interchange accuracy is 0.00 on every head and
+          every row. The mover head's pattern is not what makes it the mover head.</p>
+
+          <h2 id="the-document">The document <a class="anchor" href="#the-document" aria-label="Link to this section">#</a></h2>
+
+          <details class="listing">
+            <summary><code>documents/real/weekdays_pattern_patching.json</code> <span class="what">— the document this page runs, verbatim</span></summary>
+            <pre><code class="language-json">{
+  &quot;header&quot;: {
+    &quot;description&quot;: &quot;Is it WHERE the mover head looks? Head patching found one head, L12 H28, that carries &#x27;today&#x27; to the last token. This swaps only that head&#x27;s attention PATTERN at the last position from the counterfactual prompt \u2014 its values stay the base&#x27;s \u2014 for every head of layer 12. All weekday names are one token here, so every pair is laid out identically, which the compiler checks. Needs eager attention.&quot;
+  },
+  &quot;model&quot;: {
+    &quot;key&quot;: &quot;meta-llama/Llama-3.2-1B&quot;,
+    &quot;revision&quot;: &quot;4e20de362430cd3b72f300e6b0f18e50e7166e08&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;,
+    &quot;attn_implementation&quot;: &quot;eager&quot;
+  },
+  &quot;roles&quot;: {
+    &quot;base&quot;: {
+      &quot;field&quot;: &quot;input&quot;
+    },
+    &quot;counterfactual&quot;: {
+      &quot;field&quot;: &quot;counterfactual_inputs[0]&quot;
+    }
+  },
+  &quot;sites&quot;: {
+    &quot;target&quot;: {
+      &quot;component&quot;: &quot;attention_probs&quot;,
+      &quot;layers&quot;: [
+        12
+      ],
+      &quot;heads&quot;: {
+        &quot;sweep&quot;: [
+          [
+            0
+          ],
+          [
+            1
+          ],
+          [
+            2
+          ],
+          [
+            3
+          ],
+          [
+            4
+          ],
+          [
+            5
+          ],
+          [
+            6
+          ],
+          [
+            7
+          ],
+          [
+            8
+          ],
+          [
+            9
+          ],
+          [
+            10
+          ],
+          [
+            11
+          ],
+          [
+            12
+          ],
+          [
+            13
+          ],
+          [
+            14
+          ],
+          [
+            15
+          ],
+          [
+            16
+          ],
+          [
+            17
+          ],
+          [
+            18
+          ],
+          [
+            19
+          ],
+          [
+            20
+          ],
+          [
+            21
+          ],
+          [
+            22
+          ],
+          [
+            23
+          ],
+          [
+            24
+          ],
+          [
+            25
+          ],
+          [
+            26
+          ],
+          [
+            27
+          ],
+          [
+            28
+          ],
+          [
+            29
+          ],
+          [
+            30
+          ],
+          [
+            31
+          ]
+        ]
+      }
+    },
+    &quot;head&quot;: {
+      &quot;component&quot;: &quot;lm_head&quot;
+    }
+  },
+  &quot;interventions&quot;: {
+    &quot;patching&quot;: {
+      &quot;reads&quot;: {
+        &quot;v_cf&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;original&quot;,
+          &quot;input&quot;: &quot;counterfactual&quot;
+        },
+        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;patched&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        }
+      },
+      &quot;writes&quot;: {
+        &quot;patch&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;mechanism&quot;: &quot;swap&quot;,
+          &quot;operand&quot;: &quot;v_cf&quot;
+        }
+      },
+      &quot;models&quot;: {
+        &quot;patched&quot;: {
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;writes&quot;: [
+            &quot;patch&quot;
+          ]
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;iia&quot;: {
+          &quot;kind&quot;: &quot;match&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;,
+          &quot;expected&quot;: &quot;cf_answer&quot;
+        },
+        &quot;logit_diff&quot;: {
+          &quot;kind&quot;: &quot;logit_diff&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;,
+          &quot;a&quot;: &quot;cf_answer&quot;,
+          &quot;b&quot;: &quot;base_answer&quot;
+        }
+      }
+    }
+  },
+  &quot;steps&quot;: {
+    &quot;score&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;interventions&quot;: &quot;patching&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays_full/data&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays_full/data&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;iia&quot;,
+          &quot;file_path&quot;: &quot;iia.json&quot;
+        },
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;logit_diff.json&quot;
+        }
+      ]
+    }
+  }
+}</code></pre>
+          </details>
+
+          <p>Most of its length is the head sweep: 32 single-element lists,
+          <code>[[0], [1], … [31]]</code>, one point per head. Apart from that and the
+          <code>model</code> block, it is the layer sweep's document with a different
+          site — read from the unmodified model on the counterfactual prompt, swap into
+          the base run, score the head's logits against the two answers.</p>
+
+          <h2 id="two-things-this-document-says-that-others-do-not">Two things this document says that others do not <a class="anchor" href="#two-things-this-document-says-that-others-do-not" aria-label="Link to this section">#</a></h2>
+
+          <h3 id="attn-implementation-eager"><code>"attn_implementation": "eager"</code> <a class="anchor" href="#attn-implementation-eager" aria-label="Link to this section">#</a></h3>
+
+          <!-- causalab_mini/plan/spec.py:68 attn_implementation; :65-67 "part of the
+               experiment and not of the run" -->
+          <p>It sits in the <code>model</code> block, beside the checkpoint and the
+          revision, because it is part of the experiment and not of the run. Two
+          reasons it belongs there rather than on a command line:</p>
+
+          <ul>
+            <li><code>eager</code> is the only implementation under which
+            <code>attention_probs</code> and <code>attention_scores</code>
+            <em>exist</em>. sdpa and flash attention never materialize the pattern as a
+            tensor — the whole point of them is that they do not — so there is nothing
+            to address.</li>
+            <li>The implementations differ in the last bits. A result produced under
+            eager is not bitwise a result produced under sdpa, and a document that did
+            not record which one ran would not be reproducible.</li>
+          </ul>
+
+          <!-- causalab_mini/address.py:441 — the refusal, naming the flag to set -->
+          <p>Leave it out and the address does not resolve. <code>model</code> asks the
+          question without running anything:</p>
+
+          <!-- ran 2026-09-23; `model` loads no weights and takes no
+               attn_implementation, so it reports the library default -->
+          <pre><code class="language-bash">$ uv run causalab-mini model meta-llama/Llama-3.2-1B
+meta-llama/Llama-3.2-1B via nnterp: 16 layers, padding_side=left
+  attention_query    ok   width=2048  op=attention_interface_1
+  attention_key      ok   width=512  op=attention_interface_1
+  attention_scores   --   component &#x27;attention_scores&#x27; exists only under &#x27;eager&#x27; attention, and this model runs &#x27;sdpa&#x27;: say &quot;attn_implementation&quot;: &quot;eager&quot; in the document&#x27;s model block
+  attention_probs    --   component &#x27;attention_probs&#x27; exists only under &#x27;eager&#x27; attention, and this model runs &#x27;sdpa&#x27;: say &quot;attn_implementation&quot;: &quot;eager&quot; in the document&#x27;s model block
+  attention_z        ok   width=2048  op=attention_interface_1
+…
+  block_output       ok   width=2048
+  ln_final           ok   width=2048
+  lm_head            ok   width=128256
+  logits             ok   width=128256</code></pre>
+
+          <p>Every other component on the list resolves under the default. Two do not,
+          and the refusal names the field to set.</p>
+
+          <h3 id="the-pattern-is-over-keys">The pattern is over <em>keys</em> <a class="anchor" href="#the-pattern-is-over-keys" aria-label="Link to this section">#</a></h3>
+
+          <!-- causalab_mini/address.py:156 attention_probs — seq_axis=2, keys=True, heads="q" -->
+          <p><code>attention_probs</code> is
+          <code>(batch, head, query, key)</code>. The site's <code>heads</code> picks
+          the head axis; <code>pos</code> cuts the <em>query</em> axis, so
+          <code>-1</code> is "what this head attends to when producing the last token";
+          and the key axis is left whole, because a pattern is a distribution over keys
+          and half of one is not a pattern.</p>
+
+          <!-- causalab_mini/plan/build.py:825 _check_keys; :807 _check_patterns -->
+          <div class="caution">
+            <span class="label">key <em>j</em> lands on key <em>j</em></span>
+            <p>A swapped-in pattern is a vector of weights over the padded batch's key
+            positions, and key <em>j</em> of the operand lands on key <em>j</em> here.
+            That is only the same <em>token</em> if the two prompts are laid out
+            identically: the same padded width and, row by row, the same number of real
+            tokens. Otherwise attention mass meant for one word lands on another, or on
+            a pad, with every shape correct and nothing to notice.</p>
+            <p>Both attention masks are in hand before any forward, so this is refused
+            at compile time rather than discovered later — or not discovered:</p>
+          </div>
+
+          <!-- ran 2026-09-23; documents/v2/attention_pattern_patching.json copied aside
+               with its rows changed from weekdays_aligned/data to weekdays/train -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain pattern_on_unaligned_rows.json
+…
+causalab_mini.plan.plan.PlanError: write &#x27;look_there&#x27; swaps in the attention pattern &#x27;their_pattern&#x27;, read from prompts laid out differently: rows [0, 2] have [9, 11] tokens there and [11, 9] here. A pattern is over keys, so the two prompts must tokenize to the same length, row by row</code></pre>
+
+          <p>That is why <code>documents/v2/</code> has a
+          <code>weekdays_aligned</code> corpus at all: on the tiny tokenizer
+          <em>Thursday</em> is three tokens and <em>Friday</em> is one, so only some
+          pairs line up, and the aligned corpus is the six that do. On Llama-3.2-1B
+          every weekday name is one token, so the whole 42-pair corpus is aligned and
+          the real document needs no subset.</p>
+
+          <h2 id="what-it-compiles-to">What it compiles to <a class="anchor" href="#what-it-compiles-to" aria-label="Link to this section">#</a></h2>
+
+          <!-- ran 2026-09-23; 96 lines, the first point shown -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/real/weekdays_pattern_patching.json
+&lt;root&gt;: Plan
+  heads=0: Plan
+    score: Observe  metrics=[&#x27;iia/match&#x27;, &#x27;logit_diff/logit_diff&#x27;]  saves=[&#x27;iia.json&#x27;, &#x27;logit_diff.json&#x27;]
+        forward &#x27;original&#x27; on &#x27;counterfactual&#x27;  (42 rows x 8 tokens)
+          read  &#x27;v_cf&#x27; at attention_probs[12] pos={index:-1} features=[0]/32 via &#x27;identity&#x27;
+        forward &#x27;patched&#x27; on &#x27;base&#x27;  (42 rows x 8 tokens)
+          write &#x27;patch&#x27; at attention_probs[12] pos={index:-1} features=[0]/32 swap(v_cf) via &#x27;identity&#x27;
+          read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
+  heads=1: Plan
+…</code></pre>
+
+          <p><code>features=[0]/32</code> is the head selection: head 0 of the 32 this
+          layer has. A site with <code>heads</code> narrows the tensor to those heads,
+          and it is the same field whether the component is a pattern, a query or a
+          head's pre-projection result.</p>
+
+          <h2 id="running-it">Running it <a class="anchor" href="#running-it" aria-label="Link to this section">#</a></h2>
+
+          <!-- run 2026-09-23 on CPU, fp32, 12-core Ryzen 9 5900X, weights from the
+               local HF cache -->
+          <pre><code class="language-bash">$ time uv run causalab-mini run documents/real/weekdays_pattern_patching.json \
+      --device-map cpu --out out/pattern_real
+out/pattern_real/document.json
+out/pattern_real/run.json
+out/pattern_real/heads=0/document.json
+out/pattern_real/heads=0/iia.json
+out/pattern_real/heads=0/logit_diff.json
+…
+out/pattern_real/heads=31/logit_diff.json
+
+real	1m50.005s</code></pre>
+
+          <p>32 points, 64 forwards over 42 rows, under two minutes on twelve CPU cores.
+          The recorded A100 run of the neighbouring head-patching document — three times
+          the points — took 33 seconds (<code>documents/real/README.md</code>).</p>
+
+          <h2 id="the-result">The result <a class="anchor" href="#the-result" aria-label="Link to this section">#</a></h2>
+
+          <p>Mean over the 42 pairs, per head. Every one of the 32:</p>
+
+          <table>
+            <thead><tr><th class="num">head</th><th class="num">logit diff</th><th class="num">head</th><th class="num">logit diff</th><th class="num">head</th><th class="num">logit diff</th><th class="num">head</th><th class="num">logit diff</th></tr></thead>
+            <tbody>
+              <tr><td class="num">0</td><td class="num">−2.403</td><td class="num">8</td><td class="num">−2.402</td><td class="num">16</td><td class="num">−2.404</td><td class="num">24</td><td class="num">−2.403</td></tr>
+              <tr><td class="num">1</td><td class="num">−2.403</td><td class="num">9</td><td class="num">−2.403</td><td class="num">17</td><td class="num">−2.404</td><td class="num">25</td><td class="num">−2.403</td></tr>
+              <tr><td class="num">2</td><td class="num">−2.403</td><td class="num">10</td><td class="num">−2.404</td><td class="num">18</td><td class="num">−2.398</td><td class="num">26</td><td class="num">−2.403</td></tr>
+              <tr><td class="num">3</td><td class="num">−2.404</td><td class="num">11</td><td class="num">−2.404</td><td class="num">19</td><td class="num">−2.403</td><td class="num">27</td><td class="num">−2.403</td></tr>
+              <tr><td class="num">4</td><td class="num">−2.403</td><td class="num">12</td><td class="num">−2.405</td><td class="num">20</td><td class="num">−2.401</td><td class="num">28</td><td class="num">−2.396</td></tr>
+              <tr><td class="num">5</td><td class="num">−2.405</td><td class="num">13</td><td class="num">−2.403</td><td class="num">21</td><td class="num">−2.404</td><td class="num">29</td><td class="num">−2.406</td></tr>
+              <tr><td class="num">6</td><td class="num">−2.404</td><td class="num">14</td><td class="num">−2.405</td><td class="num">22</td><td class="num">−2.403</td><td class="num">30</td><td class="num">−2.400</td></tr>
+              <tr><td class="num">7</td><td class="num">−2.404</td><td class="num">15</td><td class="num">−2.409</td><td class="num">23</td><td class="num">−2.404</td><td class="num">31</td><td class="num">−2.403</td></tr>
+            </tbody>
+          </table>
+
+          <p>Median −2.403, lowest −2.409, highest −2.396, and the highest is H28. The
+          <code>iia.json</code> tables are 0.0 on every row of every point: across all
+          1344 patched runs, the counterfactual's answer is never the top token.</p>
+
+          <!-- the two reference numbers are the layer sweep's own table, measured on
+               this box 2026-09-23: last-token patch at layers 0-11 reads -2.40 (a
+               patch that does nothing), at layers 14-15 +2.3 to +2.4 -->
+          <p>For scale, the layer sweep's table has both ends of this ruler. A patch at
+          the last token before layer 12 does nothing and reads −2.40; the same patch at
+          layer 14 or 15 moves every row and reads +2.3 to +2.4. The pattern swap moves
+          the number by about a quarter of one percent of the distance between
+          them.</p>
+
+          <h2 id="what-the-head-does-instead">What the head does instead <a class="anchor" href="#what-the-head-does-instead" aria-label="Link to this section">#</a></h2>
+
+          <p>The contrast is the point. The same head, the same position, the same
+          corpus, with the swap moved from its pattern to its result:</p>
+
+          <!-- both rows measured here 2026-09-23, CPU, fp32.
+               row 1: out/pattern_real/heads=*/; row 2: `run
+               documents/real/weekdays_head_patching.json --device-map cpu
+               --batch-size 16 --out out/head_real`, 96 points, 8m09s -->
+          <table>
+            <thead><tr><th>what is swapped</th><th>component</th><th class="num">L12 H28</th><th class="num">median head</th><th class="num">IIA at H28</th></tr></thead>
+            <tbody>
+              <tr><td>where the head looks</td><td><code>attention_probs</code></td><td class="num">−2.396</td><td class="num">−2.403</td><td class="num">0.00</td></tr>
+              <tr><td>what the head moves</td><td><code>attention_premix</code></td><td class="num">+0.054</td><td class="num">−2.403</td><td class="num">0.50</td></tr>
+            </tbody>
+          </table>
+
+          <p>The second row is
+          <code>documents/real/weekdays_head_patching.json</code> — 96 points, every
+          head of layers 10, 11 and 12 — run the same way, 8 m 09 s on CPU. One head of
+          the 96 stands out, and it is this one: swapping its <em>result</em> moves the
+          mean logit difference from −2.403 to +0.054 and flips half the 42 answers.
+          The same head's <em>pattern</em>, from the same prompts, moves nothing.
+          <code>documents/real/README.md</code> records +0.05 and "flips half the
+          answers" from the A100 run.</p>
+
+          <p>So L12 H28 attends the same way whatever the day is. Its <em>aim</em> is
+          not a function of the answer, and importing the counterfactual's aim imports
+          nothing. What it carries is in the values it mixes — the head is a pipe whose
+          position is fixed and whose contents are the fact.</p>
+
+          <div class="caution">
+            <span class="label">what a null result here does not say</span>
+            <p>"The pattern carries nothing" is a claim about this task, this position
+            and this layer. The prompts differ in exactly one word at a fixed offset, so
+            the two patterns being interchangeable is unsurprising in hindsight — a task
+            whose counterfactual moves a word, or changes the number of items to attend
+            to, would not look like this.</p>
+            <p>It is also a claim about a swap at the last query position only. A head
+            whose pattern matters earlier in the sequence would not show up: nothing was
+            swapped at any other query.</p>
+            <p>And a pattern swap is not a knockout. Zeroing a head's pattern asks a
+            different question — whether the head contributes at all — and
+            <code>documents/v2/attention_knockout.json</code> is that document, with
+            <code>"operand": 0.0</code> in place of a read.</p>
+          </div>
+
+          <h2 id="the-tiny-version">The tiny version <a class="anchor" href="#the-tiny-version" aria-label="Link to this section">#</a></h2>
+
+          <p>The same experiment at a size that runs anywhere, for checking a change to
+          the library rather than learning about a model:</p>
+
+          <details class="listing">
+            <summary><code>documents/v2/attention_pattern_patching.json</code> <span class="what">— four heads, six aligned pairs, verbatim</span></summary>
+            <pre><code class="language-json">{
+  &quot;header&quot;: {
+    &quot;description&quot;: &quot;Attention-pattern patching: make one head attend, at the last position, the way it did on the COUNTERFACTUAL prompt, and leave its values alone \u2014 so the question is &#x27;does where this head looks carry the answer&#x27;, separately from what it moves. `attention_probs` needs eager attention, and its last axis is the keys of the padded batch, so the two prompts must tokenize to the same length row by row; the compiler checks that before any forward (documents/data/weekdays_aligned is the subset of pairs that do, under this tokenizer).&quot;
+  },
+  &quot;model&quot;: {
+    &quot;key&quot;: &quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;,
+    &quot;revision&quot;: &quot;9fb191250dd56d0ba7ec9785a025ed29c03d5998&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;,
+    &quot;attn_implementation&quot;: &quot;eager&quot;
+  },
+  &quot;roles&quot;: {
+    &quot;base&quot;: {
+      &quot;field&quot;: &quot;input&quot;
+    },
+    &quot;counterfactual&quot;: {
+      &quot;field&quot;: &quot;counterfactual_inputs[0]&quot;
+    }
+  },
+  &quot;sites&quot;: {
+    &quot;one_head&quot;: {
+      &quot;component&quot;: &quot;attention_probs&quot;,
+      &quot;layers&quot;: [
+        0
+      ],
+      &quot;heads&quot;: {
+        &quot;sweep&quot;: [
+          [
+            0
+          ],
+          [
+            1
+          ],
+          [
+            2
+          ],
+          [
+            3
+          ]
+        ]
+      }
+    },
+    &quot;head&quot;: {
+      &quot;component&quot;: &quot;lm_head&quot;
+    }
+  },
+  &quot;interventions&quot;: {
+    &quot;pattern_patching&quot;: {
+      &quot;reads&quot;: {
+        &quot;their_pattern&quot;: {
+          &quot;site&quot;: &quot;one_head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;original&quot;,
+          &quot;input&quot;: &quot;counterfactual&quot;
+        },
+        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;patched&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        }
+      },
+      &quot;writes&quot;: {
+        &quot;look_there&quot;: {
+          &quot;site&quot;: &quot;one_head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;mechanism&quot;: &quot;swap&quot;,
+          &quot;operand&quot;: &quot;their_pattern&quot;
+        }
+      },
+      &quot;models&quot;: {
+        &quot;patched&quot;: {
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;writes&quot;: [
+            &quot;look_there&quot;
+          ]
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;iia&quot;: {
+          &quot;kind&quot;: &quot;match&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;expected&quot;: &quot;cf_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
+        },
+        &quot;logit_diff&quot;: {
+          &quot;kind&quot;: &quot;logit_diff&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;a&quot;: &quot;cf_answer&quot;,
+          &quot;b&quot;: &quot;base_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
+        }
+      }
+    }
+  },
+  &quot;steps&quot;: {
+    &quot;score&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;interventions&quot;: &quot;pattern_patching&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays_aligned/data&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays_aligned/data&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;iia&quot;,
+          &quot;file_path&quot;: &quot;iia.json&quot;
+        },
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;logit_diff.json&quot;
+        }
+      ]
+    }
+  }
+}</code></pre>
+          </details>
+
+          <!-- run 2026-09-23 on CPU, fp32 -->
+          <pre><code class="language-bash">$ time uv run causalab-mini run documents/v2/attention_pattern_patching.json --out out/pattern
+out/pattern/document.json
+out/pattern/run.json
+out/pattern/heads=0/document.json
+out/pattern/heads=0/iia.json
+out/pattern/heads=0/logit_diff.json
+…
+out/pattern/heads=3/logit_diff.json
+
+real	0m6.481s</code></pre>
+
+          <p>Six and a half seconds. Its numbers are meaningless — the model has random
+          weights — but the addresses, the head selection and the layout check are the
+          same code.</p>
+
+          <div class="seealso">
+            <h2 id="see-also">See also <a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
+            <ul>
+              <li><a href="../locations.html">Locations</a> — the whole component
+                  vocabulary, which components need eager attention, and what
+                  <code>heads</code> means at each of them</li>
+              <li><a href="layer-sweep.html">Layer sweep</a> — how layer 12 was chosen,
+                  and the crossover this head is the mechanism of</li>
+              <li><a href="sweeps.html">Sweeps</a> — the head sweep, and why 32
+                  single-element lists rather than a range</li>
+              <li><a href="../ops.html">Reads, writes, metrics</a> — <code>swap</code>
+                  with a literal operand, which is what a knockout is</li>
+            </ul>
+          </div>
+
+
+        </article>
+      </main>
+    </div>
+    <script src="../site.js"></script>
+  </body>
+</html>

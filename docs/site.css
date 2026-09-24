@@ -1,0 +1,544 @@
+/* causalab-mini docs — one stylesheet, no framework.
+ *
+ * Every colour is a token on :root. Dark mode is the same tokens redefined,
+ * once under prefers-color-scheme (guarded so a manual "light" wins) and once
+ * under an explicit [data-theme="dark"]. Nothing else in the file names a
+ * literal colour, so a page never has to care which theme it is in.
+ */
+
+:root {
+  --bg:           #fbfaf8;
+  --bg-raised:    #ffffff;
+  --bg-sunken:    #f2f0ec;
+  --fg:           #1d1f21;
+  --fg-muted:     #5d6368;
+  --fg-faint:     #868d93;
+  --rule:         #e2ded7;
+  --rule-strong:  #cec9c0;
+  --accent:       #0f6f6c;
+  --accent-bg:    #e4f1f0;
+  --accent-fg:    #0b5250;
+  --accent-strong:#0b5250;
+  --code-bg:      #f4f2ee;
+  --code-fg:      #24292f;
+  --warn-bg:      #fdf6e3;
+  --warn-rule:    #d8c48a;
+
+  --font-body: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+               Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+               "Liberation Mono", monospace;
+
+  --measure: 34rem;     /* the line-length limit for running prose */
+  --sidebar: 16rem;
+  --gutter: 1rem;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:           #16181a;
+    --bg-raised:    #1d2023;
+    --bg-sunken:    #121415;
+    --fg:           #e6e3de;
+    --fg-muted:     #a5aab0;
+    --fg-faint:     #7e858c;
+    --rule:         #2e3236;
+    --rule-strong:  #434950;
+    --accent:       #5fc9c4;
+    --accent-bg:    #16312f;
+    --accent-fg:    #8fdedb;
+    --accent-strong:#8fdedb;
+    --code-bg:      #1b1e21;
+    --code-fg:      #dcd9d4;
+    --warn-bg:      #2a2418;
+    --warn-rule:    #6b5a2e;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg:           #16181a;
+  --bg-raised:    #1d2023;
+  --bg-sunken:    #121415;
+  --fg:           #e6e3de;
+  --fg-muted:     #a5aab0;
+  --fg-faint:     #7e858c;
+  --rule:         #2e3236;
+  --rule-strong:  #434950;
+  --accent:       #5fc9c4;
+  --accent-bg:    #16312f;
+  --accent-fg:    #8fdedb;
+  --accent-strong:#8fdedb;
+  --code-bg:      #1b1e21;
+  --code-fg:      #dcd9d4;
+  --warn-bg:      #2a2418;
+  --warn-rule:    #6b5a2e;
+  color-scheme: dark;
+}
+
+/* ------------------------------------------------------------------ base */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.6;
+  overflow-wrap: break-word;
+}
+
+a { color: var(--accent-strong); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+
+h1, h2, h3, h4 { line-height: 1.25; font-weight: 600; margin: 0 0 .5em; }
+h1 { font-size: 1.9rem; letter-spacing: -.01em; margin-bottom: .3em; }
+h2 { font-size: 1.3rem; margin-top: 2.4em; padding-top: .6em; border-top: 1px solid var(--rule); }
+h3 { font-size: 1.05rem; margin-top: 1.9em; color: var(--fg); }
+h4 { font-size: .95rem; margin-top: 1.5em; color: var(--fg-muted); }
+
+/* a heading is a link target; the affordance appears when you point at it,
+   and stays visible while it has focus so a keyboard can reach it */
+.anchor {
+  margin-left: .35em;
+  font-weight: 400;
+  font-size: .8em;
+  color: var(--fg-faint);
+  text-decoration: none;
+  opacity: 0;
+}
+h2:hover > .anchor, h3:hover > .anchor, .anchor:focus { opacity: 1; }
+.anchor:hover { color: var(--accent-strong); }
+:target { scroll-margin-top: 1rem; }
+
+sup, sub { line-height: 0; font-size: .75em; }
+
+p, ul, ol, dl { margin: 0 0 1em; }
+li { margin-bottom: .3em; }
+li > ul, li > ol { margin-top: .3em; }
+
+hr { border: 0; border-top: 1px solid var(--rule); margin: 2.5em 0; }
+
+/* ---------------------------------------------------------------- layout */
+
+.layout {
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+/* the bar that only exists at phone width */
+.topbar {
+  display: none;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  align-items: center;
+  gap: .75rem;
+  padding: .5rem var(--gutter);
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--rule);
+}
+
+.topbar .brand { font-weight: 600; font-size: .95rem; }
+
+.iconbutton {
+  font: inherit;
+  font-size: .85rem;
+  line-height: 1;
+  padding: .45rem .6rem;
+  color: var(--fg-muted);
+  background: var(--bg-sunken);
+  border: 1px solid var(--rule-strong);
+  border-radius: 5px;
+  cursor: pointer;
+}
+.iconbutton:hover { color: var(--fg); border-color: var(--accent); }
+
+/* ------------------------------------------------------------------- nav */
+
+.sidebar {
+  grid-column: 1;
+  border-right: 1px solid var(--rule);
+  background: var(--bg-sunken);
+  padding: 1.6rem 1rem 3rem;
+  position: sticky;
+  top: 0;
+  align-self: start;
+  max-height: 100vh;
+  overflow-y: auto;
+}
+
+.sidebar .brand {
+  display: block;
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--fg);
+  text-decoration: none;
+  margin-bottom: .15rem;
+}
+.sidebar .brand-sub {
+  display: block;
+  font-size: .78rem;
+  color: var(--fg-faint);
+  margin-bottom: 1.4rem;
+}
+
+.sidebar nav ol { list-style: none; margin: 0 0 1.4rem; padding: 0; }
+.sidebar nav > ol > li { margin-bottom: .1rem; }
+
+.sidebar nav h2 {
+  font-size: .72rem;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  border: 0;
+  margin: 1.5rem 0 .5rem;
+  padding: 0;
+}
+
+.sidebar nav a {
+  display: block;
+  padding: .24rem .5rem;
+  border-radius: 4px;
+  font-size: .88rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+}
+.sidebar nav a:hover { color: var(--fg); background: var(--bg-raised); }
+
+.sidebar nav a[aria-current="page"] {
+  color: var(--accent-strong);
+  background: var(--accent-bg);
+  border-left-color: var(--accent);
+  font-weight: 600;
+}
+
+.sidebar nav .sub { margin-left: .55rem; padding-left: .55rem; border-left: 1px solid var(--rule); }
+.sidebar nav .sub a { font-size: .84rem; }
+
+.sidebar .footer {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+  font-size: .78rem;
+  color: var(--fg-faint);
+}
+.sidebar .footer a { color: var(--fg-muted); }
+
+/* --------------------------------------------------------------- content */
+
+main {
+  grid-column: 2;
+  padding: 2.6rem 2.5rem 6rem;
+  min-width: 0;
+}
+
+.page { max-width: 52rem; }
+
+/* running prose gets the tighter measure; tables and code may use the width */
+.page > p,
+.page > ul,
+.page > ol,
+.page > dl,
+.page > blockquote { max-width: var(--measure); }
+
+/* …but a card grid is a layout, not prose, and takes the full column */
+.page > ul.cards { max-width: 52rem; }
+
+.lede { font-size: 1.08rem; color: var(--fg-muted); }
+
+.page > header { margin-bottom: 2rem; }
+
+.eyebrow {
+  font-size: .75rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  margin: 0 0 .35rem;
+}
+
+/* ------------------------------------------------------------------ code */
+
+code, kbd, samp {
+  font-family: var(--font-mono);
+  font-size: .875em;
+}
+
+:not(pre) > code {
+  background: var(--code-bg);
+  color: var(--code-fg);
+  padding: .1em .35em;
+  border-radius: 3px;
+  border: 1px solid var(--rule);
+}
+
+pre {
+  background: var(--code-bg);
+  color: var(--code-fg);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: .85rem 1rem;
+  overflow-x: auto;
+  font-size: .82rem;
+  line-height: 1.5;
+  margin: 0 0 1.2em;
+  tab-size: 2;
+}
+
+/* A box that scrolls sideways gets a scrollbar from the browser, and a
+   default one is drawn light whatever the page is. Name its colours. */
+pre, table, figure, .sidebar { scrollbar-width: thin; scrollbar-color: var(--rule-strong) transparent; }
+pre code { font-size: inherit; background: none; border: 0; padding: 0; }
+
+/* a block with its source stated above it */
+.listing { margin: 0 0 1.4em; }
+.listing > figcaption {
+  font-family: var(--font-mono);
+  font-size: .76rem;
+  color: var(--fg-faint);
+  padding: .2rem 0 .35rem;
+}
+.listing > figcaption .what { font-family: var(--font-body); font-style: italic; }
+.listing pre { margin-bottom: 0; }
+
+/* a long listing the reader may fold away */
+details.listing > summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: .76rem;
+  color: var(--fg-muted);
+  padding: .3rem 0;
+}
+details.listing > summary:hover { color: var(--accent-strong); }
+
+/* ---------------------------------------------------------------- tables */
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: .88rem;
+  margin: 0 0 1.4em;
+  display: block;
+  overflow-x: auto;
+}
+thead th {
+  text-align: left;
+  font-weight: 600;
+  font-size: .78rem;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  border-bottom: 1px solid var(--rule-strong);
+  padding: .4rem .7rem .4rem 0;
+  white-space: nowrap;
+}
+tbody td {
+  vertical-align: top;
+  padding: .45rem .7rem .45rem 0;
+  border-bottom: 1px solid var(--rule);
+}
+tbody tr:last-child td { border-bottom: 0; }
+td code, th code { white-space: nowrap; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; padding-right: 1.2rem; }
+
+/* ----------------------------------------------------------------- notes */
+
+.note, .caution {
+  border-left: 3px solid var(--accent);
+  background: var(--accent-bg);
+  padding: .7rem 1rem;
+  border-radius: 0 5px 5px 0;
+  margin: 0 0 1.4em;
+  font-size: .92rem;
+  max-width: var(--measure);
+}
+.note > :last-child, .caution > :last-child { margin-bottom: 0; }
+.note .label, .caution .label {
+  display: block;
+  font-size: .72rem;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin-bottom: .2rem;
+}
+.caution { border-left-color: var(--warn-rule); background: var(--warn-bg); }
+
+/* a page that has not been written yet */
+.stub {
+  border: 1px dashed var(--rule-strong);
+  background: var(--bg-sunken);
+  border-radius: 6px;
+  padding: 1.2rem 1.4rem;
+  max-width: var(--measure);
+}
+.stub .label {
+  display: inline-block;
+  font-size: .72rem;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  border: 1px solid var(--rule-strong);
+  border-radius: 99px;
+  padding: .05rem .55rem;
+  margin-bottom: .6rem;
+}
+.stub > :last-child { margin-bottom: 0; }
+
+/* ----------------------------------------------------------------- cards */
+
+.cards {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1.6em;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: .75rem;
+  max-width: 52rem;
+}
+.cards li { margin: 0; }
+.cards a {
+  display: block;
+  height: 100%;
+  padding: .7rem .9rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  text-decoration: none;
+  color: var(--fg);
+}
+.cards a:hover { border-color: var(--accent); }
+.cards .title { font-weight: 600; font-size: .92rem; display: block; margin-bottom: .15rem; }
+.cards .blurb { font-size: .82rem; color: var(--fg-muted); display: block; line-height: 1.45; }
+.cards a[data-status="stub"] .title::after {
+  content: "in progress";
+  font-weight: 400;
+  font-size: .68rem;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  border: 1px solid var(--rule-strong);
+  border-radius: 99px;
+  padding: 0 .4rem;
+  margin-left: .4rem;
+  vertical-align: .08em;
+}
+
+/* --------------------------------------------------------------- figures */
+
+figure { margin: 0 0 1.5em; }
+figure svg { max-width: 100%; height: auto; display: block; }
+figure > figcaption {
+  font-size: .82rem;
+  color: var(--fg-muted);
+  padding-top: .5rem;
+  max-width: var(--measure);
+}
+
+/* a bar chart drawn with divs: one row per label */
+.bars { margin: 0 0 1.5em; max-width: 38rem; }
+.bars .row {
+  display: grid;
+  /* the label and the number are monospace and never break; the bar takes
+     whatever is left, at any width */
+  grid-template-columns: max-content 1fr max-content;
+  align-items: center;
+  gap: .5rem;
+  font-size: .8rem;
+  font-variant-numeric: tabular-nums;
+  padding: .08rem 0;
+}
+.bars .key { color: var(--fg-muted); text-align: right; font-family: var(--font-mono); }
+.bars .key, .bars .val { white-space: nowrap; }
+.bars .track { background: var(--bg-sunken); border: 1px solid var(--rule); border-radius: 2px; height: .8rem; }
+.bars .fill { background: var(--accent); height: 100%; border-radius: 1px; }
+.bars .val { color: var(--fg-muted); font-family: var(--font-mono); }
+.bars .head { font-size: .72rem; letter-spacing: .05em; text-transform: uppercase; color: var(--fg-faint); }
+
+/* ------------------------------------------------------------- see also */
+
+.seealso {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+  font-size: .9rem;
+  max-width: var(--measure);
+}
+.seealso h2 {
+  border: 0;
+  margin: 0 0 .4rem;
+  padding: 0;
+  font-size: .72rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+.seealso h2 > .anchor { font-size: 1em; letter-spacing: 0; }
+.seealso ul { margin: 0; padding-left: 1.1rem; }
+
+/* ---------------------------------------------------------------- narrow */
+
+@media (max-width: 62rem) {
+  .layout { display: block; }
+
+  .topbar { display: flex; }
+
+  .sidebar {
+    display: none;
+    position: static;
+    max-height: none;
+    border-right: 0;
+    border-bottom: 1px solid var(--rule);
+    padding: 1rem var(--gutter) 1.5rem;
+  }
+  body[data-nav="open"] .sidebar { display: block; }
+  .sidebar .brand, .sidebar .brand-sub { display: none; }
+
+  main { padding: 1.5rem var(--gutter) 4rem; }
+  h1 { font-size: 1.5rem; }
+  h2 { font-size: 1.15rem; }
+  .anchor { opacity: .5; }
+
+  /* A diagram does not reflow. Shrunk to a phone's column a 640-wide one
+     puts its labels under 6px, so below this width the figure scrolls
+     instead — the same thing a wide table does. 490px keeps the smallest
+     label above 8px. */
+  figure { overflow-x: auto; }
+  figure > svg { min-width: 490px; }
+  :target { scroll-margin-top: 4rem; }   /* clear the sticky topbar */
+  .bars .row { gap: .35rem; font-size: .72rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+
+/* the toggle is useless without scripting, so it hides itself until JS runs */
+.js-only { display: none; }
+body[data-js="on"] .js-only { display: inline-block; }
+
+/* ---------------------------------------------------------- keyboard use */
+
+.skip { position: absolute; left: -9999px; }
+.skip:focus {
+  position: fixed;
+  left: .5rem;
+  top: .5rem;
+  z-index: 50;
+  background: var(--bg-raised);
+  color: var(--fg);
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  padding: .5rem .8rem;
+  text-decoration: none;
+}
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
