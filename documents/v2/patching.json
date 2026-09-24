@@ -8,7 +8,7 @@
     "dtype": "fp32"
   },
   "data": {"pairs": {"path": "weekdays/train"}},
-  "sites": {"target": {"component": "block_output", "layers": [0]}},
+  "sites": {"target": {"component": "block_output", "layers": 0}},
   "steps": {
     "counterfactual": {
       "kind": "forward",

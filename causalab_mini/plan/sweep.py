@@ -160,7 +160,7 @@ def _label(path: Path, value: Any, axis: str | None = None) -> str:
     disk. The swept field's own name and the value it took: `pos=-1`."""
     name = axis or next((step for step in reversed(path) if isinstance(step, str)), "point")
     if isinstance(value, list) and len(value) == 1:
-        value = value[0]  # a one-layer band sweeps as its layer
+        value = value[0]  # a one-element list — heads, units — sweeps as its element
     if isinstance(value, (str, int, float, bool)) or value is None:
         return f"{name}={value}"
     return f"{name}={json.dumps(value, separators=(',', ':'))}"

@@ -239,13 +239,14 @@ def call(engine: Any, name: str, step: Forward, state: State) -> None:
 
 
 def _stack_layers(step: Forward, made: dict[str, Any], record: Record) -> None:
-    """A read at every layer, as the one value it is: its per-layer reads
-    stacked in layer order, the layer axis first. Every layer read the same
-    positions, so one record says where."""
-    reads = [op for tap in step.taps for op in tap.reads if op.layered]
-    for stacked in dict.fromkeys(op.layered for op in reads):
-        # taps come in forward order (`build._forward`), so its layers in layer order
-        names = [op.name for op in reads if op.layered == stacked]
+    """A read at several layers, as the one value it is: its per-layer reads
+    stacked in the order the document listed the layers, the layer axis
+    first. Every layer read the same positions, so one record says where."""
+    parts = [(tap.address.layer, op) for tap in step.taps for op in tap.reads if op.layered]
+    for stacked in dict.fromkeys(op.layered for _, op in parts):
+        # taps come in forward order; the stack is in the listed one
+        mine = {layer: op for layer, op in parts if op.layered == stacked}
+        names = [mine[layer].name for layer in next(iter(mine.values())).layers]
         if names[0] in made:  # the plan names it
             made[stacked] = torch.stack([made.pop(one) for one in names])
         record[stacked] = record[names[0]]

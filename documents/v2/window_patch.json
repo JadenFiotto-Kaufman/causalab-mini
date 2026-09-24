@@ -9,7 +9,7 @@
   },
   "data": {"pairs": {"path": "weekdays/train"}},
   "sites": {
-    "target": {"component": "block_output", "layers": [0]},
+    "target": {"component": "block_output", "layers": 0},
     "head": {"component": "lm_head"}
   },
   "steps": {

@@ -15,9 +15,7 @@
   "sites": {
     "q": {
       "component": "attention_query",
-      "layers": [
-        0
-      ]
+      "layers": 0
     }
   },
   "steps": {

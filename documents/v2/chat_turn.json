@@ -8,7 +8,7 @@
     "dtype": "fp32"
   },
   "data": {"chats": {"path": "weekdays/chat"}},
-  "sites": {"target": {"component": "block_output", "layers": [0]}, "head": {"component": "logits"}},
+  "sites": {"target": {"component": "block_output", "layers": 0}, "head": {"component": "logits"}},
   "steps": {
     "blanked": {
       "kind": "forward",

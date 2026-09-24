@@ -50,7 +50,7 @@ def test_the_two_engines_project_identically(lens_raw, data_root, model_engine):
 
 def test_the_lens_is_one_document_with_one_point_per_layer(lens_raw, data_root, model_engine):
     built = plan.build_request(lens_raw, data_root, model_engine)
-    assert list(built.steps) == ["layers=0", "layers=1"]  # a one-layer band sweeps as its layer
+    assert list(built.steps) == ["layers=0", "layers=1"]  # a layer sweeps as its layer
     text = explain(built)
     assert "at block_output[0] pos={index:-1} as logits" in text
     assert "at block_output[1]" in text
@@ -85,13 +85,13 @@ def test_the_lens_projection_matches_the_head_within_an_ulp(model_engine):
     "edit, message",
     [
         (lambda raw: raw["sites"].update(resid={"component": "lm_head"}), "'lm_head' is not the residual stream"),
-        (lambda raw: raw["sites"].update(resid={"component": "attention_query", "layers": [0]}), "'attention_query' is not the residual stream"),
+        (lambda raw: raw["sites"].update(resid={"component": "attention_query", "layers": 0}), "'attention_query' is not the residual stream"),
         (lambda raw: raw["steps"]["lens"]["reads"]["logits"].update(featurizer="rot"), "cannot also be viewed as logits"),
     ],
     ids=["the head itself", "an interior", "a featurized read"],
 )
 def test_where_a_logits_view_is_refused(lens_raw, edit, message):
-    lens_raw["sites"]["resid"]["layers"] = [0]  # un-sweep so it is one document
+    lens_raw["sites"]["resid"]["layers"] = 0  # un-sweep so it is one document
     lens_raw["featurizers"] = {"rot": {"kind": "subspace", "k": 4, "parametrization": "cayley"}}
     lens_raw["steps"]["lens"]["reads"]["rot_user"] = {"site": "resid", "pos": -1, "featurizer": "rot"}
     edit(lens_raw)
@@ -126,6 +126,43 @@ def test_every_layer_in_one_forward_is_the_sweep_point_by_point(lens_raw, data_r
             assert torch.equal(every.result(name)[layer], point.result(name)), (name, layer)
 
 
+def test_a_list_of_layers_is_those_reads_stacked_in_the_listed_order(data_root, model_engine, tmp_path):
+    """`layers: [1, 0]` is the read at layer 1 and the read at layer 0,
+    stacked in that order — not forward order — with the layer axis first:
+    the same value, to the bit, as two single-layer reads stacked by hand,
+    and its table says each row's layer in that order."""
+    def lens(layers):
+        raw = json.loads(EVERY.read_text())
+        raw["sites"]["resid"]["layers"] = layers
+        raw["steps"]["saves"] = {"lens.logits": "logits.safetensors", "p_answer": "p_answer.json"}
+        return model_engine.execute(plan.build_request(raw, data_root, model_engine))
+
+    listed = lens([1, 0])
+    one, zero = lens(1), lens(0)
+    assert listed.result("lens.logits").shape[0] == 2
+    assert torch.equal(listed.result("lens.logits"), torch.stack([one.result("lens.logits"), zero.result("lens.logits")]))
+    assert torch.equal(listed.result("p_answer"), torch.stack([one.result("p_answer"), zero.result("p_answer")]))
+    listed.write(tmp_path)
+    assert [row["layer"] for row in json.loads((tmp_path / "p_answer.json").read_text())][::4] == [1, 0]
+
+
+def test_a_write_at_a_list_of_layers_writes_at_each(data_root, model_engine):
+    """The same swap at layers 0 and 1 is the swap at 0 and the swap at 1,
+    in one forward."""
+    def patched(layers, second=None):
+        raw = json.loads((REPO / "documents" / "v2" / "patching.json").read_text())
+        raw["sites"]["target"]["layers"] = layers
+        writes = raw["steps"]["patched"]["interventions"]["writes"]
+        writes["patch"]["operand"] = 0.0
+        if second is not None:
+            raw["sites"]["other"] = {"component": "block_output", "layers": second}
+            writes["again"] = dict(writes["patch"], site="other")
+        return model_engine.execute(plan.build_request(raw, data_root, model_engine)).result("logit_diff")
+
+    assert torch.equal(patched([0, 1]), patched(0, second=1))
+    assert not torch.equal(patched([0, 1]), patched(0))
+
+
 def test_a_table_of_every_layer_has_a_row_per_layer_and_example(data_root, model_engine, tmp_path):
     executed = model_engine.execute(plan.build_request(json.loads(EVERY.read_text()), data_root, model_engine))
     executed.write(tmp_path)
@@ -145,26 +182,27 @@ def test_the_two_engines_agree_on_every_layer(data_root, model_engine):
 @pytest.mark.parametrize(
     "edit, message",
     [
-        (lambda raw: raw["steps"]["lens"].update(interventions={"writes": {"zero": {"site": "resid", "pos": -1, "mechanism": "swap", "operand": 0.0}}}),
-         "a write at every layer is as many experiments"),
+        (lambda raw: raw["steps"]["lens"].update(interventions={"writes": {"zero": {"site": "resid", "pos": -1, "mechanism": "swap", "operand": 0.0, "featurizer": "rot"}}})
+         or raw.update(featurizers={"rot": {"kind": "subspace", "k": 4}}),
+         "a write at several layers takes no featurizer"),
         (lambda raw: raw["steps"]["lens"]["reads"]["logits"].update(view="raw", featurizer="rot")
          or raw.update(featurizers={"rot": {"kind": "subspace", "k": 4}}),
-         "a read at every layer takes no featurizer"),
+         "a read at several layers takes no featurizer"),
         (lambda raw: raw["steps"].update(mean={"kind": "reduce", "reduce": "mean", "of": "lens.logits"}),
          "a reduction of it is not implemented"),
         (lambda raw: raw["steps"].update(patched={
             "kind": "forward", "data": "prompts", "field": "input",
-            "interventions": {"writes": {"w": {"site": {"component": "block_output", "layers": [0]}, "pos": -1,
+            "interventions": {"writes": {"w": {"site": {"component": "block_output", "layers": 0}, "pos": -1,
                                                "mechanism": "swap", "operand": "lens.logits"}}}}),
-         "is a read at every layer; an operand is"),
+         "is a read at several layers; an operand is"),
     ],
-    ids=["a write", "a featurizer", "a reduction", "an operand"],
+    ids=["a featurized write", "a featurizer", "a reduction", "an operand"],
 )
 def test_what_every_layer_may_not_be(edit, message):
     """One value with the layer axis first is something to score and save.
-    A write at every layer is as many experiments, a featurizer is one
-    parameter set at one site, and a reduction over rows would first have to
-    say which axis the rows are."""
+    A featurizer is one parameter set at one site, so neither a read nor a
+    write at several layers takes one, and a reduction over rows would first
+    have to say which axis the rows are."""
     raw = json.loads(EVERY.read_text())
     edit(raw)
     with pytest.raises(ValidationError, match=message):

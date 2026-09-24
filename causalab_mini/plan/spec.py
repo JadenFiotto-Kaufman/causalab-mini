@@ -101,10 +101,11 @@ class Dataset(Node):
 
 class Site(Node):
     component: str
-    #: The one layer this site is at, as a one-element band — or `"all"`: a
-    #: read here is taken at every layer of the model, in one call, and is
-    #: one value with the layer axis first.
-    layers: list[int] | Literal["all"] | None = None
+    #: The layer this site is at. A list is those layers, and `"all"` every
+    #: layer: a read there is taken at each, in one call, and is one value
+    #: stacked in the listed order with the layer axis first; a write there
+    #: writes at each.
+    layers: int | Annotated[list[int], Field(min_length=1)] | Literal["all"] | None = None
     #: At a per-head tensor, the heads this site is. The site's width is then
     #: theirs — `len(heads) · head_dim` — so a featurizer, a swap or a harvest
     #: here is of those heads and leaves the others alone.
@@ -122,16 +123,21 @@ class Site(Node):
         if self.heads is not None:
             per_head = sorted(n for n, one in address.describe().items() if one["heads"])
             _refuse(self.component in per_head, f"{self.component!r} is not a per-head tensor; `heads` applies at {per_head}")
-        if isinstance(self.layers, list) and len(self.layers) != 1:
-            raise ValueError(
-                "layers must be a one-element band, or \"all\"; a band spanning several "
-                "layers is one address and is not implemented"
-            )
+        _refuse(
+            not isinstance(self.layers, list) or len(set(self.layers)) == len(self.layers),
+            f"layers {self.layers} are distinct layers",
+        )
         # the table says which components take a layer
-        wrong = address.layered(self.component, 0 if self.layers == "all" else self.layers[0] if self.layers else None)
+        one = self.layers[0] if isinstance(self.layers, list) else 0 if self.layers == "all" else self.layers
+        wrong = address.layered(self.component, one)
         if wrong is not None:
             raise ValueError(wrong)
         return self
+
+    @property
+    def stacked(self) -> bool:
+        """Whether this site is several layers: a list of them, or all."""
+        return isinstance(self.layers, list) or self.layers == "all"
 
     @property
     def spelling(self) -> str:
@@ -604,7 +610,7 @@ Fit.model_rebuild()
 
 
 #: What a reference resolves to: its kind (`read`, `layers` — a read at
-#: every layer — `ids`, `logits`, `metric`, `mean`, `pca`, `fit`, `trained`), the node that says what it is (for a read, the
+#: several layers — `ids`, `logits`, `metric`, `mean`, `pca`, `fit`, `trained`), the node that says what it is (for a read, the
 #: `Read`; for a mean or a basis, the `Read` it reduced), and the scope it
 #: belongs to — `""` for the root, a fit's name for its body.
 class Ref(NamedTuple):
@@ -615,7 +621,7 @@ class Ref(NamedTuple):
 #: A reference's kind, as a refusal says it.
 SAID = {
     "read": "a read",
-    "layers": "a read at every layer",
+    "layers": "a read at several layers",
     "ids": "a decode's ids",
     "logits": "a forward's logits",
     "metric": "a metric",
@@ -821,8 +827,8 @@ def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, 
         if isinstance(step, _Call):
             reads, _ = _call(spec, where, name, step, visible, fit, trainers)
             for read_name, read in reads.items():
-                every = spec.site(read.site)[1].layers == "all"
-                publish(f"{name}.{read_name}", "layers" if every else "read", read)
+                stacked = spec.site(read.site)[1].stacked
+                publish(f"{name}.{read_name}", "layers" if stacked else "read", read)
             # the call's own result: a decode's ids, a forward's logits
             publish(name, "ids" if isinstance(step, Generate) else "logits", step)
         elif isinstance(step, (_Metric, Reduce)):
@@ -835,7 +841,7 @@ def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, 
             assert found is not None
             _refuse(
                 isinstance(step, _Metric) or found.kind == "read",
-                f"{where}: {step.of!r} is read at every layer; a metric scores it layer by layer, "
+                f"{where}: {step.of!r} is read at several layers; a metric scores it layer by layer, "
                 "and a reduction of it is not implemented",
             )
             if isinstance(step, Reduce):
@@ -917,18 +923,18 @@ def _call(
         what = f"read {read_name!r}"
         place = site(what, read.site)
         _featurizer(spec, f"{where}: {what}", read.featurizer, trainers, visible)
-        if place.layers == "all":
+        if place.stacked:
             # one value with the layer axis first; what would make it more
             # than a read — a parameter set, a cut over the decode — is one
-            # site, or one step, and every layer is many
+            # site, or one step, and several layers are many
             _refuse(
                 read.featurizer is None,
-                f"{where}: {what}: a read at every layer takes no featurizer; one featurizer "
-                "is one parameter set at one site, and every layer is many sites",
+                f"{where}: {what}: a read at several layers takes no featurizer; one featurizer "
+                "is one parameter set at one site, and several layers are many sites",
             )
             _refuse(
                 read.pos.frame == "prompt" or (read.pos.index is not None and read.pos.index >= 0),
-                f"{where}: {what}: a read at every layer is at one decode step or in the prompt; "
+                f"{where}: {what}: a read at several layers is at one decode step or in the prompt; "
                 f"{read.pos.spelling()} is cut from every step of the decode",
             )
         if read.view == "logits":
@@ -947,9 +953,9 @@ def _call(
         what = f"write {write_name!r}"
         place = site(what, write.site)
         _refuse(
-            place.layers != "all",
-            f"{where}: {what}: a write is at one layer — a write at every layer is as many "
-            "experiments; sweep `layers` for them",
+            not place.stacked or write.featurizer is None,
+            f"{where}: {what}: a write at several layers takes no featurizer; one featurizer "
+            "is one parameter set at one site, and several layers are many sites",
         )
         _refuse(
             not address.describe().get(place.component, {}).get("read_only", False),

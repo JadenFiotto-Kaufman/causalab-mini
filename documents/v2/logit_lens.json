@@ -8,7 +8,7 @@
     "dtype": "fp32"
   },
   "data": {"prompts": {"path": "weekdays/train"}},
-  "sites": {"resid": {"component": "block_output", "layers": {"sweep": [[0], [1]]}}},
+  "sites": {"resid": {"component": "block_output", "layers": {"sweep": [0, 1]}}},
   "steps": {
     "lens": {
       "kind": "forward",

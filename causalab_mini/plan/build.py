@@ -338,22 +338,24 @@ def _resolve_sites(places: dict[str, Any], stacking: set[str], engine: Any) -> _
     address, which part of the feature axis it is where it names heads or
     units, and — for the sites a continuation read buffers at, and only
     those — how wide it is."""
+    def band(site: Any) -> list[int]:
+        return list(range(engine.num_layers)) if site.layers == "all" else site.layers
+
     for name, site in places.items():
-        if isinstance(site.layers, list) and not 0 <= site.layers[0] < engine.num_layers:
-            raise PlanError(
-                f"site {name!r}: layer {site.layers[0]} is outside the model's "
-                f"{engine.num_layers} layers"
-            )
+        for layer in band(site) if site.stacked else [site.layers] if site.layers is not None else []:
+            if not 0 <= layer < engine.num_layers:
+                raise PlanError(f"site {name!r}: layer {layer} is outside the model's {engine.num_layers} layers")
+    # a site at several layers is an address per layer, in the listed order
     addresses: dict[str, Any] = {
-        name: tuple(engine.locate(site.component, layer) for layer in range(engine.num_layers))
-        if site.layers == "all"
-        else engine.locate(site.component, site.layers[0] if site.layers else None)
+        name: tuple(engine.locate(site.component, layer) for layer in band(site))
+        if site.stacked
+        else engine.locate(site.component, site.layers)
         for name, site in places.items()
     }
     # site -> (groups, take): the feature half of every selection made there
     features: dict[str, tuple[int, tuple[int, ...] | None]] = {}
     for name, site in places.items():
-        address = addresses[name][0] if site.layers == "all" else addresses[name]
+        address = addresses[name][0] if site.stacked else addresses[name]
         if site.units is not None:
             count, take, what = engine.width(address), site.units, "unit"
         elif address.heads_kind is not None:
@@ -411,7 +413,7 @@ def _identity(spec: Any, name: str, label: str, site: Any, d: int) -> dict[str, 
         "model_dtype": spec.model.dtype,
         "site": label,
         "component": site.component,
-        "layer": str(site.layers[0] if site.layers else None),
+        "layer": str(site.layers),
         "kind": one.kind,
         "k": str(one.k),
         "d": str(d),
@@ -535,15 +537,14 @@ def _metric(
             f"metric {name!r}: none of these {len(rows)} row(s) has a value in "
             f"{list(spec.columns)}; a metric of nothing has no mean"
         )
-    ops = [(tap.address, op) for tap in source.taps for op in tap.reads if of in (op.name, op.stack, op.layered)]
-    op = ops[0][1]
+    op = next(op for tap in source.taps for op in tap.reads if of in (op.name, op.stack, op.layered))
     return Metric(
         kind=kind,
         of=of,
         ids=_ids(spec, rows, keep, tokenizer),
         rows=None if all(keep) else tuple(index for index, one in enumerate(keep) if one),
         flat=op.flat,
-        layers=tuple(address.layer for address, one in ops if one.layered and address.layer is not None),
+        layers=op.layers,
     )
 
 
@@ -741,24 +742,28 @@ def _forward(
     written: dict[tuple[Address, Any], list[WriteOp]] = {}
     for one, op in writes.items():
         label = spec.site(op.site)[0]
-        written.setdefault((addresses[label], _decode_step(op.pos)), []).append(
-            WriteOp(
-                name=f"{name}.{one}",
-                at=_selection(op.pos, anchors(op.pos), features.get(label)),
-                operand=op.operand,
-                mechanism=op.mechanism,
-                featurizer=featurizer(op),
-                params=dict(op.params),
-                features=None if op.features is None else tuple(op.features),
+        # a write at several layers is a write at each, named for its layer
+        at = addresses[label] if isinstance(addresses[label], tuple) else (addresses[label],)
+        for address in at:
+            written.setdefault((address, _decode_step(op.pos)), []).append(
+                WriteOp(
+                    name=f"{name}.{one}" + (f"@{address.layer}" if isinstance(addresses[label], tuple) else ""),
+                    at=_selection(op.pos, anchors(op.pos), features.get(label)),
+                    operand=op.operand,
+                    mechanism=op.mechanism,
+                    featurizer=featurizer(op),
+                    params=dict(op.params),
+                    features=None if op.features is None else tuple(op.features),
+                )
             )
-        )
     read: dict[tuple[Address, Any], list[ReadOp]] = {}
     for one, op in reads.items():
         label, read_name = spec.site(op.site)[0], f"{name}.{one}"
         at = _selection(op.pos, anchors(op.pos), features.get(label))
         step = _decode_step(op.pos)
         if isinstance(addresses[label], tuple):
-            # a read at every layer: one per layer, which the run stacks
+            # a read at several layers: one per layer, which the run stacks
+            band = tuple(address.layer for address in addresses[label])
             for address in addresses[label]:
                 read.setdefault((address, step), []).append(
                     ReadOp(
@@ -767,6 +772,7 @@ def _forward(
                         featurizer=featurizer(op),
                         view=op.view,
                         layered=read_name,
+                        layers=band,
                     )
                 )
             continue
@@ -792,8 +798,7 @@ def _forward(
     # Forward order: the prompt frame (None) first, then the decode steps in
     # order with `"all"` before them, and within each by the address's rank.
     # nnsight requires it, and the run relies on it too: a read cut from the
-    # decode comes as its steps' parts in step order, and a read at every
-    # layer as its layers' parts in layer order, with no sort of their own.
+    # decode comes as its steps' parts in step order, with no sort of its own.
     def order(place: tuple[Address, Any]) -> tuple[int, int, tuple[int, int]]:
         address, step = place
         return (0 if step is None else 1, -1 if step == "all" else (step if step is not None else -1), address.key)

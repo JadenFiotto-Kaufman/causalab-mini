@@ -147,6 +147,8 @@ def vocab(args: argparse.Namespace) -> dict[str, Any]:
         "featurizer_kinds": sorted(featurizer.KINDS),
         "metric_kinds": {kind: list(columns) for kind, columns in METRIC_COLUMNS.items()},
         "position_forms": Where.forms(),
+        "layers": "a site's `layers`: an int is one layer; a list is those layers — a read there is one "
+        "value stacked in the listed order, layer axis first, and a write writes at each; \"all\" is every layer",
         "saves": "{reference: file}, or a list of references — a listed one, or one mapped to null, "
         "is written as itself: a metric's table to <reference>.json, a tensor to <reference>.safetensors",
         "units": {kind: {"unit": unit, "estimand_version": version} for kind, (unit, version) in metrics.UNITS.items()},
@@ -158,6 +160,7 @@ def vocab(args: argparse.Namespace) -> dict[str, Any]:
                      f"{'  [heads]' if entry['heads'] else ''}"
                      f"{'  needs ' + entry['needs'] + ' attention' if entry['needs'] else ''}")
     lines.append(f"mechanisms:       {', '.join(payload['mechanisms'])}")
+    lines.append(f"layers:           {payload['layers']}")
     lines.append(f"saves:            {payload['saves']}")
     lines.append(f"featurizer kinds: {', '.join(payload['featurizer_kinds'])}")
     lines.append("metric kinds:     " + ", ".join(f"{k}({', '.join(v)})" for k, v in payload["metric_kinds"].items()))

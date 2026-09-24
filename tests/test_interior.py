@@ -227,7 +227,7 @@ def test_the_interior_is_ordered_before_its_own_blocks_output(interior_raw, data
     read before layer 0's output. nnsight enforces it — get this wrong and the
     run raises rather than returning a wrong number."""
     raw = copy.deepcopy(interior_raw)
-    raw["sites"]["block"] = {"component": "block_output", "layers": [0]}
+    raw["sites"]["block"] = {"component": "block_output", "layers": 0}
     raw["steps"]["patched"]["reads"]["after"] = {"site": "block", "pos": -1}
     built = _build(raw, data_root, model_engine)
 

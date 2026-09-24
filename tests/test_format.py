@@ -270,7 +270,7 @@ def test_a_write_is_two_fields_a_schema_can_enumerate():
 @pytest.mark.parametrize(
     "component, layers, message",
     [
-        ("lm_head", [0], "lm_head takes no layers"),
+        ("lm_head", 0, "lm_head takes no layers"),
         ("block_output", None, "block_output is addressed at one layer"),
     ],
     ids=["a whole-model site with a layer", "a per-layer site without one"],

@@ -11,7 +11,7 @@
   "sites": {
     "target": {
       "component": "mlp_activation",
-      "layers": [0],
+      "layers": 0,
       "units": {"sweep": [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]]}
     },
     "head": {"component": "lm_head"}

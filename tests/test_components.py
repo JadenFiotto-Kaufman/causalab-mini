@@ -80,7 +80,7 @@ def _at(raw, component, layer):
     raw = copy.deepcopy(raw)
     raw["sites"]["target"] = {"component": component}
     if layer is not None:
-        raw["sites"]["target"]["layers"] = [layer]
+        raw["sites"]["target"]["layers"] = layer
     return raw
 
 

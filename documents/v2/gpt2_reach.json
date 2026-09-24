@@ -15,9 +15,7 @@
   "sites": {
     "target": {
       "component": "block_output",
-      "layers": [
-        2
-      ]
+      "layers": 2
     }
   },
   "steps": {

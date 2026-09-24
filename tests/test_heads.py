@@ -37,7 +37,7 @@ DAS = REPO / "documents" / "v2" / "das.json"
 
 def _at(component, heads=None):
     raw = json.loads(PATCHING.read_text())
-    raw["sites"]["target"] = {"component": component, "layers": [0]}
+    raw["sites"]["target"] = {"component": component, "layers": 0}
     if heads is not None:
         raw["sites"]["target"]["heads"] = heads
     return raw
@@ -110,7 +110,7 @@ def test_two_sites_of_disjoint_heads_are_one_tap_and_add_up(data_root, model_eng
     """Heads are a slice of a place, like positions are — not a different
     place. Two sites at one component share its address, hence its tap."""
     raw = _at("attention_z", [0, 1])
-    raw["sites"]["rest"] = {"component": "attention_z", "layers": [0], "heads": [2, 3]}
+    raw["sites"]["rest"] = {"component": "attention_z", "layers": 0, "heads": [2, 3]}
     reads = raw["steps"]["counterfactual"]["reads"]
     reads["v_rest"] = {**reads["v_cf"], "site": "rest"}
     writes = raw["steps"]["patched"]["interventions"]["writes"]
@@ -147,7 +147,7 @@ def test_a_rotation_over_two_heads_is_as_wide_as_two_heads(data_root, model_engi
     """The reason the slice is handed on flat: DAS inside a pair of heads
     needs nothing but a site that names them."""
     raw = json.loads(DAS.read_text())
-    raw["sites"]["target"] = {"component": "attention_z", "layers": [0], "heads": [0, 1]}
+    raw["sites"]["target"] = {"component": "attention_z", "layers": 0, "heads": [0, 1]}
     raw["featurizers"]["rot"]["k"] = 4
     built = plan.build_request(raw, data_root, model_engine)
     (spec,) = built.step("featurizers", plan.Featurizers).specs
@@ -194,7 +194,7 @@ def test_the_pattern_is_a_distribution_over_keys_per_head(data_root, eager_engin
 def test_the_scores_are_what_the_softmax_turns_into_the_pattern(data_root, eager_engine):
     raw = json.loads(KNOCKOUT.read_text())
     raw["sites"]["one_head"]["heads"] = [0]
-    raw["sites"]["scores"] = {"component": "attention_scores", "layers": [0]}
+    raw["sites"]["scores"] = {"component": "attention_scores", "layers": 0}
     reads = raw["steps"]["clean"]["reads"]
     reads["scores"] = {**reads["pattern"], "site": "scores"}
     del raw["steps"]["patched"]["interventions"]
@@ -215,7 +215,7 @@ def test_knocking_out_a_head_is_zeroing_its_z(data_root, eager_engine):
     via_pattern = _score(knock, data_root, eager_engine)
 
     via_z = copy.deepcopy(knock)
-    via_z["sites"]["one_head"] = {"component": "attention_z", "layers": [0], "heads": [2]}
+    via_z["sites"]["one_head"] = {"component": "attention_z", "layers": 0, "heads": [2]}
     assert torch.allclose(via_pattern, _score(via_z, data_root, eager_engine), rtol=0, atol=1e-6)
 
     unpatched = copy.deepcopy(knock)
@@ -293,7 +293,7 @@ def test_a_gate_over_neurons_is_a_gate_at_a_site_of_units(data_root, model_engin
     from causalab_mini.plan import sweep
 
     _, raw = sweep.points(json.loads((REPO / "documents" / "v2" / "dbm.json").read_text()))[0]
-    raw["sites"]["target"] = {"component": "mlp_activation", "layers": [0], "units": [0, 2, 4, 6]}
+    raw["sites"]["target"] = {"component": "mlp_activation", "layers": 0, "units": [0, 2, 4, 6]}
     built = plan.build_request(raw, data_root, model_engine)
     (spec,) = built.step("featurizers", plan.Featurizers).specs
     assert spec.d == 4
@@ -304,7 +304,7 @@ def test_what_a_site_of_units_may_not_say(data_root, model_engine):
     with pytest.raises(ValidationError, match="heads or units, not both"):
         Spec.model_validate({**_at("attention_z", [0]), "sites": {
             **_at("attention_z", [0])["sites"],
-            "target": {"component": "attention_z", "layers": [0], "heads": [0], "units": [1]}}})
+            "target": {"component": "attention_z", "layers": 0, "heads": [0], "units": [1]}}})
     raw = _at("block_output")
     raw["sites"]["target"]["units"] = [16]
     with pytest.raises(plan.PlanError, match="unit 16 of a 16-unit tensor"):
@@ -331,7 +331,7 @@ def test_the_patched_head_looks_where_it_did_on_the_counterfactual(data_root, ea
     writes — for the patched head and for a bystander, which a clean forward
     over the same prompts reads too."""
     raw = _pattern_raw([2])
-    raw["sites"]["bystander"] = {"component": "attention_probs", "layers": [0], "heads": [1]}
+    raw["sites"]["bystander"] = {"component": "attention_probs", "layers": 0, "heads": [1]}
     clean = {"kind": "forward", "data": "pairs", "field": "input", "reads": {"bystander": {"site": "bystander", "pos": -1}}}
     raw["steps"] = {"clean": clean, **raw["steps"]}
     raw["steps"]["patched"]["reads"]["ours"] = {"site": "one_head", "pos": -1}

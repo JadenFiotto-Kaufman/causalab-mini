@@ -75,9 +75,11 @@ class ReadOp:
     #: the steps back together and cuts them against the continuation,
     #: which does not exist until the decode has run.
     stack: str = ""
-    #: When this read is one layer of a read taken at every layer, the name
-    #: the layers are stacked under — in layer order, the layer axis first.
+    #: When this read is one layer of a read taken at several layers, the
+    #: name the layers are stacked under, and all of them in the order the
+    #: document listed — which the stack keeps, the layer axis first.
     layered: str = ""
+    layers: tuple[int, ...] = ()
 
     @property
     def flat(self) -> bool:

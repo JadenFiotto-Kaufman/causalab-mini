@@ -9,7 +9,7 @@
   },
   "data": {"days": {"path": "weekdays_full/data"}},
   "sites": {
-    "target": {"component": "block_output", "layers": [{"sweep": {"range": [0, 16]}}]},
+    "target": {"component": "block_output", "layers": {"sweep": {"range": [0, 16]}}},
     "head": {"component": "lm_head"}
   },
   "steps": {

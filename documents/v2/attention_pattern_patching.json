@@ -12,7 +12,7 @@
   "sites": {
     "one_head": {
       "component": "attention_probs",
-      "layers": [0],
+      "layers": 0,
       "heads": {"sweep": [[0], [1], [2], [3]]}
     },
     "head": {"component": "lm_head"}

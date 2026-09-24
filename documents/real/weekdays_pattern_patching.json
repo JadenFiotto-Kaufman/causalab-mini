@@ -12,7 +12,7 @@
   "sites": {
     "target": {
       "component": "attention_probs",
-      "layers": [12],
+      "layers": 12,
       "heads": {
         "sweep": [
           [0],

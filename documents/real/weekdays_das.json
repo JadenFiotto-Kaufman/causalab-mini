@@ -12,7 +12,7 @@
     "test": {"path": "weekdays_full/data#test"}
   },
   "sites": {
-    "target": {"component": "block_output", "layers": [8]},
+    "target": {"component": "block_output", "layers": 8},
     "head": {"component": "lm_head"}
   },
   "featurizers": {"rot": {"kind": "subspace", "k": {"sweep": [1, 4, 16, 64]}}},

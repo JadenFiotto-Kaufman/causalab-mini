@@ -106,7 +106,7 @@ def test_pca_is_the_right_singular_vectors_of_the_centered_rows():
 @pytest.mark.parametrize(
     "edit, key",
     [
-        (lambda raw: raw["sites"]["target"].update(layers=[1]), "layer"),
+        (lambda raw: raw["sites"]["target"].update(layers=1), "layer"),
         (lambda raw: raw["model"].update(key="hf-internal-testing/tiny-random-gpt2"), "model_key"),
         (lambda raw: raw["model"].update(dtype="bf16"), "model_dtype"),
     ],

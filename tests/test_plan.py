@@ -142,6 +142,6 @@ def test_a_multi_token_answer_is_refused(model):
 
 
 def test_a_layer_the_model_does_not_have_is_a_load_error(minimal_raw, data_root, model_engine):
-    minimal_raw["sites"]["target"]["layers"] = [17]
+    minimal_raw["sites"]["target"]["layers"] = 17
     with pytest.raises(plan.PlanError, match="outside the model's 2 layers"):
         plan.build_request(minimal_raw, data_root, model_engine)
