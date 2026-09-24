@@ -719,3 +719,42 @@ def test_a_continuation_position_needs_a_generate_step(patching):
     _refused(copy.deepcopy(patching), "needs a generate step")
     patching["steps"]["patched"]["reads"]["logits"]["pos"] = {"frame": "generated", "index": 5}
     _refused(_generating(patching, min_new_tokens=3), "step 5 of a 3-token decode")
+
+
+# --------------------------------------------------------------------- #
+# saves with no path
+# --------------------------------------------------------------------- #
+
+
+def test_a_listed_save_is_written_as_itself(das):
+    """A list of references: each is its own file, with the extension its
+    kind implies — a metric's table `.json`, here and in a fit's body, a
+    tensor `.safetensors`, a forward's own result included."""
+    das["steps"]["saves"] = ["iia", "fit.iia", "fit.rot", "fit", "patched", "counterfactual.v_cf"]
+    assert Spec.model_validate(das).steps.saves == {
+        "iia": "iia.json",
+        "fit.iia": "fit.iia.json",
+        "fit.rot": "fit.rot.safetensors",
+        "fit": "fit.safetensors",
+        "patched": "patched.safetensors",
+        "counterfactual.v_cf": "counterfactual.v_cf.safetensors",
+    }
+
+
+def test_a_save_mapped_to_null_is_written_as_itself_beside_named_ones(das):
+    das["steps"]["saves"] = {"iia": None, "fit.rot": "rot.safetensors", "ce": None}
+    assert Spec.model_validate(das).steps.saves == {
+        "iia": "iia.json", "fit.rot": "rot.safetensors", "ce": "ce.json",
+    }
+
+
+def test_the_list_form_writes_the_same_files(patching, data_root, model_engine, tmp_path):
+    listed = copy.deepcopy(patching)
+    listed["steps"]["saves"] = ["iia", "logit_diff"]
+    written = model_engine.execute(_compile(listed, data_root, model_engine)).write(tmp_path)
+    assert {"iia.json", "logit_diff.json"} <= {path.name for path in written}
+
+
+def test_a_derived_name_colliding_with_a_named_one_is_refused_naming_both(patching):
+    patching["steps"]["saves"] = {"iia": None, "logit_diff": "iia.json"}
+    _refused(patching, re.escape("saves: 'iia' and 'logit_diff' are both saved to 'iia.json'"))
