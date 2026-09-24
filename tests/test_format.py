@@ -634,6 +634,31 @@ def test_the_held_out_pass_is_the_body_on_other_rows(das, data_root, model_engin
     _compile(das, data_root, model_engine)
 
 
+def test_a_held_out_row_is_the_same_example_whatever_split_it_is_filed_under(das, data_root, model_engine, tmp_path):
+    """The training rows copied under another split are the same examples,
+    and so are two rows with one `example_id`: either is refused, naming the
+    fit, both datasets and how many rows they share."""
+    import shutil
+
+    root = tmp_path / "data"
+    shutil.copytree(data_root, root)
+    path = root / "weekdays" / "data.json"
+    one = next(row for row in json.loads(path.read_text()) if row["split"] == "train")
+    # one training row, and the same row filed again under `val`
+    table = [one, dict(one, split="val")]
+    path.write_text(json.dumps(table))
+    das["data"]["val"] = {"path": "weekdays/data#val"}
+    das["steps"]["fit"]["batch_size"] = 1
+    das["steps"]["fit"]["eval"]["data"] = {"train": "val"}
+    with pytest.raises(plan.PlanError, match=re.escape("step 'fit': eval puts 'val' in place of 'train', and the two share 1 row(s)")):
+        _compile(das, root, model_engine)
+
+    # different text, one id: the id says they are one example
+    path.write_text(json.dumps([dict(one, example_id="7"), dict(one, split="val", example_id="7", input=one["input"] + " ")]))
+    with pytest.raises(plan.PlanError, match="share 1 row"):
+        _compile(das, root, model_engine)
+
+
 # --------------------------------------------------------------------- #
 # generate
 # --------------------------------------------------------------------- #

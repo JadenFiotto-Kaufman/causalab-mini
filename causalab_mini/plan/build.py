@@ -217,8 +217,8 @@ def _spec_fit(spec: Spec, name: str, fit: Any, table: Any, sites: _Sites, tokeni
     for trained, held_out in fit.eval.data.items():
         # the same dataset on both sides is the train-equals-test ablation,
         # and is allowed because it says so
-        fitted = {json.dumps(row, sort_keys=True) for row in table(trained)}
-        shared = [row for row in table(held_out) if json.dumps(row, sort_keys=True) in fitted]
+        fitted = {_example(row) for row in table(trained)}
+        shared = [row for row in table(held_out) if _example(row) in fitted]
         if trained != held_out and shared:
             raise PlanError(
                 f"step {name!r}: eval puts {held_out!r} in place of {trained!r}, and the two share "
@@ -266,6 +266,16 @@ def _spec_fit(spec: Spec, name: str, fit: Any, table: Any, sites: _Sites, tokeni
         mode=fit.early_stop.mode,
         anneal=tuple((gate, one.start, one.end) for gate, one in fit.anneal.items()),
     )
+
+
+def _example(row: rows_module.Row) -> str:
+    """Which example a row is: its `example_id` where the table has one, and
+    otherwise its content — without `split`, which says where the row was
+    filed, not what it is, so a row copied into another split is still the
+    same example."""
+    if "example_id" in row:
+        return f"id:{row['example_id']}"
+    return json.dumps({key: value for key, value in row.items() if key != "split"}, sort_keys=True)
 
 
 def _spec_featurizers(spec: Spec, at: dict[str, tuple[str, Any]], sites: _Sites, engine: Any) -> tuple[FeaturizerOp, ...]:
