@@ -68,6 +68,12 @@ class _Component:
     read_only: bool = False
 
 
+# TODO: the layout facts each row carries beside its accessor name — seq_axis,
+# the width attribute, the heads kind, keys, needs — are facts about the tensor
+# at that place, the same on every model of the family, and may belong on
+# nnterp's Address rows. If they moved there, this table would be an alias map
+# from mini's names to nnterp's, and a row a user adds to nnterp would get a
+# width and a sequence axis for free.
 _COMPONENTS = {
     # --- inside the attention: the call that hands the heads to whichever
     # attention implementation the checkpoint runs. (batch, head, seq, dim),
