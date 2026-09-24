@@ -231,6 +231,8 @@ def test_the_format_has_a_machine_readable_schema():
     assert schema["required"] == ["model", "steps"]
     steps = schema["$defs"]["Steps"]
     assert set(steps["additionalProperties"]["discriminator"]["mapping"]) == {"forward", "generate", "metric", "reduce", "fit"}
+    # and it takes a position the way a document writes it, `-1` included
+    assert {"type": "integer"} in schema["$defs"]["Read"]["properties"]["pos"]["anyOf"]
 
 
 def test_a_write_is_two_fields_a_schema_can_enumerate():

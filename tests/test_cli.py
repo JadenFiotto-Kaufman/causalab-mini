@@ -27,9 +27,12 @@ def _json(capsys, argv):
 
 
 def test_schema_is_the_models_own(capsys):
+    from causalab_mini.plan.spec import Spec
+
     out = _json(capsys, ["schema"])
-    assert out["schema"]["required"] == ["model", "roles", "sites", "interventions", "steps"]
-    assert "Fit" in out["schema"]["$defs"]
+    assert out["schema"] == Spec.model_json_schema()
+    assert out["schema"]["required"] == ["model", "steps"]
+    assert {"Forward", "Generate", "Reduce", "Fit"} <= set(out["schema"]["$defs"])
 
 
 def test_vocab_is_the_tables_not_a_description_of_them(capsys):
@@ -37,6 +40,8 @@ def test_vocab_is_the_tables_not_a_description_of_them(capsys):
     from causalab_mini.ops import intervene
 
     out = _json(capsys, ["vocab"])
+    assert set(out["step_kinds"]) == {"forward", "generate", "metric", "reduce", "fit"}
+    assert out["reductions"] == ["mean", "pca"]
     assert set(out["components"]) == set(address.describe())
     assert out["mechanisms"] == sorted(intervene.MECHANISMS)
     assert out["metric_kinds"]["logit_diff"] == ["a", "b"]
@@ -100,7 +105,7 @@ def test_data_describes_a_ref(capsys):
 
 
 def test_validate_reads_both_formats(capsys):
-    assert _json(capsys, ["validate", DAS])["format"] == "plan-shaped"
+    assert _json(capsys, ["validate", DAS])["format"] == "steps-first"
     assert _json(capsys, ["validate", PATCHING])["format"] == "protocol"
 
 
@@ -143,6 +148,8 @@ def test_explain_prints_the_compiled_plan_without_weights(capsys):
     # token, and the integer that is differs between passes of different width
     assert "pos={index:-1}" in text and "pos=(" not in text
     assert "saves=['held_out_iia.json']" in text
+    # a step is its document's, and a forward says which rows it runs over
+    assert "patched: forward on 'train'  (2 rows" in text
 
 
 def test_run_is_the_same_pipeline_with_weights(tmp_path, capsys):

@@ -201,9 +201,10 @@ def _spelling(raw: Any) -> Any:
     return {"index": raw} if isinstance(raw, int) and not isinstance(raw, bool) else raw
 
 
-#: A position, as a document may write it: a `Where`, or one of its two
-#: spellings above.
-Position = Annotated[Where, BeforeValidator(_spelling)]
+#: A position, as a document may write it: a `Where`, or the bare index
+#: above — which the schema says too, so a document the model accepts is one
+#: the schema accepts.
+Position = Annotated[Where, BeforeValidator(_spelling, json_schema_input_type=int | Where)]
 
 
 class Read(Node):
