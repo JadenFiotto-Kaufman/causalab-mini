@@ -129,6 +129,30 @@ def test_the_hooks_engine_is_windowed_by_the_same_walk(data_root):
 # --------------------------------------------------------------------- #
 
 
+def test_a_windows_unnamed_logits_go_with_the_window(data_root, model_engine, monkeypatch):
+    """`batch_size` bounds memory only if a window's result nothing names is
+    let go when the window is done: here no step's own logits are named, so
+    when each window starts, every earlier window's logits are gone."""
+    import gc
+    import weakref
+
+    alive, made = [], []
+    forward = type(model_engine).forward
+
+    def watched(self, step, *rest):
+        gc.collect()
+        alive.append(sum(one() is not None for one in made))
+        logits = forward(self, step, *rest)
+        made.append(weakref.ref(logits))
+        return logits
+
+    # on the class: the engine is shared by the session, and patching the
+    # instance would leave an attribute behind
+    monkeypatch.setattr(type(model_engine), "forward", watched)
+    model_engine.execute(plan.build_request(_point("patching.json"), data_root, model_engine), batch_size=1)
+    assert len(alive) == 8 and alive == [0] * 8
+
+
 def test_a_published_mean_is_shared_by_every_window(data_root, model_engine):
     raw = _point("mean_ablation.json")
     whole = model_engine.execute(plan.build_request(raw, data_root, model_engine))

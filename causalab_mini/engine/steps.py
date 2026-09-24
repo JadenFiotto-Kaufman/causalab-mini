@@ -201,6 +201,13 @@ def call(engine: Any, name: str, step: Forward, state: State) -> None:
     _writes_land(ready, {**state.records, **record})
     operands = _operands(step)
     model_call = engine.generate if isinstance(step, Generate) else engine.forward
+    # what a window makes that is kept past it: what the plan names — a
+    # read's part by the stack or the layers it belongs to — and a decode's
+    # ids, which the continuation is cut against; so a window's unnamed
+    # logits go with the window, and `batch_size` bounds them
+    kept = ({name} if isinstance(step, Generate) else {name} & state.named) | {
+        op.name for tap in step.taps for op in tap.reads if (op.stack or op.layered or op.name) in state.named
+    }
     rows = len(step.input_ids)
     size = state.batch_size or rows
     produced: list[dict[str, Any]] = []
@@ -208,7 +215,7 @@ def call(engine: Any, name: str, step: Forward, state: State) -> None:
         stop = min(start + size, rows)
         values = {one: state.window(one, start, stop) for one in operands}
         values[name] = model_call(plan_module.window(ready, start, stop), values, state.featurizers)
-        produced.append({one: value for one, value in values.items() if one not in operands})
+        produced.append({one: value for one, value in values.items() if one in kept})
     made = {
         one: produced[0][one] if len(produced) == 1 else torch.cat([part[one] for part in produced])
         for one in produced[0]
@@ -240,7 +247,8 @@ def _stack_layers(step: Forward, made: dict[str, Any], record: Record) -> None:
     for stacked in dict.fromkeys(op.layered for op in reads):
         # taps come in forward order (`build._forward`), so its layers in layer order
         names = [op.name for op in reads if op.layered == stacked]
-        made[stacked] = torch.stack([made.pop(one) for one in names])
+        if names[0] in made:  # the plan names it
+            made[stacked] = torch.stack([made.pop(one) for one in names])
         record[stacked] = record[names[0]]
         for one in names:
             del record[one]
@@ -430,9 +438,9 @@ def _continuation(engine: Any, forward: Forward, values: dict[str, Any], generat
     for name, op in ops.items():
         where = op.at.where
         windows, reasons = locate.locate(frame, where, op.at.anchors)
-        if name != op.name:
+        parts = [one.name for tap in forward.taps for one in tap.reads if one.stack == name]
+        if parts and parts[0] in values:  # a stack of decode steps the plan names
             # (rows, steps, width): each step read the one position it processed
-            parts = [one.name for tap in forward.taps for one in tap.reads if one.stack == name]
             whole = torch.stack([values.pop(one) for one in parts], dim=1).squeeze(2)
             values[name] = intervene.gather(whole, Selection(positions=windows, flat=where.ragged), seq_axis=1)
         found[name] = _record(frame, windows, reasons)
