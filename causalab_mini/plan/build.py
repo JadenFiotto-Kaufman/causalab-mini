@@ -107,7 +107,7 @@ def build_spec(spec: Spec, data_root: str | Path, engine: Any) -> Plan:
             _spec_fit(spec, name, step, table, sites, engine.tokenizer),
             saves=_fit_saves(spec, name, step, featurizers, at),
         )
-    _check_patterns(tuple(one for one in scope.values() if isinstance(one, Forward)))
+    _check_layouts(tuple(one for one in scope.values() if isinstance(one, Forward)))
     for ref, file in spec.steps.saves.items():
         head = ref.partition(".")[0]
         if spec.steps[head].kind != "fit":
@@ -254,7 +254,7 @@ def _spec_fit(spec: Spec, name: str, fit: Any, table: Any, sites: _Sites, tokeni
         scope: dict[str, Step] = {}
         for inner, step in fit.steps.items():
             scope[inner] = _spec_step(spec, inner, step, scope, rows, sites, tokenizer)
-        _check_patterns(tuple(one for one in scope.values() if isinstance(one, Forward)))
+        _check_layouts(tuple(one for one in scope.values() if isinstance(one, Forward)))
         return scope
 
     def minibatch(picked: list[int]) -> Callable[[str], list[rows_module.Row]]:
@@ -626,7 +626,7 @@ def _steps_over(
         (f"{name}.{role}" if name in twice else name): forward(name, role) for name, role in order
     }
     forwards = tuple(one for one in steps.values() if isinstance(one, Forward))
-    _check_patterns(forwards)
+    _check_layouts(forwards)
     base_rows = rows["base"]  # base is the schema of the pair: metrics read its columns
     for name, spec in document.metrics.items():
         if name in steps:
@@ -830,22 +830,49 @@ def _fit(
     )
 
 
-def _check_patterns(forwards: tuple[Forward, ...]) -> None:
-    """The one layout question that is about masks rather than positions, and
-    is therefore still the client's: an attention pattern swapped in from
-    another prompt has to line up key for key.
+def _check_layouts(forwards: tuple[Forward, ...]) -> None:
+    """The layout questions a write and its operand answer before any
+    forward, which are therefore the client's.
 
-    The two refusals that used to sit beside this — a write with nothing to
+    Two, both about the operand read here: a value read flat — one entry per
+    position found — cannot land in a write that is a rectangle, a window a
+    row, nor a rectangle in a flat write; and an attention pattern swapped
+    in from another prompt has to line up key for key.
+
+    The two refusals that used to sit beside these — a write with nothing to
     write on a row, and a ragged write whose operand is a different width —
     are about *where* a position lands, so they moved to where positions are
     resolved (`engine/steps.py`).
     """
-    read_in = {read.name: forward for forward in forwards for tap in forward.taps for read in tap.reads}
+    read_in = {
+        read.stack or read.name: (forward, read)
+        for forward in forwards
+        for tap in forward.taps
+        for read in tap.reads
+    }
     for forward in forwards:
         for tap in forward.taps:
             for write in tap.writes:
-                if tap.address.key_axis and isinstance(write.operand, str):
-                    _check_keys(write, forward, read_in.get(write.operand))
+                if not isinstance(write.operand, str):
+                    continue
+                source, read = read_in.get(write.operand, (None, None))
+                if read is not None and read.flat != write.at.flat:
+                    raise PlanError(
+                        f"write {write.name!r} at {_spelled(write.at)} is {_layout(write.at.flat)}, "
+                        f"and its operand {write.operand!r}, read at {_spelled(read.at)}, is "
+                        f"{_layout(read.flat)}: a value lands in a write of its own layout. "
+                        "Read and write at the same position, or at two of one form"
+                    )
+                if tap.address.key_axis:
+                    _check_keys(write, forward, source)
+
+
+def _layout(flat: bool) -> str:
+    return "flat (one entry per position found)" if flat else "a rectangle (one window a row)"
+
+
+def _spelled(at: Any) -> str:
+    return at.where.spelling() if at.where is not None else "its positions"
 
 
 def _check_keys(write: Any, forward: Forward, source: Forward | None) -> None:

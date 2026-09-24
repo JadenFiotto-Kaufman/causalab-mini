@@ -171,14 +171,30 @@ def test_an_entity_patch_between_rows_of_different_widths_is_refused_by_row(data
 
 def test_an_unreduced_ragged_read_is_checked_against_the_write_row_by_row(entity_raw, data_root, model_engine):
     """Every entity token of every row, taken as it is: the harvest's read is
-    a different width on each row, and the write it is swapped in at is one
-    token. That is checked where the rows' windows are — at the write — and
-    refused naming the row that differs."""
+    a different width on each row, and the write it is swapped in at — flat
+    too, the entity's last token — is one token. That is checked where the
+    rows' windows are — at the write — and refused naming the row that
+    differs."""
     ablate = entity_raw["steps"]["ablated"]["interventions"]["writes"]["ablate"]
     ablate["operand"] = "harvest.acts"  # not reduced
+    ablate["pos"] = {"index": -1, "scope": {"variable": "entity"}}
     built = plan.build_request(entity_raw, data_root, model_engine)
     with pytest.raises(plan.PlanError, match=r"operand 'harvest.acts' was read over \[3, 1, 1, 1\]; rows \[0\] differ"):
         model_engine.execute(built)
+
+
+def test_a_flat_read_is_refused_into_a_rectangular_write(entity_raw, data_root, model_engine):
+    """A flat value is one entry per position found; a rectangle is a window
+    a row. However the widths fall, one does not land in the other, and both
+    forms are known before any forward — so it is refused on the client,
+    naming both ops and both layouts."""
+    entity_raw["steps"]["ablated"]["interventions"]["writes"]["ablate"]["operand"] = "harvest.acts"
+    with pytest.raises(
+        plan.PlanError,
+        match=r"write 'ablated.ablate' at \{index:-1\} is a rectangle .* operand 'harvest.acts', "
+        r"read at \{all scope:\{variable:entity\}\}, is flat",
+    ):
+        plan.build_request(entity_raw, data_root, model_engine)
 
 
 # --------------------------------------------------------------------- #
