@@ -2,7 +2,7 @@
  "$defs": {
   "Anchor": {
    "additionalProperties": false,
-   "description": "A run of tokens located in this row by its *text*.\n\n`variable` is the row's own value for a name: the `<column>_variables`\nsibling of the role's own field first, a top-level column of that name\notherwise. That rule is why a pair-native document writes one spec and\neach role resolves its own text. `segment` is a run the *frame* located:\na chat turn in the prompt frame, `eos` in the generated one.\n\nBoth keys together is the composition \u2014 the variable's run searched\n*inside* the segment's \u2014 which is also how a value occurring twice\nbecomes unique, and why there is no `occurrence` field.",
+   "description": "A run of tokens located in this row by its *text*.\n\n`variable` is the row's own value for a name: the `<column>_variables`\nsibling of the role's own field first, a top-level column of that name\notherwise. That rule is why a pair-native document writes one spec and\neach role resolves its own text.\n\n`segment` is a run the *frame* located, and its name comes from the same\nplace the run does. In the prompt frame that is a chat turn, named by\nthe message's own `role` \u2014 `\"user\"`, `\"assistant\"`, whatever the\nconversation says \u2014 so nothing here enumerates them. A conversation with\ntwo user turns names them `\"user[0]\"` and `\"user[1]\"`, the bracket\n`rows.field_text` already uses for a list, and the bare `\"user\"` is\n`alignment_ambiguous`: the same rule a variable occurring twice gets,\nand the same fix \u2014 say which. In the generated frame the one run the\nframe locates is `eos`.\n\nBoth keys together is the composition \u2014 the variable's run searched\n*inside* the segment's \u2014 which is also how a value occurring twice\nbecomes unique, and why there is no `occurrence` field.",
    "properties": {
     "variable": {
      "anyOf": [
@@ -19,12 +19,6 @@
     "segment": {
      "anyOf": [
       {
-       "enum": [
-        "system",
-        "user",
-        "assistant",
-        "eos"
-       ],
        "type": "string"
       },
       {
@@ -231,10 +225,9 @@
        "type": "string"
       },
       {
-       "type": "null"
+       "$ref": "#/$defs/Intervention"
       }
      ],
-     "default": null,
      "title": "Intervention"
     },
     "params": {
@@ -303,6 +296,7 @@
    "required": [
     "kind",
     "rows",
+    "intervention",
     "params",
     "objective",
     "epochs",
@@ -551,10 +545,9 @@
        "type": "string"
       },
       {
-       "type": "null"
+       "$ref": "#/$defs/Intervention"
       }
      ],
-     "default": null,
      "title": "Intervention"
     },
     "outputs": {
@@ -574,7 +567,8 @@
    },
    "required": [
     "kind",
-    "rows"
+    "rows",
+    "intervention"
    ],
    "title": "Observe",
    "type": "object"

@@ -184,6 +184,7 @@
   &quot;steps&quot;: {
     &quot;score&quot;: {
       &quot;kind&quot;: &quot;observe&quot;,
+      &quot;intervention&quot;: &quot;patching&quot;,
       &quot;rows&quot;: {
         &quot;base&quot;: &quot;weekdays/train&quot;,
         &quot;counterfactual&quot;: &quot;weekdays/train&quot;
@@ -216,7 +217,7 @@ ok: documents/v2/patching.json is a valid plan-shaped document</code></pre>
             <tr><td><code>roles</code></td><td><code>{name: object}</code></td><td>required</td><td>which column of a row each input role's text comes from</td></tr>
             <tr><td><code>sites</code></td><td><code>{name: object}</code></td><td>required</td><td>the places a read or a write may name</td></tr>
             <tr><td><code>featurizers</code></td><td><code>{name: object}</code></td><td><code>{}</code></td><td>parameter sets, by name</td></tr>
-            <tr><td><code>interventions</code></td><td><code>{name: object}</code></td><td>required, at least one</td><td>the experiment: reads, writes, intervened models, metrics</td></tr>
+            <tr><td><code>interventions</code></td><td><code>{name: object}</code></td><td>required</td><td>the experiments steps name: reads, writes, intervened models, metrics. One written inline on a step is declared here under the step's name, and there must be at least one</td></tr>
             <tr><td><code>steps</code></td><td><code>{name: object}</code></td><td>required</td><td>what runs, over which rows, and what comes out</td></tr>
             </tbody>
           </table>
@@ -230,6 +231,339 @@ ok: documents/v2/patching.json is a valid plan-shaped document</code></pre>
             — rather than a key that is quietly ignored and still changes the
             digest.</p>
           </div>
+
+          <h2 id="fits-together">How a document fits together <a class="anchor" href="#fits-together" aria-label="Link to this section">#</a></h2>
+
+          <!-- causalab_mini/plan/spec.py:447-470 — class Spec; only `steps` holds anything that runs -->
+          <p>Everything above <code>steps</code> is a declaration. <code>roles</code>,
+          <code>sites</code>, <code>featurizers</code> and <code>interventions</code>
+          name things — a column, a place in the model, a parameter set, an
+          experiment — and nothing there runs. A declared intervention no step names
+          is never compiled.</p>
+
+          <!-- causalab_mini/plan/spec.py:381-393 — class Observe: rows + intervention -->
+          <p>A step is an execution: it binds <strong>rows</strong> to <strong>one
+          intervention</strong>, and every <code>observe</code> and <code>fit</code>
+          says which with <code>intervention</code>. There is no default, even when
+          the document declares only one: a step on its own tells you what it
+          runs.</p>
+
+          <!-- causalab_mini/plan/build.py — build_spec compiles each step's intervention_of(step) -->
+          <p>An intervention is declared once at the root, and not inside the step
+          that runs it, because more than one thing refers to it. A
+          <code>fit</code> and the <code>observe</code> that scores it name the same
+          one, so the score measures exactly what was trained. A sweep rewrites a
+          field of it once and every step that names it sees the new value. And a
+          step's outputs and saves are named by what the intervention reads and
+          scores, so two steps over different rows produce comparable results.</p>
+
+          <p>Two experiments at one site, each bound by its own step, and a baseline
+          beside them:</p>
+
+          <details class="listing">
+            <summary><code>documents/v2/two_observes.json</code> <span class="what">— the whole document</span></summary>
+            <pre><code class="language-json">{
+  &quot;header&quot;: {
+    &quot;description&quot;: &quot;Two experiments at one site, each named once and bound by its own step, and a baseline written in place. `interventions` declares interchange patching and mean ablation at the last position of layer 0; nothing there runs. `clean` is an intervention with no writes, written inline on its step: it reads the original model, scores it, and publishes the mean activation at the site. `patched` and `ablated` each name the declared experiment they run, and `ablated` swaps in the mean `clean` published. Tiny CPU Llama, so the numbers demonstrate the mechanism and nothing else.&quot;
+  },
+  &quot;model&quot;: {
+    &quot;key&quot;: &quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;,
+    &quot;revision&quot;: &quot;9fb191250dd56d0ba7ec9785a025ed29c03d5998&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;
+  },
+  &quot;roles&quot;: {
+    &quot;base&quot;: {
+      &quot;field&quot;: &quot;input&quot;
+    },
+    &quot;counterfactual&quot;: {
+      &quot;field&quot;: &quot;counterfactual_inputs[0]&quot;
+    }
+  },
+  &quot;sites&quot;: {
+    &quot;target&quot;: {
+      &quot;component&quot;: &quot;block_output&quot;,
+      &quot;layers&quot;: [
+        0
+      ]
+    },
+    &quot;head&quot;: {
+      &quot;component&quot;: &quot;lm_head&quot;
+    }
+  },
+  &quot;interventions&quot;: {
+    &quot;patching&quot;: {
+      &quot;reads&quot;: {
+        &quot;v_cf&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;original&quot;,
+          &quot;input&quot;: &quot;counterfactual&quot;
+        },
+        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;patched&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        }
+      },
+      &quot;writes&quot;: {
+        &quot;patch&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;mechanism&quot;: &quot;swap&quot;,
+          &quot;operand&quot;: &quot;v_cf&quot;
+        }
+      },
+      &quot;models&quot;: {
+        &quot;patched&quot;: {
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;writes&quot;: [
+            &quot;patch&quot;
+          ]
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;iia&quot;: {
+          &quot;kind&quot;: &quot;match&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;expected&quot;: &quot;cf_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
+        },
+        &quot;logit_diff&quot;: {
+          &quot;kind&quot;: &quot;logit_diff&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;a&quot;: &quot;cf_answer&quot;,
+          &quot;b&quot;: &quot;base_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
+        }
+      }
+    },
+    &quot;mean_ablation&quot;: {
+      &quot;reads&quot;: {
+        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;ablated&quot;,
+          &quot;input&quot;: &quot;base&quot;
+        }
+      },
+      &quot;writes&quot;: {
+        &quot;ablate&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;mechanism&quot;: &quot;swap&quot;,
+          &quot;operand&quot;: {
+            &quot;ref&quot;: &quot;mean&quot;
+          }
+        }
+      },
+      &quot;models&quot;: {
+        &quot;ablated&quot;: {
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;writes&quot;: [
+            &quot;ablate&quot;
+          ]
+        }
+      },
+      &quot;metrics&quot;: {
+        &quot;logit_diff&quot;: {
+          &quot;kind&quot;: &quot;logit_diff&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;a&quot;: &quot;cf_answer&quot;,
+          &quot;b&quot;: &quot;base_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
+        }
+      }
+    }
+  },
+  &quot;steps&quot;: {
+    &quot;clean&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;intervention&quot;: {
+        &quot;reads&quot;: {
+          &quot;acts&quot;: {
+            &quot;site&quot;: &quot;target&quot;,
+            &quot;pos&quot;: -1,
+            &quot;model&quot;: &quot;original&quot;,
+            &quot;input&quot;: &quot;base&quot;
+          },
+          &quot;logits&quot;: {
+            &quot;site&quot;: &quot;head&quot;,
+            &quot;pos&quot;: -1,
+            &quot;model&quot;: &quot;original&quot;,
+            &quot;input&quot;: &quot;base&quot;
+          }
+        },
+        &quot;metrics&quot;: {
+          &quot;logit_diff&quot;: {
+            &quot;kind&quot;: &quot;logit_diff&quot;,
+            &quot;of&quot;: &quot;logits&quot;,
+            &quot;a&quot;: &quot;cf_answer&quot;,
+            &quot;b&quot;: &quot;base_answer&quot;,
+            &quot;token_form&quot;: &quot;space_prefixed&quot;
+          }
+        }
+      },
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;outputs&quot;: {
+        &quot;mean&quot;: {
+          &quot;read&quot;: &quot;acts&quot;,
+          &quot;reduce&quot;: &quot;mean&quot;
+        }
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;clean.json&quot;
+        }
+      ]
+    },
+    &quot;patched&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;intervention&quot;: &quot;patching&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;patched.json&quot;
+        }
+      ]
+    },
+    &quot;ablated&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;intervention&quot;: &quot;mean_ablation&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;ablated.json&quot;
+        }
+      ]
+    }
+  }
+}</code></pre>
+          </details>
+
+          <figure class="listing">
+            <figcaption><code>documents/v2/two_observes.json</code> <span class="what">— the <code>steps</code> block</span></figcaption>
+            <pre><code class="language-json">  &quot;steps&quot;: {
+    &quot;clean&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;intervention&quot;: {
+        &quot;reads&quot;: {
+          &quot;acts&quot;: {
+            &quot;site&quot;: &quot;target&quot;,
+            &quot;pos&quot;: -1,
+            &quot;model&quot;: &quot;original&quot;,
+            &quot;input&quot;: &quot;base&quot;
+          },
+          &quot;logits&quot;: {
+            &quot;site&quot;: &quot;head&quot;,
+            &quot;pos&quot;: -1,
+            &quot;model&quot;: &quot;original&quot;,
+            &quot;input&quot;: &quot;base&quot;
+          }
+        },
+        &quot;metrics&quot;: {
+          &quot;logit_diff&quot;: {
+            &quot;kind&quot;: &quot;logit_diff&quot;,
+            &quot;of&quot;: &quot;logits&quot;,
+            &quot;a&quot;: &quot;cf_answer&quot;,
+            &quot;b&quot;: &quot;base_answer&quot;,
+            &quot;token_form&quot;: &quot;space_prefixed&quot;
+          }
+        }
+      },
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;outputs&quot;: {
+        &quot;mean&quot;: {
+          &quot;read&quot;: &quot;acts&quot;,
+          &quot;reduce&quot;: &quot;mean&quot;
+        }
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;clean.json&quot;
+        }
+      ]
+    },
+    &quot;patched&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;intervention&quot;: &quot;patching&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;patched.json&quot;
+        }
+      ]
+    },
+    &quot;ablated&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;intervention&quot;: &quot;mean_ablation&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays/train&quot;
+      },
+      &quot;saves&quot;: [
+        {
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;ablated.json&quot;
+        }
+      ]
+    }
+  }</code></pre>
+          </figure>
+
+          <!-- causalab_mini/plan/spec.py:494-528 — Spec._inline -->
+          <p><code>patched</code> and <code>ablated</code> name declared
+          interventions. <code>clean</code> writes its intervention in place: the
+          value of <code>intervention</code> may be the object itself instead of a
+          name. It is compiled exactly as a declared one, because at load it
+          <em>is</em> declared — under the step's own name, <code>clean</code>. A
+          step may not write one inline under a name that is already declared.</p>
+
+          <!-- tests/test_spec.py — test_a_baseline_is_an_intervention_with_no_writes -->
+          <p>"No intervention" is not a missing field or a <code>null</code>. It is an
+          intervention with no <code>writes</code>, whose reads say
+          <code>"model": "original"</code>: one un-intervened forward, scored by the
+          same metrics as the others. Here it also publishes the mean activation
+          that <code>ablated</code> swaps in, through the <code>outputs</code> and
+          <code>ref</code> seam described <a href="#outputs">below</a>.</p>
+
+          <!-- ran 2026-09-24, CPU, fp32 -->
+          <pre><code class="language-bash">$ uv run causalab-mini explain documents/v2/two_observes.json
+&lt;root&gt;: Plan
+  clean: Observe  metrics=[&#x27;logit_diff/logit_diff&#x27;]  outputs=[&#x27;mean=mean(acts)&#x27;]  saves=[&#x27;clean.json&#x27;]
+      forward &#x27;original&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+        read  &#x27;acts&#x27; at block_output[0] pos={index:-1} via &#x27;identity&#x27;
+        read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
+  patched: Observe  metrics=[&#x27;iia/match&#x27;, &#x27;logit_diff/logit_diff&#x27;]  saves=[&#x27;patched.json&#x27;]
+      forward &#x27;original&#x27; on &#x27;counterfactual&#x27;  (4 rows x 11 tokens)
+        read  &#x27;v_cf&#x27; at block_output[0] pos={index:-1} via &#x27;identity&#x27;
+      forward &#x27;patched&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+        write &#x27;patch&#x27; at block_output[0] pos={index:-1} swap(v_cf) via &#x27;identity&#x27;
+        read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;
+  ablated: Observe  metrics=[&#x27;logit_diff/logit_diff&#x27;]  saves=[&#x27;ablated.json&#x27;]
+      forward &#x27;ablated&#x27; on &#x27;base&#x27;  (4 rows x 11 tokens)
+        write &#x27;ablate&#x27; at block_output[0] pos={index:-1} swap(mean) via &#x27;identity&#x27;
+        read  &#x27;logits&#x27; at lm_head pos={index:-1} via &#x27;identity&#x27;</code></pre>
 
           <h2 id="model">model <a class="anchor" href="#model" aria-label="Link to this section">#</a></h2>
 
@@ -412,10 +746,11 @@ weekdays/data: 4 rows
 
           <h2 id="interventions">interventions <a class="anchor" href="#interventions" aria-label="Link to this section">#</a></h2>
 
-          <!-- causalab_mini/plan/spec.py:306-317 — class Intervention -->
-          <p>An intervention is the experiment, declared once. A step names the one it
-          runs; when the document declares exactly one, it need not. That is why a fit
-          and the run that scores it cannot drift apart — they are the same
+          <!-- causalab_mini/plan/spec.py:310-321 — class Intervention -->
+          <p>An intervention is the experiment, declared once. Every step that runs
+          a forward names the one it runs, or writes it in place (see
+          <a href="#fits-together">how a document fits together</a>). That is why a
+          fit and the run that scores it cannot drift apart — they are the same
           declaration over different rows.</p>
 
           <table>
@@ -693,11 +1028,15 @@ weekdays/data: 4 rows
             </tbody>
           </table>
 
-          <!-- causalab_mini/plan/spec.py:377-393 — class Observe; :519-523 every role needs rows -->
+          <!-- causalab_mini/plan/spec.py:381-393 — class Observe; :494-528 _inline; :560-561 every role needs rows -->
           <p>An <code>observe</code> or a <code>fit</code> gives
           <code>rows</code> as role → dataset ref, and <strong>every declared role
-          needs one</strong>. <code>intervention</code> is optional when the document
-          declares exactly one.</p>
+          needs one</strong>. Both require <code>intervention</code>: a string naming
+          one under <code>interventions</code>, or an intervention object written in
+          place, which is declared under the step's own name. Leaving it out is
+          refused with the step's name and the names it could have used:</p>
+
+          <pre><code class="language-text">step &#x27;score&#x27; runs a forward and names no intervention; say which with `intervention` — declared: [&#x27;das&#x27;] — or write one there in place</code></pre>
 
           <h3 id="saves">saves <a class="anchor" href="#saves" aria-label="Link to this section">#</a></h3>
 
@@ -831,7 +1170,7 @@ weekdays/data: 4 rows
 
           <h3 id="fit">fit <a class="anchor" href="#fit" aria-label="Link to this section">#</a></h3>
 
-          <!-- causalab_mini/plan/spec.py:405-421 — class Fit -->
+          <!-- causalab_mini/plan/spec.py:411-430 — class Fit -->
           <table>
             <thead><tr><th>field</th><th>type</th><th>default</th><th>what it is</th></tr></thead>
             <tbody>
@@ -845,7 +1184,7 @@ weekdays/data: 4 rows
             <tr><td><code>early_stop</code></td><td>object</td><td>required</td><td><code>metric</code>, <code>mode</code> (<code>"max"</code> | <code>"min"</code>, default <code>"max"</code>), <code>patience</code> &gt; 0</td></tr>
             <tr><td><code>eval</code></td><td>object</td><td>required</td><td>the held-out pass: its own <code>rows</code>, and its own <code>saves</code></td></tr>
             <tr><td><code>anneal</code></td><td><code>{gate: object}</code></td><td><code>{}</code></td><td>a gate's temperature: <code>start</code>, <code>end</code>, geometric between</td></tr>
-            <tr><td><code>intervention</code></td><td>string | <code>null</code></td><td><code>null</code></td><td>which experiment it fits</td></tr>
+            <tr><td><code>intervention</code></td><td>string | object</td><td>required</td><td>which experiment it fits: a declared name, or one written in place</td></tr>
             <tr><td><code>saves</code></td><td><code>[object]</code></td><td><code>[]</code></td><td>its own results: <code>train/loss</code>, <code>train/eval</code></td></tr>
             </tbody>
           </table>
@@ -1166,6 +1505,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
   &quot;steps&quot;: {
     &quot;fit&quot;: {
       &quot;kind&quot;: &quot;fit&quot;,
+      &quot;intervention&quot;: &quot;dbm&quot;,
       &quot;rows&quot;: {
         &quot;base&quot;: &quot;weekdays/data#train&quot;,
         &quot;counterfactual&quot;: &quot;weekdays/data#train&quot;
@@ -1224,6 +1564,7 @@ position forms:   exactly one cut: index=int, span=tuple[int, int], last=int, al
     },
     &quot;score&quot;: {
       &quot;kind&quot;: &quot;observe&quot;,
+      &quot;intervention&quot;: &quot;dbm&quot;,
       &quot;rows&quot;: {
         &quot;base&quot;: &quot;weekdays/data#train&quot;,
         &quot;counterfactual&quot;: &quot;weekdays/data#train&quot;

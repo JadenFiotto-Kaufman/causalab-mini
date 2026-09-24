@@ -861,30 +861,30 @@ except AddressError as refusal:
           <details class="listing">
             <summary><code>documents/v2/head_patching.json</code> <span class="what">— the whole document</span></summary>
             <pre><code class="language-json">{
-  "header": {
-    "description": "Head-by-head activation patching: the interchange of patching.json, but of ONE attention head's result at a time, swept over the four heads of layer 0. The site is `attention_premix` \u2014 the output projection's input, which is every head's result side by side \u2014 so this runs on the hooks engine too; `attention_z` is the same tensor held as (heads, head_dim) and gives the same numbers bit for bit on nnterp."
+  &quot;header&quot;: {
+    &quot;description&quot;: &quot;Head-by-head activation patching: the interchange of patching.json, but of ONE attention head&#x27;s result at a time, swept over the four heads of layer 0. The site is `attention_premix` \u2014 the output projection&#x27;s input, which is every head&#x27;s result side by side \u2014 so this runs on the hooks engine too; `attention_z` is the same tensor held as (heads, head_dim) and gives the same numbers bit for bit on nnterp.&quot;
   },
-  "model": {
-    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
-    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
-    "dtype": "fp32"
+  &quot;model&quot;: {
+    &quot;key&quot;: &quot;hf-internal-testing/tiny-random-LlamaForCausalLM&quot;,
+    &quot;revision&quot;: &quot;9fb191250dd56d0ba7ec9785a025ed29c03d5998&quot;,
+    &quot;dtype&quot;: &quot;fp32&quot;
   },
-  "roles": {
-    "base": {
-      "field": "input"
+  &quot;roles&quot;: {
+    &quot;base&quot;: {
+      &quot;field&quot;: &quot;input&quot;
     },
-    "counterfactual": {
-      "field": "counterfactual_inputs[0]"
+    &quot;counterfactual&quot;: {
+      &quot;field&quot;: &quot;counterfactual_inputs[0]&quot;
     }
   },
-  "sites": {
-    "target": {
-      "component": "attention_premix",
-      "layers": [
+  &quot;sites&quot;: {
+    &quot;target&quot;: {
+      &quot;component&quot;: &quot;attention_premix&quot;,
+      &quot;layers&quot;: [
         0
       ],
-      "heads": {
-        "sweep": [
+      &quot;heads&quot;: {
+        &quot;sweep&quot;: [
           [
             0
           ],
@@ -900,74 +900,75 @@ except AddressError as refusal:
         ]
       }
     },
-    "head": {
-      "component": "lm_head"
+    &quot;head&quot;: {
+      &quot;component&quot;: &quot;lm_head&quot;
     }
   },
-  "interventions": {
-    "patching": {
-      "reads": {
-        "v_cf": {
-          "site": "target",
-          "pos": -1,
-          "model": "original",
-          "input": "counterfactual"
+  &quot;interventions&quot;: {
+    &quot;patching&quot;: {
+      &quot;reads&quot;: {
+        &quot;v_cf&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;original&quot;,
+          &quot;input&quot;: &quot;counterfactual&quot;
         },
-        "logits": {
-          "site": "head",
-          "pos": -1,
-          "model": "patched",
-          "input": "base"
+        &quot;logits&quot;: {
+          &quot;site&quot;: &quot;head&quot;,
+          &quot;pos&quot;: -1,
+          &quot;model&quot;: &quot;patched&quot;,
+          &quot;input&quot;: &quot;base&quot;
         }
       },
-      "writes": {
-        "patch": {
-          "site": "target",
-          "pos": -1,
-          "mechanism": "swap",
-          "operand": "v_cf"
+      &quot;writes&quot;: {
+        &quot;patch&quot;: {
+          &quot;site&quot;: &quot;target&quot;,
+          &quot;pos&quot;: -1,
+          &quot;mechanism&quot;: &quot;swap&quot;,
+          &quot;operand&quot;: &quot;v_cf&quot;
         }
       },
-      "models": {
-        "patched": {
-          "input": "base",
-          "writes": [
-            "patch"
+      &quot;models&quot;: {
+        &quot;patched&quot;: {
+          &quot;input&quot;: &quot;base&quot;,
+          &quot;writes&quot;: [
+            &quot;patch&quot;
           ]
         }
       },
-      "metrics": {
-        "iia": {
-          "kind": "match",
-          "of": "logits",
-          "expected": "cf_answer",
-          "token_form": "space_prefixed"
+      &quot;metrics&quot;: {
+        &quot;iia&quot;: {
+          &quot;kind&quot;: &quot;match&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;expected&quot;: &quot;cf_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
         },
-        "logit_diff": {
-          "kind": "logit_diff",
-          "of": "logits",
-          "a": "cf_answer",
-          "b": "base_answer",
-          "token_form": "space_prefixed"
+        &quot;logit_diff&quot;: {
+          &quot;kind&quot;: &quot;logit_diff&quot;,
+          &quot;of&quot;: &quot;logits&quot;,
+          &quot;a&quot;: &quot;cf_answer&quot;,
+          &quot;b&quot;: &quot;base_answer&quot;,
+          &quot;token_form&quot;: &quot;space_prefixed&quot;
         }
       }
     }
   },
-  "steps": {
-    "score": {
-      "kind": "observe",
-      "rows": {
-        "base": "weekdays/train",
-        "counterfactual": "weekdays/train"
+  &quot;steps&quot;: {
+    &quot;score&quot;: {
+      &quot;kind&quot;: &quot;observe&quot;,
+      &quot;intervention&quot;: &quot;patching&quot;,
+      &quot;rows&quot;: {
+        &quot;base&quot;: &quot;weekdays/train&quot;,
+        &quot;counterfactual&quot;: &quot;weekdays/train&quot;
       },
-      "saves": [
+      &quot;saves&quot;: [
         {
-          "value": "iia",
-          "file_path": "iia.json"
+          &quot;value&quot;: &quot;iia&quot;,
+          &quot;file_path&quot;: &quot;iia.json&quot;
         },
         {
-          "value": "logit_diff",
-          "file_path": "logit_diff.json"
+          &quot;value&quot;: &quot;logit_diff&quot;,
+          &quot;file_path&quot;: &quot;logit_diff.json&quot;
         }
       ]
     }
