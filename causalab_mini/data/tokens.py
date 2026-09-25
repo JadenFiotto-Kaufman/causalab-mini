@@ -148,6 +148,8 @@ def token_id(tokenizer: Any, text: Any, token_form: str) -> int:
         return text
     if token_form not in ("space_prefixed", "bare"):
         raise TokenError(f"token_form {token_form!r} is not implemented")
+    if not isinstance(text, str):
+        raise TokenError(f"answer {text!r} is not a string; a token id is scored with token_form 'id'")
     surface = (" " if token_form == "space_prefixed" else "") + text.lstrip()
     ids = tokenizer.encode(surface, add_special_tokens=False)
     if len(ids) != 1:

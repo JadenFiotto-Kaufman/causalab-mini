@@ -104,19 +104,20 @@ def variable_text(row: Row, field: str, name: str) -> str:
     )
 
 
-def column(rows: list[Row], name: str) -> list[str | None]:
-    """A metric's column, off the *base* rows. A row whose value is null or
-    empty is an **excluded measurement** — None here — which is not a zero:
-    the metric is not computed for it, and its row in the table says so. A
-    column no row has at all is a misspelling, and is refused."""
+def column(rows: list[Row], name: str) -> list[str | int | None]:
+    """A metric's column, off the *base* rows: a string, or an integer — a
+    token id. A row whose value is null or empty is an **excluded
+    measurement** — None here — which is not a zero: the metric is not
+    computed for it, and its row in the table says so. A column no row has
+    at all is a misspelling, and is refused."""
     if not any(name in row for row in rows):
         raise DataError(f"no row has a column {name!r}")
-    values: list[str | None] = []
+    values: list[str | int | None] = []
     for index, row in enumerate(rows):
         value = row.get(name)
-        if value is not None and not isinstance(value, str):
-            raise DataError(f"row {index}: column {name!r}: expected a string, got {type(value).__name__}")
-        values.append(value if value and value.strip() else None)
+        if isinstance(value, bool) or not isinstance(value, (str, int, type(None))):
+            raise DataError(f"row {index}: column {name!r}: expected a string or a token id, got {type(value).__name__}")
+        values.append(value if isinstance(value, int) or (value and value.strip()) else None)
     return values
 
 

@@ -146,3 +146,20 @@ def test_an_id_is_the_vocabulary_id_the_column_holds(model):
     for value in ("17", True, -1, len(model.tokenizer)):
         with pytest.raises(tokens.TokenError, match="is not a vocabulary id"):
             tokens.token_id(model.tokenizer, value, "id")
+
+
+def test_a_column_of_ids_scores_what_its_strings_do(data_root, model_engine, model, tmp_path):
+    """The same answers, as the strings the corpus holds and as the ids they
+    are, score the same; an id under a string form is refused."""
+    rows = json.loads((data_root / "weekdays" / "train.json").read_text())
+    for row in rows:
+        row["cf_id"] = tokens.token_id(model.tokenizer, row["cf_answer"], "space_prefixed")
+    (tmp_path / "ids.json").write_text(json.dumps(rows))
+    raw = json.loads((V2 / "patching.json").read_text())
+    raw["data"]["pairs"]["path"] = "ids"
+    raw["steps"]["by_id"] = {"kind": "metric", "metric": "match", "of": "patched.logits", "expected": "pairs.cf_id", "token_form": "id"}
+    executed = model_engine.execute(plan.build_request(raw, tmp_path, model_engine))
+    assert torch.equal(executed.result("by_id"), executed.result("iia"))
+    raw["steps"]["by_id"]["token_form"] = "bare"
+    with pytest.raises(tokens.TokenError, match="is not a string"):
+        plan.build_request(raw, tmp_path, model_engine)
