@@ -393,6 +393,15 @@ def _featurizer_op(
     """One declared featurizer, with its width filled in from the site it
     acts at — `site` is what the document wrote, `label` its name there —
     and its bundle loaded and checked when it names one."""
+    if address.seq_axis is None and site.heads is None:
+        # 786,432 wide per layer on Qwen3.5-27B, and one (key, value) matrix
+        # per head: a featurizer over all of it at once is neither a
+        # direction anyone means nor one that fits
+        raise PlanError(
+            f"featurizer {name!r}: the site {label!r} is a recurrent state, a (key, value) "
+            "matrix per head with no feature axis of its own; a featurizer there acts on "
+            "the heads the site names — give it `heads`"
+        )
     d = engine.width(address)
     if site.heads is not None:
         d = d // engine.heads(address) * len(site.heads)

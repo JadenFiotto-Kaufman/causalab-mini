@@ -113,3 +113,30 @@ def test_the_state_at_a_position_is_the_one_the_forward_hands_on(data_root, hybr
     assert torch.equal(after_prompt[:, 0], by_hand[0].flatten(1))
     # the continuation is gathered flat, a row's steps together, since rows may stop apart
     assert torch.equal(per_step.view(rows, 3, -1), torch.stack([one.flatten(1) for one in by_hand], 1))
+
+
+def test_a_featurizer_on_the_state_names_heads(patch_raw, data_root, hybrid_engine):
+    """The state is a (key, value) matrix per head with no feature axis of its
+    own, so a featurizer there acts on the heads the site names, and one over
+    the whole state is refused where the document is compiled."""
+    patch_raw["featurizers"] = {"rot": {"kind": "subspace", "k": 4}}
+    patch_raw["steps"]["patched"]["interventions"]["writes"]["swap"]["featurizer"] = "rot"
+    with pytest.raises(PlanError, match="give it `heads`"):
+        plan.build_request(patch_raw, data_root, hybrid_engine)
+    patch_raw["sites"]["state"]["heads"] = [0]
+    built = plan.build_request(patch_raw, data_root, hybrid_engine)
+    featurizers = [one for step in built.steps.values() if isinstance(step, plan.Featurizers) for one in step.specs]
+    assert [one.d for one in featurizers if one.name == "rot"] == [32 * 32]
+
+
+def test_a_prompt_tap_and_a_step_tap_in_one_forward_run_in_rank_order(data_root, hybrid_engine):
+    """The prompt frame and the continuation's first step (and `"all"`) act in
+    the same forward, the prefill: the state after the prompt, read at its rank
+    beside a per-head output read at every step, which comes before it."""
+    raw = json.loads(DECODE.read_text())
+    raw["sites"]["z"] = {"component": "linear_attention_z", "layers": 1}
+    raw["steps"]["decode"]["reads"]["z"] = {"site": "z", "pos": {"frame": "generated", "all": True}}
+    raw["steps"]["saves"]["decode.z"] = "z.safetensors"
+    executed = hybrid_engine.execute(plan.build_request(raw, data_root, hybrid_engine))
+    assert executed.result("decode.z").shape[-1] == 8 * 32
+    assert executed.result("decode.after_prompt").shape[-1] == 8 * 32 * 32

@@ -2060,3 +2060,21 @@ globals are bound to the references, then restored — and must decide again
 at dispatch: loading the weights builds new modules, which have not been
 sourced, and a layer sourced on the meta model was running whatever the
 global was bound to when a row first touched it.
+
+### 28.5 The hooks engine never reaches the new components
+
+The hooks engine refuses a hybrid at load, before any component is named:
+its layer-stack translation looks for one child whose class name ends in
+`Attention`, and a Qwen3.5 linear layer has none ("Qwen3_5DecoderLayer: 0
+children have a class name ending in 'Attention'"). That is older than this
+work. So its by-name refusal of a place inside a forward — which would catch
+seven of the eight `linear_attention_*` components — is unreachable on the
+models that have them; `linear_attention_output`, a module boundary, would
+be accepted if a hybrid ever loaded there.
+
+### 28.6 A featurizer on the state names heads
+
+The state has no feature axis of its own: it is a (key, value) matrix per
+head, 786,432 numbers per row per layer on Qwen3.5-27B. A featurizer declared
+at a state site without `heads` is refused at compile time; with `heads` it
+acts on those heads' matrices, flattened, as it would on any per-head site.
