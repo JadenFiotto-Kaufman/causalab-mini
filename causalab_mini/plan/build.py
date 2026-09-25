@@ -377,7 +377,7 @@ def _resolve_sites(places: dict[str, Any], stacking: set[str], engine: Any) -> _
         address = addresses[name][0] if site.stacked else addresses[name]
         if site.units is not None:
             count, take, what = engine.width(address), site.units, "unit"
-        elif address.heads_kind is not None:
+        elif address.heads is not None:
             count, take, what = engine.heads(address), site.heads, "head"
         else:
             continue
@@ -618,7 +618,7 @@ def _check_layouts(forwards: tuple[Forward, ...]) -> None:
                         f"{_layout(read.flat)}: a value lands in a write of its own layout. "
                         "Read and write at the same position, or at two of one form"
                     )
-                if tap.address.key_axis:
+                if tap.address.keys:
                     _check_keys(write, forward, source)
 
 
