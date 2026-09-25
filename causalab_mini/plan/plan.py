@@ -305,6 +305,10 @@ class Metric(Step):
     #: For a read at every layer, the layers its first axis holds: the
     #: metric scores each, and is one row of scores per layer.
     layers: tuple[int, ...] = ()
+    #: kl and js: the second read, scored row for row against `of`.
+    against: str | None = None
+    #: top_k: how many tokens.
+    k: int | None = None
 
 
 @dataclass(frozen=True, kw_only=True)

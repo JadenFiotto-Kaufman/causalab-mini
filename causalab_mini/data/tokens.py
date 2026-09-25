@@ -129,17 +129,26 @@ def same_layout(one: TokenRows, other: TokenRows) -> list[int] | None:
     return [row for row, (a, b) in enumerate(zip(ours, theirs)) if a != b]
 
 
-def token_id(tokenizer: Any, text: str, token_form: str) -> int:
-    """One vocabulary id for an authored answer string.
+def token_id(tokenizer: Any, text: Any, token_form: str) -> int:
+    """One vocabulary id for an authored answer.
 
-    A leading space in the column value is normalized away first, so `" X"` and
-    `"X"` name the same answer and `token_form` alone decides the surface form.
-    A value that is not exactly one token is refused, never scored on its first
-    piece.
+    `space_prefixed` and `bare` spell a string: a leading space in the column
+    value is normalized away first, so `" X"` and `"X"` name the same answer
+    and `token_form` alone decides the surface form. A value that is not
+    exactly one token is refused, never scored on its first piece. `id` takes
+    the column value as the vocabulary id itself, which is the only spelling
+    of a token no string round-trips to.
     """
-    if token_form != "space_prefixed":
+    if token_form == "id":
+        if not isinstance(text, int) or isinstance(text, bool) or not 0 <= text < len(tokenizer):
+            raise TokenError(
+                f"answer {text!r} is not a vocabulary id; under token_form 'id' a metric column "
+                f"holds integers in [0, {len(tokenizer)})"
+            )
+        return text
+    if token_form not in ("space_prefixed", "bare"):
         raise TokenError(f"token_form {token_form!r} is not implemented")
-    surface = " " + text.lstrip()
+    surface = (" " if token_form == "space_prefixed" else "") + text.lstrip()
     ids = tokenizer.encode(surface, add_special_tokens=False)
     if len(ids) != 1:
         raise TokenError(

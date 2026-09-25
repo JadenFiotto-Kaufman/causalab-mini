@@ -1,0 +1,22 @@
+{
+  "header": {
+    "description": "What the model would say at each of two layers: the residual stream at the last token of layers 0 and 1, read through the final norm and head, and the three most likely tokens at each with their probabilities. One read at two layers is one value, so `top_k` lists them layer by layer, a table row per layer and example. Authored for mini. Tiny CPU Llama, so the tokens demonstrate the mechanism and nothing else."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "data": {"prompts": {"path": "weekdays/train"}},
+  "sites": {"resid": {"component": "block_output", "layers": [0, 1]}},
+  "steps": {
+    "lens": {
+      "kind": "forward",
+      "data": "prompts",
+      "field": "input",
+      "reads": {"logits": {"site": "resid", "pos": -1, "view": "logits"}}
+    },
+    "top": {"kind": "metric", "metric": "top_k", "of": "lens.logits", "k": 3},
+    "saves": {"top": "top.json"}
+  }
+}

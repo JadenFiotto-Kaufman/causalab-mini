@@ -112,8 +112,9 @@ def _file(step: Step, save: SaveFile, out: Path) -> Path:
 def _rows(
     save: SaveFile, scores: Any, eligible: tuple[bool, ...], where: dict[str, Any], layer: dict[str, int], labels: dict[str, str]
 ) -> list[dict[str, Any]]:
-    """One table row per example: its number when it was scored, and where."""
-    numbers = iter(scores.tolist())
+    """One table row per example: its number when it was scored, and where.
+    A top_k's value is its list of `[token, probability]` pairs instead."""
+    numbers = iter(scores if isinstance(scores, list) else scores.tolist())
     rows = []
     for index, (example_id, included) in enumerate(zip(save.example_ids, eligible)):
         number = next(numbers) if included else None
@@ -124,7 +125,8 @@ def _rows(
                 **layer,
                 # JSON has no NaN or Infinity: `json.dumps` would emit a bare
                 # `NaN`, which Python reads back and a strict parser refuses.
-                "value": float(number) if number is not None and math.isfinite(number) else None,
+                "value": number if isinstance(number, list)
+                else float(number) if number is not None and math.isfinite(number) else None,
                 "eligible": included,
                 # where the number was read, why it was nowhere, and what
                 # the window it came from actually says — the three the run

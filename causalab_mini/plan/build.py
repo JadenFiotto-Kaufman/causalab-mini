@@ -169,12 +169,26 @@ def _spec_step(
                 "more rows, or more positions per row"
             )
         return Reduce(of=step.of, reduce=step.reduce, k=step.k)
-    rows = table(step.dataset)
+    rows = table(step.dataset or source.input)
     if len(rows) != count:
         raise PlanError(
             f"step {name!r}: its columns are {len(rows)} rows of {step.dataset!r}, and "
             f"{step.of!r} was read over {count}; a metric scores row i against row i"
         )
+    against = getattr(step, "against", None)
+    if against is not None:
+        other = scope[against.partition(".")[0]]
+        assert isinstance(other, Forward)
+        if len(other.input_ids) != count:
+            raise PlanError(
+                f"step {name!r}: {step.of!r} was read over {count} rows and {against!r} over "
+                f"{len(other.input_ids)}; a divergence compares row i with row i"
+            )
+        if _op(other, against).flat:
+            raise PlanError(
+                f"step {name!r}: {against!r} is read flat, one entry per row it found; `against` "
+                "is read at a position every row has"
+            )
     return _metric(name, step.metric, step, rows, tokenizer, step.of, source)
 
 
@@ -194,7 +208,10 @@ def _spec_save(
     step, target = steps[head], scope[head]
     save = SaveFile(file_path=file, value=ref)
     if step.kind == "metric":
-        save = replace(save, example_ids=rows_module.example_ids(table(step.dataset)), produced_by=spec.digest)
+        source = scope[step.of.partition(".")[0]]
+        assert isinstance(source, Forward)
+        key = step.dataset or source.input
+        save = replace(save, example_ids=rows_module.example_ids(table(key)), produced_by=spec.digest)
     scope[head] = replace(target, saves=(*target.saves, save))
 
 
@@ -537,7 +554,7 @@ def _metric(
             f"metric {name!r}: none of these {len(rows)} row(s) has a value in "
             f"{list(spec.columns)}; a metric of nothing has no mean"
         )
-    op = next(op for tap in source.taps for op in tap.reads if of in (op.name, op.stack, op.layered))
+    op = _op(source, of)
     return Metric(
         kind=kind,
         of=of,
@@ -545,7 +562,13 @@ def _metric(
         rows=None if all(keep) else tuple(index for index, one in enumerate(keep) if one),
         flat=op.flat,
         layers=op.layers,
+        against=getattr(spec, "against", None),
+        k=getattr(spec, "k", None),
     )
+
+
+def _op(source: Forward, of: str) -> Any:
+    return next(op for tap in source.taps for op in tap.reads if of in (op.name, op.stack, op.layered))
 
 
 def _ids(spec: Any, base_rows: list[rows_module.Row], keep: tuple[bool, ...], tokenizer: Any) -> tuple[Any, ...]:

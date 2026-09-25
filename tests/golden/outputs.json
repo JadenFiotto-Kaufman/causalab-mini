@@ -57,6 +57,10 @@
   "objective=0.05/iia.json": "b1d4c0fb7709e48b303461272b372229207f2bbb02bf179a872839ac57006dc7",
   "objective=0.05/mask.safetensors": "f13ded6f6f005457ab44d58e2f0037851472aff4ed4a8248e24a9a5ba00ca2a1"
  },
+ "documents/v2/divergence.json": {
+  "js.json": "3912c807917091dc87ade53d59259ffeaf5cca508b034a2052275ced234494a0",
+  "kl.json": "3c36c28bda3b4eecb9a47ca73c677d292d0433c11af7a4e200ea4b8097080562"
+ },
  "documents/v2/entity_mean_ablation.json": {
   "ablated.json": "5d7d10b44a57b526ba61dcd416408193861c0796ac4cd2268e0c7cd7a4c08ab9",
   "clean.json": "307f2eb57f9dd7cea5fef7311625ab433a50edf649c32ec3e260c8b06d8c8cd6",
@@ -171,6 +175,9 @@
   "norm_after.safetensors": "8aa4ca168ad58460d2989db6bb17976649de3daa67f17ff26a61d274cc43c1b8",
   "norm_before.safetensors": "8fde7eae89e3373c9543654faa258ac66388b844afad6f9c3550c51f351c4bbf",
   "norm_steered.safetensors": "5e34a4159e2a0707357e98b7e7c0e619f6dc027dbddb07224c400117f7049d8a"
+ },
+ "documents/v2/top_k.json": {
+  "top.json": "67815a317a8706936bbafa4e4d3cc890499484b5726d002dc52c0d5067fd1c70"
  },
  "documents/v2/two_observes.json": {
   "clean.json": "307f2eb57f9dd7cea5fef7311625ab433a50edf649c32ec3e260c8b06d8c8cd6",

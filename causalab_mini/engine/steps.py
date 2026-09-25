@@ -124,6 +124,8 @@ def named(step: Step) -> set[str]:
     held-out run included."""
     if isinstance(step, Forward):
         return set(step.keep) | _operands(step)
+    if isinstance(step, Metric) and step.against is not None:
+        return {step.of, step.against}
     if isinstance(step, (Metric, Reduce)):
         return {step.of}
     inner = [*step.steps.values()] if isinstance(step, Plan) else []
@@ -149,7 +151,7 @@ def run(engine: Any, step: Step, state: State, name: str = "") -> None:
     elif isinstance(step, Forward):
         call(engine, name, step, state)
     elif isinstance(step, Metric):
-        metric(name, step, state)
+        metric(engine, name, step, state)
     elif isinstance(step, Reduce):
         reduce(name, step, state)
     elif isinstance(step, Fit):
@@ -254,7 +256,7 @@ def _stack_layers(step: Forward, made: dict[str, Any], record: Record) -> None:
             del record[one]
 
 
-def metric(name: str, step: Metric, state: State) -> None:
+def metric(engine: Any, name: str, step: Metric, state: State) -> None:
     """One score per scored row of one read.
 
     A metric's rows are the intersection of two halves: the column half,
@@ -262,21 +264,41 @@ def metric(name: str, step: Metric, state: State) -> None:
     only the run can know. Neither is authoritative alone. When the read's
     step reported where it acted, the metric carries the intersection and
     that record too, so the table it is saved to can say which token each
-    number came from.
+    number came from. A divergence's second read is a third half: a row it
+    could not place is scored by neither.
+
+    A top_k is decoded here, where the tokenizer is, and its result is the
+    `[token, probability]` pairs per row rather than a tensor: it is a
+    readout, and nothing downstream takes it as a number.
     """
     located_rows = state.records[step.of]["rows"]
     eligible = tuple(
         (step.rows is None or row in step.rows) and bool(one) for row, one in enumerate(located_rows)
     )
+    if step.against is not None:
+        eligible = tuple(one and bool(other) for one, other in zip(eligible, state.records[step.against]["rows"]))
     value = state.values[step.of]
+    scores = []
     # a read at every layer is scored layer by layer, a row of scores each
-    scores = [
-        metrics.compute(step.kind, *_measured(name, step, one, eligible, located_rows))
-        for one in (value if step.layers else [value])
-    ]
-    state.publish(name, torch.stack(scores) if step.layers else scores[0])
-    step.results[name] = state.values[name].detach().cpu()
-    if step.of in state.reported:
+    for one in value if step.layers else [value]:
+        logits, ids = _measured(name, step, one, eligible, located_rows)
+        if step.against is not None:
+            ids = (state.values[step.against][[row for row, kept in enumerate(eligible) if kept], 0],)
+        if step.k is not None:
+            if step.k > logits.shape[-1]:
+                raise PlanError(f"metric {name!r}: top {step.k} of a vocabulary of {logits.shape[-1]}")
+            ids = (step.k,)
+        scores.append(metrics.compute(step.kind, logits, ids))
+    if step.k is not None:
+        pairs = [
+            [[[engine.tokenizer.decode(t), p] for t, p in zip(*row)] for row in zip(top.tolist(), probs.tolist())]
+            for probs, top in scores
+        ]
+        step.results[name] = pairs if step.layers else pairs[0]
+    else:
+        state.publish(name, torch.stack(scores) if step.layers else scores[0])
+        step.results[name] = state.values[name].detach().cpu()
+    if step.of in state.reported or step.against in state.reported:
         step.results["eligible"] = {name: eligible}
         step.results["positions"] = {step.of: state.records[step.of]}
 

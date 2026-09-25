@@ -36,9 +36,9 @@ It **imports nothing from causalab**. Only the JSON documents were copied.
 
 ## 2. State as of this handoff
 
-`master`, clean tree, pushed to GitHub (private). **539 tests passing**
+`master`, clean tree, pushed to GitHub (private). **551 tests passing**
 (`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~30 s), `uvx pyright` at 0
-errors. **6,927 lines** across 30 files in `causalab_mini/`.
+errors. **7,083 lines** across 30 files in `causalab_mini/`.
 
 The package is five sub-packages and a short spine, each named for what it is
 allowed to know:
@@ -67,7 +67,7 @@ change to `steps.py`, `ops/`, `plan/` or `address.py`. What it had to supply by
 hand — and what turned out to be free — is FINDINGS §6. It is not wired into
 the CLI: `--engine` is a flag nobody has needed yet.
 
-Documents: **29** in `documents/v2/` and **five** in `documents/real/`, which
+Documents: **31** in `documents/v2/` and **five** in `documents/real/`, which
 pin real checkpoints and are compiled but not run by the suite. Among the v2
 ones, ported from causalab's own corpus: `multi_position_patch.json` (three
 disjoint writes at one site in one call, the bit-for-bit twin of

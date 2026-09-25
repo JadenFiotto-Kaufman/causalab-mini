@@ -187,6 +187,7 @@ def test_token_form_is_load_bearing_on_this_tokenizer_and_inert_on_the_llamas(gp
     scores."""
     bare = gpt2.tokenizer.encode("two", add_special_tokens=False)
     assert tokens.token_id(gpt2.tokenizer, " two", "space_prefixed") not in bare
+    assert tokens.token_id(gpt2.tokenizer, " one", "bare") != tokens.token_id(gpt2.tokenizer, "one", "space_prefixed")
     assert tokens.token_id(model.tokenizer, " Friday", "space_prefixed") == model.tokenizer.encode(
         "Friday", add_special_tokens=False
     )[0]

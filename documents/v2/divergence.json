@@ -1,0 +1,43 @@
+{
+  "header": {
+    "description": "How far a patch moves the whole next-token distribution, not just one answer's logit. `clean` runs the base prompts; `patched` runs them again with the residual stream at the last token of layer 0 swapped in from the counterfactual. `kl` is KL(patched ‖ clean) and `js` the Jensen–Shannon divergence between them, both per row in nats. Authored for mini. Tiny CPU Llama, so the numbers demonstrate the mechanism and nothing else."
+  },
+  "model": {
+    "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
+    "dtype": "fp32"
+  },
+  "data": {"pairs": {"path": "weekdays/train"}},
+  "sites": {
+    "target": {"component": "block_output", "layers": 0},
+    "head": {"component": "lm_head"}
+  },
+  "steps": {
+    "clean": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "input",
+      "reads": {"logits": {"site": "head", "pos": -1}}
+    },
+    "counterfactual": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "counterfactual_inputs[0]",
+      "reads": {"v_cf": {"site": "target", "pos": -1}}
+    },
+    "patched": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "input",
+      "interventions": {
+        "writes": {
+          "patch": {"site": "target", "pos": -1, "mechanism": "swap", "operand": "counterfactual.v_cf"}
+        }
+      },
+      "reads": {"logits": {"site": "head", "pos": -1}}
+    },
+    "kl": {"kind": "metric", "metric": "kl", "of": "patched.logits", "against": "clean.logits"},
+    "js": {"kind": "metric", "metric": "js", "of": "patched.logits", "against": "clean.logits"},
+    "saves": {"kl": "kl.json", "js": "js.json"}
+  }
+}

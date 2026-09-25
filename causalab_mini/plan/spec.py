@@ -415,7 +415,7 @@ class _Metric(Node):
     kind: Literal["metric"]
     #: The read it scores, `<step>.<read>`, at one position per row.
     of: str
-    token_form: Literal["space_prefixed"] = "space_prefixed"
+    token_form: Literal["space_prefixed", "bare", "id"] = "space_prefixed"
 
     @property
     def references(self) -> tuple[str, ...]:
@@ -431,8 +431,9 @@ class _Metric(Node):
 
     @property
     def dataset(self) -> str:
-        """The one dataset the columns are of — `Spec` refuses two."""
-        return self.references[0].partition(".")[0]
+        """The one dataset the columns are of — `Spec` refuses two. A kind
+        with no columns has none, and its rows are its read's."""
+        return self.references[0].partition(".")[0] if self.references else ""
 
 
 class Match(_Metric):
@@ -461,8 +462,28 @@ class TokenProb(_Metric):
     token: str
 
 
+class KL(_Metric):
+    metric: Literal["kl"]
+    #: The second logits read, `<step>.<read>`: KL(of ‖ against), row i of
+    #: one against row i of the other.
+    against: str
+
+
+class JS(_Metric):
+    metric: Literal["js"]
+    against: str
+
+
+class TopK(_Metric):
+    """The k most likely tokens and their probabilities: a readout, so there
+    is no number for a fit to minimize or watch."""
+
+    metric: Literal["top_k"]
+    k: int = Field(default=5, gt=0)
+
+
 Metric = Annotated[
-    Union[Match, LogitDiff, CrossEntropy, TokenLogit, TokenProb], Field(discriminator="metric")
+    Union[Match, LogitDiff, CrossEntropy, TokenLogit, TokenProb, KL, JS, TopK], Field(discriminator="metric")
 ]
 
 
@@ -562,7 +583,7 @@ class Fit(Node):
         """Every declared dataset its body names: one draw indexes them all,
         and its held-out run replaces each."""
         calls = {one.data for _, one in self.steps.items() if isinstance(one, _Call) and isinstance(one.data, str)}
-        return calls | {one.dataset for _, one in self.steps.items() if isinstance(one, _Metric)}
+        return calls | {one.dataset for _, one in self.steps.items() if isinstance(one, _Metric) and one.references}
 
     @model_validator(mode="after")
     def _one_body(self) -> "Fit":
@@ -822,6 +843,12 @@ class Spec(Node):
         return self
 
 
+def _logits(spec: Spec, read: Read) -> bool:
+    """Whether a read is a distribution over the vocabulary: the head's
+    output, or a residual read through it."""
+    return read.view == "logits" or spec.site(read.site)[1].component in ("lm_head", "logits")
+
+
 def _refuse(condition: object, message: str) -> None:
     if not condition:
         raise ValueError(message)
@@ -879,10 +906,23 @@ def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, 
                     f"({sorted(spec.data)}); a dataset written in place on a step has no name to name it by",
                 )
             _refuse(
-                len(datasets) == 1,
+                len(datasets) <= 1,
                 f"{where}: its columns come from {sorted(datasets)}; a metric's columns are one "
                 "dataset's, row i against row i of the read",
             )
+            if isinstance(step, (KL, JS)):
+                other = visible.get(step.against)
+                _refuse(
+                    other is not None and other.kind == "read" and other.scope == fit and _logits(spec, other.node),
+                    f"{where}: `against` is {step.against!r}, which is not a logits read of a step before "
+                    "it in this `steps`, at one layer; a divergence is between two distributions",
+                )
+                assert other is not None
+                _refuse(
+                    other.node.pos.width == 1,
+                    f"{where}: `against` is {step.against!r}, a window of {other.node.pos.width or 'varying'} "
+                    "positions; a divergence compares one position per row",
+                )
             publish(name, "metric", step)
         elif isinstance(step, Fit):
             # inside its body, what it trains is already `<fit>.<name>`
@@ -1144,6 +1184,12 @@ def _fit(spec: Spec, where: str, name: str, fit: Fit, body: dict[str, Ref]) -> N
             term in terms,
             f"{where}: objective names {term!r}, which is neither a metric of its body nor the "
             f"mask of a gate it trains (one of {sorted(terms)})",
+        )
+    readouts = {ref for ref, (kind, node, _) in body.items() if kind == "metric" and node.metric == "top_k"}
+    for term in [term for _, term in fit.objective] + [fit.early_stop.metric]:
+        _refuse(
+            term not in readouts,
+            f"{where}: {term!r} is a top_k, a list of tokens: there is no number to minimize or watch",
         )
     _refuse(
         fit.early_stop.metric in metrics,
