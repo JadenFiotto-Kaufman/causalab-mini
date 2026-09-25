@@ -108,8 +108,11 @@ READ_ONLY = frozenset({"input_ids"})
 def _row(component: str) -> Any:
     """nnterp's row for a component, as its table states it before any model is
     loaded — which is what a document is checked against. `None` for a name
-    only a user's `RenameConfig` knows; a family can move a row's module, never
-    its layout or whether it is one per layer."""
+    only a user's `RenameConfig` knows. A family's row moves the module or the
+    operation, not the layout or whether the place is one per layer, and what
+    `locate` stamps is the loaded model's row either way."""
+    # imported where it is asked, so that a plan, which holds addresses, loads
+    # without nnterp and the torch behind it
     from nnterp.rename_utils import DEFAULT_ADDRESSES, STRUCTURAL_ADDRESSES
 
     accessor = COMPONENTS.get(component, component)
