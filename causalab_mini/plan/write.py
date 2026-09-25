@@ -33,7 +33,7 @@ from typing import Any
 
 from safetensors.torch import save_file
 
-from ..ops.metrics import UNITS
+from ..ops.metrics import SIGNATURES
 from .plan import Metric, Plan, SaveFile, Step, children
 
 
@@ -98,7 +98,7 @@ def _file(step: Step, save: SaveFile, out: Path) -> Path:
     run = step.results.get("eligible", {}).get(save.value)
     eligible = run or tuple(step.rows is None or row in step.rows for row in range(len(save.example_ids)))
     where = step.results.get("positions", {}).get(step.of, {})
-    unit, version = UNITS[step.kind]
+    unit, version = SIGNATURES[step.kind].unit, SIGNATURES[step.kind].version
     labels = {"unit": unit, "estimand_version": version, "produced_by": save.produced_by}
     rows = []
     # a metric of a read at every layer is a row of scores per layer, and a

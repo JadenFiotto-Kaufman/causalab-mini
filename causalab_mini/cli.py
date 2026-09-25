@@ -28,7 +28,7 @@ from .data.tokens import TOKEN_FORMS, TokenError
 from .engine import NNterpEngine
 from .engine.base import EngineError
 from .engine.engines.hooks import HooksEngine
-from .ops import featurizer, intervene, metrics
+from .ops import featurizer, intervene
 from .ops.locate import LocateError
 from .plan import sweep
 from .plan.explain import explain
@@ -149,7 +149,13 @@ def vocab(args: argparse.Namespace) -> dict[str, Any]:
         "token_forms": list(TOKEN_FORMS),
         # `of`, then the further reads, then the columns — the order they are scored in
         "metric_kinds": {
-            kind: {"reads": ["of", *one.reads], "columns": list(one.columns), "params": list(one.params)}
+            kind: {
+                "reads": ["of", *one.reads],
+                "columns": list(one.columns),
+                "params": dict(one.params),
+                "logits": one.logits,
+                "doc": one.doc,
+            }
             for kind, one in METRIC_SIGNATURES.items()
         },
         "position_forms": Where.forms(),
@@ -157,7 +163,7 @@ def vocab(args: argparse.Namespace) -> dict[str, Any]:
         "value stacked in the listed order, layer axis first, and a write writes at each; \"all\" is every layer",
         "saves": "{reference: file}, or a list of references — a listed one, or one mapped to null, "
         "is written as itself: a metric's table to <reference>.json, a tensor to <reference>.safetensors",
-        "units": {kind: {"unit": unit, "estimand_version": version} for kind, (unit, version) in metrics.UNITS.items()},
+        "units": {kind: {"unit": one.unit, "estimand_version": one.version} for kind, one in METRIC_SIGNATURES.items()},
     }
     lines = [f"step kinds:       {', '.join(payload['step_kinds'])}; a reduce is {' or '.join(payload['reductions'])}"]
     lines.append("components:")
@@ -170,9 +176,12 @@ def vocab(args: argparse.Namespace) -> dict[str, Any]:
     lines.append(f"saves:            {payload['saves']}")
     lines.append(f"featurizer kinds: {', '.join(payload['featurizer_kinds'])}")
     lines.append(f"optimizers:       {', '.join(payload['optimizers'])} (betas for the Adams, momentum for sgd and rmsprop)")
-    lines.append("metric kinds:     " + ", ".join(f"{k}({', '.join(v['reads'] + v['columns'] + v['params'])})" for k, v in payload["metric_kinds"].items()))
-    lines.append("                  kl is KL(of ‖ against) and js is symmetric, both in nats; top_k is a list a row, k defaulting to 5;")
-    lines.append(f"                  a read is `<step>.<read>`, a column `<dataset>.<column>`, spelled as a token {' | '.join(payload['token_forms'])}")
+    lines.append("metric kinds:     a read is `<step>.<read>`, a column `<dataset>.<column>`, spelled as a token "
+                 + " | ".join(payload["token_forms"]))
+    for kind, one in payload["metric_kinds"].items():
+        given = one["reads"] + one["columns"] + [f"{k}={v}" for k, v in one["params"].items()]
+        unit = payload["units"][kind]["unit"]
+        lines.append(f"  {kind + '(' + ', '.join(given) + ')':38s} {one['doc']} [{unit}]")
     forms = payload["position_forms"]
     lines.append("position forms:   exactly one cut: "
                  + ", ".join(f"{k}={v}" for k, v in forms["cut"].items()))

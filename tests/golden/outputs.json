@@ -69,7 +69,7 @@
  "documents/v2/faithfulness.json": {
   "js.json": "89cdc6dcba7fd1ec3bdd00378f72f57d0f68e976b33eaac6312db26fd0be18b2",
   "kl.json": "3c36c28bda3b4eecb9a47ca73c677d292d0433c11af7a4e200ea4b8097080562",
-  "soft_accuracy.json": "94277a1b14c95ed10e07b2272bec0fa4e9bb943c46b04b89e1d69c293ad4c44a"
+  "p_answer.json": "2276bda00a812afd521f29cb60322292d1e319a80ce9f261e2025a160ac7867e"
  },
  "documents/v2/generate_probe.json": {
   "index=0/generated.safetensors": "15f3712cfd2e7a1c3ae7da36d0607eb106168f3c281293aa582abda9e7af3f33",
@@ -157,8 +157,8 @@
   "seed=2/logit_diff.json": "785fddf4dfd6d55f844cd32f1258d569e312964becf72808c685fbefb619d3ec"
  },
  "documents/v2/readout.json": {
-  "p_answer.json": "15e607d4c93f521e921f76a3bba74446af4ce7e3e63a1b6f29f6c7bb405b8bd6",
-  "top3.json": "194d6acd59b8a0b3ee5d0808de29383ebe46e826c6e770d9728be7f1b12d3657"
+  "p_answer.json": "6630d49c9a2f15b76e55fa7f097253d11b9288a417f6379fc480b383e92b1d20",
+  "top3.json": "9d1a0af663519191128c7f16ed31d9049c7606934abbdb25b5f82e7e3a0787da"
  },
  "documents/v2/sae_feature_ablation.json": {
   "features=0/latents.safetensors": "27ccb02bde933b332463787b91bfaf89dbb5edcbd9d9e54287b5b40d30f61c8a",

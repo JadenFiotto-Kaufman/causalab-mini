@@ -66,8 +66,8 @@ class State:
     values: dict[str, Any] = field(default_factory=dict)
     #: For a value that still has its rows, whether it came back flat — one
     #: entry per position found, where its record's windows say — or as a
-    #: rectangle, a row per row. Absent for a value with no row axis: a mean,
-    #: a basis, a metric, a read stacked over every layer.
+    #: rectangle, a row per row — a read at several layers, each layer's
+    #: rows. Absent for a value with no rows: a mean, a basis, a metric.
     flat: dict[str, bool] = field(default_factory=dict)
     #: Where each op acted, per row — the whole of a run's `Record`.
     records: Record = field(default_factory=dict)
@@ -225,9 +225,9 @@ def call(engine: Any, name: str, step: Forward, state: State) -> None:
         record.update(_continuation(engine, ready, made, made[name]))
     _stack_layers(step, made, record)
     state.records.update(record)
-    # a read has its own form; a call's own result is a rectangle; a read at
-    # every layer has the layers first, and no rows a later window could take
-    forms = {op.stack or op.name: op.flat for tap in step.taps for op in tap.reads if not op.layered}
+    # a read has its own form, and a read at several layers its layers'; a
+    # call's own result is a rectangle
+    forms = {op.layered or op.stack or op.name: op.flat for tap in step.taps for op in tap.reads}
     for one, whole in made.items():
         if one in state.named:
             state.publish(one, whole, forms.get(one, False if one == name else None))
@@ -284,7 +284,7 @@ def metric(engine: Any, name: str, step: Metric, state: State) -> None:
     value = state.values[step.of]
     # a read at several layers is scored layer by layer, a row of scores each
     scores = [
-        metrics.compute(step.kind, _kept(one, step.flat, keep, state.records[step.of]["rows"]), others, ids, step.params)
+        metrics.compute(step.kind, _kept(one, state.flat[step.of], keep, state.records[step.of]["rows"]), others, ids, step.params)
         for one in (value if step.layers else [value])
     ]
     if metrics.SIGNATURES[step.kind].tokens:
@@ -303,9 +303,11 @@ def metric(engine: Any, name: str, step: Metric, state: State) -> None:
 
 def _decoded(tokenizer: Any, ids: Any, numbers: Any) -> list[list[list[Any]]]:
     """Per row, each `(token id, number)` as `[token, number]`, the token
-    decoded — plain strings and floats, which is what comes home."""
+    decoded and spelled as the run's provenance spells the tokens it
+    addressed, as a quoted string — plain strings and floats, which is what
+    comes home."""
     return [
-        [[tokenizer.decode([token]), number] for token, number in zip(row_ids, row_numbers)]
+        [[repr(tokenizer.decode([token])), number] for token, number in zip(row_ids, row_numbers)]
         for row_ids, row_numbers in zip(ids.tolist(), numbers.tolist())
     ]
 

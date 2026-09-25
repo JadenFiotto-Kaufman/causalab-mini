@@ -102,7 +102,8 @@ def _lines(step: Step, name: str, depth: int) -> list[str]:
                 )
     elif isinstance(step, Metric):
         rows = "" if step.rows is None else f" rows={list(step.rows)}"
-        out.append(f"{pad}{name}: metric {step.kind}({step.of}){rows}{tail}")
+        given = [*(step.of, *step.reads), *(f"{k}={v}" for k, v in step.params.items())]
+        out.append(f"{pad}{name}: metric {step.kind}({', '.join(given)}){rows}{tail}")
     elif isinstance(step, Reduce):
         out.append(f"{pad}{name}: reduce {step.reduce}{'' if step.k is None else step.k}({step.of}){tail}")
     return out

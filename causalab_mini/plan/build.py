@@ -179,7 +179,7 @@ def _spec_step(
                 f"step {name!r}: {step.of!r} was read over {count} rows and {other!r} over "
                 f"{len(against.input_ids)}; a metric scores row i of one against row i of the other"
             )
-    rows = table(step.dataset or source.input)
+    rows = _scored_rows(step, scope, table)
     if len(rows) != count:
         raise PlanError(
             f"step {name!r}: its columns are {len(rows)} rows of {step.dataset!r}, and "
@@ -204,11 +204,17 @@ def _spec_save(
     step, target = steps[head], scope[head]
     save = SaveFile(file_path=file, value=ref)
     if step.kind == "metric":
-        source = scope[step.of.partition(".")[0]]
-        assert isinstance(source, Forward)
-        rows = table(step.dataset or source.input)
+        rows = _scored_rows(step, scope, table)
         save = replace(save, example_ids=rows_module.example_ids(rows), produced_by=spec.digest)
     scope[head] = replace(target, saves=(*target.saves, save))
+
+
+def _scored_rows(step: Any, scope: dict[str, Step], table: Callable[[str], list[rows_module.Row]]) -> list[rows_module.Row]:
+    """The rows a metric scores: its columns' dataset's, or — for a kind
+    that takes no column — the rows its read was taken over."""
+    source = scope[step.of.partition(".")[0]]
+    assert isinstance(source, Forward)
+    return table(step.dataset or source.input)
 
 
 def _spec_fit(spec: Spec, name: str, fit: Any, table: Any, sites: _Sites, tokenizer: Any) -> Fit:
@@ -551,14 +557,19 @@ def _metric(
             f"{list(spec.columns)}; a metric of nothing has no mean"
         )
     op = next(op for tap in source.taps for op in tap.reads if of in (op.name, op.stack, op.layered))
+    params = {one: getattr(spec, one) for one in metrics_module.SIGNATURES[kind].params}
+    for one, value in params.items():
+        if value > len(tokenizer):
+            raise PlanError(
+                f"metric {name!r}: {one}={value} is more tokens than this {len(tokenizer)}-token vocabulary has"
+            )
     return Metric(
         kind=kind,
         of=of,
         reads=tuple(spec.inputs),
-        params={one: getattr(spec, one) for one in metrics_module.SIGNATURES[kind].params},
+        params=params,
         ids=_ids(spec, rows, keep, tokenizer),
         rows=None if all(keep) else tuple(index for index, one in enumerate(keep) if one),
-        flat=op.flat,
         layers=op.layers,
     )
 

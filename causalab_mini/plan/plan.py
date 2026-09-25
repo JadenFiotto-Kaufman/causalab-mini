@@ -304,9 +304,6 @@ class Metric(Step):
     #: a NaN is still a bug rather than a convention. The run intersects it
     #: with the rows it could place the read at.
     rows: tuple[int, ...] | None = None
-    #: Whether the read came back flat — one entry per row it *found* —
-    #: rather than as a rectangle. Known from the read's form, here.
-    flat: bool = False
     #: For a read at every layer, the layers its first axis holds: the
     #: metric scores each, and is one row of scores per layer.
     layers: tuple[int, ...] = ()

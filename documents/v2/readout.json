@@ -18,9 +18,9 @@
     "top3": {"kind": "metric", "metric": "top_k", "of": "clean.logits", "k": 3},
     "p_answer": {
       "kind": "metric",
-      "metric": "soft_accuracy",
+      "metric": "token_prob",
       "of": "clean.logits",
-      "expected": "prompts.base_answer",
+      "token": "prompts.base_answer",
       "token_form": "bare"
     },
     "saves": ["top3", "p_answer"]

@@ -44,9 +44,14 @@ def test_vocab_is_the_tables_not_a_description_of_them(capsys):
     assert out["reductions"] == ["mean", "pca"]
     assert set(out["components"]) == set(address.describe())
     assert out["mechanisms"] == sorted(intervene.MECHANISMS)
-    assert out["metric_kinds"]["logit_diff"] == {"reads": ["of"], "columns": ["a", "b"], "params": []}
-    assert out["metric_kinds"]["kl"] == {"reads": ["of", "against"], "columns": [], "params": []}
-    assert out["metric_kinds"]["top_k"]["params"] == ["k"]
+    from causalab_mini.ops.metrics import SIGNATURES
+
+    assert set(out["metric_kinds"]) == set(SIGNATURES)
+    assert out["metric_kinds"]["logit_diff"]["reads"] == ["of"] and out["metric_kinds"]["logit_diff"]["columns"] == ["a", "b"]
+    assert out["metric_kinds"]["kl"]["reads"] == ["of", "against"]
+    assert out["metric_kinds"]["cosine"]["logits"] is False
+    assert out["metric_kinds"]["top_k"]["params"] == {"k": 5}
+    assert out["metric_kinds"]["kl"]["doc"] == SIGNATURES["kl"].doc
     assert out["token_forms"] == ["space_prefixed", "bare", "id"]
     assert out["components"]["attention_query"]["accessor"] == "attention_queries"
     assert out["components"]["block_output"]["width"] == "hidden_size"

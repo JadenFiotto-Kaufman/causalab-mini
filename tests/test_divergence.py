@@ -1,7 +1,7 @@
 """Metrics of a distribution against a distribution, and of the mass on one token.
 
-`kl` and `js` are the first kinds that take a second read, `against`; what
-they take is their row in `ops.metrics.SIGNATURES`, which the document's
+`kl`, `js` and `cosine` take a second read, `against`; what they take is
+their row in `ops.metrics.SIGNATURES`, which the document's
 resolver, the compiler and the run all read — so these tests are also the
 test that a two-read metric needed no plumbing of its own.
 """
@@ -59,11 +59,48 @@ def test_the_divergences_are_the_formulas(faith, data_root, model_engine):
     assert torch.allclose(executed.result("js"), js, atol=1e-6)
 
 
-def test_soft_accuracy_is_the_probability_of_the_expected_token(faith, data_root, model_engine):
-    faith["steps"]["p"] = {"kind": "metric", "metric": "token_prob", "of": "patched.logits", "token": "pairs.cf_answer"}
-    faith["steps"]["saves"] = ["soft_accuracy", "p"]
+def test_a_token_that_gets_no_mass_contributes_nothing():
+    """0 · log 0 is 0 by the limit: a logit of −inf — a masked vocabulary,
+    a write that forbids a token — in one read or in both is a finite
+    divergence, not NaN."""
+    from causalab_mini.ops import metrics
+
+    p = torch.tensor([[0.5, -1.0, 2.0, 0.0]])
+    q = torch.tensor([[0.1, 0.3, -0.7, 1.2]])
+    masked, both = p.clone(), q.clone()
+    masked[0, 1] = -math.inf
+    both[0, 1] = -math.inf
+    for one, other in ((masked, q), (masked, both)):
+        assert torch.isfinite(metrics.kl(one, other)).all() and torch.isfinite(metrics.js(one, other)).all()
+    # mass where `against` has none is an infinite KL, and still a finite JS
+    assert metrics.kl(q, both).item() == math.inf and torch.isfinite(metrics.js(q, both)).all()
+    assert torch.equal(metrics.kl(masked, masked), torch.zeros(1))
+    # where `of` gives none of its mass, the term drops out: KL of the mask is
+    # KL over the remaining tokens
+    kept = [0, 2, 3]
+    expected = metrics.kl(masked[:, kept], both[:, kept])
+    assert torch.allclose(metrics.kl(masked, both), expected, atol=1e-6)
+
+
+def test_a_cosine_is_one_row_of_the_table(faith, data_root, model_engine):
+    """The extension point, proved: `cosine` is a function and a row. Its
+    reads need not be logits — two layers' residual streams, laid out alike
+    — and it is the formula, with a read against itself 1."""
+    faith["sites"]["late"] = {"component": "block_output", "layers": 1}
+    faith["steps"]["clean"]["reads"].update(
+        early={"site": "target", "pos": -1}, late={"site": "late", "pos": -1}
+    )
+    faith["steps"]["angle"] = {"kind": "metric", "metric": "cosine", "of": "clean.early", "against": "clean.late"}
+    faith["steps"]["self"] = {"kind": "metric", "metric": "cosine", "of": "clean.early", "against": "clean.early"}
+    faith["steps"]["saves"] = ["angle", "self", "clean.early", "clean.late"]
     executed = _run(faith, data_root, model_engine)
-    assert torch.equal(executed.result("soft_accuracy"), executed.result("p"))
+    early, late = executed.result("clean.early")[:, 0], executed.result("clean.late")[:, 0]
+    assert torch.allclose(executed.result("angle"), torch.nn.functional.cosine_similarity(early, late, dim=-1))
+    assert torch.allclose(executed.result("self"), torch.ones(4))
+
+    faith["steps"]["angle"]["against"] = "clean.logits"
+    with pytest.raises(ValidationError, match="are laid out differently"):
+        Spec.model_validate(faith)
 
 
 def test_the_two_reads_of_a_divergence_are_over_the_same_rows(faith, data_root, model_engine):

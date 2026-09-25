@@ -43,7 +43,8 @@ def test_top_k_is_k_decoded_tokens_a_row_with_their_probabilities(readout, data_
     logits = _run(readout, data_root, model_engine).result("clean.logits")[:, 0]
     top = logits.float().softmax(-1).max(-1)
     assert [row[0][1] for row in rows] == top.values.tolist()
-    assert [row[0][0] for row in rows] == [model_engine.tokenizer.decode([one]) for one in top.indices.tolist()]
+    # spelled as provenance spells the tokens a run addressed
+    assert [row[0][0] for row in rows] == [repr(model_engine.tokenizer.decode([one])) for one in top.indices.tolist()]
 
     executed.write(tmp_path)
     table = json.loads((tmp_path / "top3.json").read_text())
@@ -51,12 +52,42 @@ def test_top_k_is_k_decoded_tokens_a_row_with_their_probabilities(readout, data_
     assert {one["unit"] for one in table} == {"[token, probability] list"}
 
 
-def test_a_list_metric_is_not_something_to_minimize(readout):
+@pytest.mark.parametrize(
+    "edit, message",
+    [
+        (lambda fit: fit.update(objective=[[1.0, "top"]]), "objective names 'top', a metric whose value is a list per row; a list cannot be minimized"),
+        (lambda fit: fit["early_stop"].update(metric="top"), "early_stop watches 'top', a metric whose value is a list per row; a list cannot be watched"),
+    ],
+    ids=["objective", "early stop"],
+)
+def test_a_list_metric_is_not_something_to_minimize_or_watch(edit, message):
     das = json.loads((READOUT.parent / "das.json").read_text())
     das["steps"]["fit"]["steps"]["top"] = {"kind": "metric", "metric": "top_k", "of": "patched.logits"}
-    das["steps"]["fit"]["objective"] = [[1.0, "top"]]
-    with pytest.raises(ValidationError, match="objective names 'top'"):
+    edit(das["steps"]["fit"])
+    with pytest.raises(ValidationError, match=message):
         Spec.model_validate(das)
+
+
+@pytest.mark.parametrize("k", [True, "3", 0])
+def test_k_is_a_strict_positive_integer(readout, k):
+    readout["steps"]["top3"]["k"] = k
+    with pytest.raises(ValidationError, match="k"):
+        Spec.model_validate(readout)
+
+
+def test_k_is_no_more_tokens_than_the_vocabulary_has(readout, data_root, model_engine):
+    readout["steps"]["top3"]["k"] = 10**6
+    with pytest.raises(plan.PlanError, match=r"metric 'top3': k=1000000 is more tokens than this 32000-token vocabulary"):
+        plan.build_request(readout, data_root, model_engine)
+
+
+def test_explain_prints_every_read_and_number_a_metric_takes(readout, data_root, model_engine):
+    from causalab_mini.plan.explain import explain
+
+    readout["steps"]["kl"] = {"kind": "metric", "metric": "kl", "of": "clean.logits", "against": "clean.logits"}
+    text = explain(plan.build_request(readout, data_root, model_engine))
+    assert "metric top_k(clean.logits, k=3)" in text
+    assert "metric kl(clean.logits, clean.logits)" in text
 
 
 def test_an_id_is_scored_as_the_token_it_is(readout, data_root, model_engine, tmp_path):
@@ -68,8 +99,8 @@ def test_an_id_is_scored_as_the_token_it_is(readout, data_root, model_engine, tm
     (root / "weekdays").mkdir(parents=True)
     (root / "weekdays" / "train.json").write_text(json.dumps([dict(row, answer_id=one) for row, one in zip(rows, ids)]))
     readout["steps"]["p_answer"].update(token_form="space_prefixed")
-    readout["steps"]["by_id"] = {"kind": "metric", "metric": "soft_accuracy", "of": "clean.logits",
-                                 "expected": "prompts.answer_id", "token_form": "id"}
+    readout["steps"]["by_id"] = {"kind": "metric", "metric": "token_prob", "of": "clean.logits",
+                                 "token": "prompts.answer_id", "token_form": "id"}
     readout["steps"]["saves"] = ["p_answer", "by_id"]
     executed = _run(readout, root, model_engine)
     assert torch.equal(executed.result("p_answer"), executed.result("by_id"))

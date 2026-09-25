@@ -44,11 +44,24 @@ import functools
 import hashlib
 import json
 import re
-from typing import Annotated, Any, Iterator, Literal, NamedTuple, Union
+from typing import TYPE_CHECKING, Annotated, Any, Iterator, Literal, NamedTuple, Union, cast
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Discriminator, Field, NonNegativeInt, StringConstraints, Tag, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Discriminator,
+    Field,
+    NonNegativeInt,
+    StrictInt,
+    StringConstraints,
+    Tag,
+    create_model,
+    model_validator,
+)
 
 from .. import address
+from ..data.tokens import TokenForm
 from ..ops.metrics import SIGNATURES as METRIC_SIGNATURES
 from ..shapes import Where
 from . import sweep as sweep_module
@@ -418,7 +431,7 @@ class _Metric(Node):
     of: str
     #: How each column's value is spelled as a token: after a space, bare,
     #: or the vocabulary id itself.
-    token_form: Literal["space_prefixed", "bare", "id"] = "space_prefixed"
+    token_form: TokenForm = "space_prefixed"
 
     @property
     def inputs(self) -> tuple[str, ...]:
@@ -444,66 +457,26 @@ class _Metric(Node):
         return self.references[0].partition(".")[0] if self.references else None
 
 
-class Match(_Metric):
-    metric: Literal["match"]
-    expected: str
+def _metric_model(kind: str, one: Any) -> type[_Metric]:
+    """The document model of one metric kind, made from its row: `metric`
+    names the kind, each read and each column is a string, each number a
+    strict positive integer with the row's default. There is no class per
+    kind to keep beside the table — a row is enough for the document to
+    validate the kind, and the schema to describe it."""
+    fields: dict[str, Any] = {"metric": (cast(Any, Literal)[kind], ...)}
+    fields |= {name: (str, ...) for name in (*one.reads, *one.columns)}
+    fields |= {name: (Annotated[StrictInt, Field(gt=0)], default) for name, default in one.params.items()}
+    name = "".join(part.title() for part in kind.split("_"))
+    return create_model(name, __base__=_Metric, __doc__=one.doc, **fields)
 
 
-class LogitDiff(_Metric):
-    metric: Literal["logit_diff"]
-    a: str
-    b: str
+#: One model per kind, in the table's order.
+METRICS = {kind: _metric_model(kind, one) for kind, one in METRIC_SIGNATURES.items()}
 
-
-class CrossEntropy(_Metric):
-    metric: Literal["cross_entropy"]
-    target: str
-
-
-class TokenLogit(_Metric):
-    metric: Literal["token_logit"]
-    token: str
-
-
-class TokenProb(_Metric):
-    metric: Literal["token_prob"]
-    token: str
-
-
-class SoftAccuracy(_Metric):
-    metric: Literal["soft_accuracy"]
-    expected: str
-
-
-class TopK(_Metric):
-    """The `k` most likely tokens per row, decoded, each with its
-    probability: a list per row, not one number."""
-
-    metric: Literal["top_k"]
-    k: int = Field(default=5, gt=0)
-
-
-class KL(_Metric):
-    """KL(of ‖ against), in nats: the divergence of the distribution `of`
-    predicts from the one `against` does, weighted by `of`'s."""
-
-    metric: Literal["kl"]
-    #: The second read, `<step>.<read>`: the reference distribution.
-    against: str
-
-
-class JS(_Metric):
-    """The Jensen–Shannon divergence of `of` and `against`, in nats —
-    symmetric, and at most log 2."""
-
-    metric: Literal["js"]
-    against: str
-
-
-Metric = Annotated[
-    Union[Match, LogitDiff, CrossEntropy, TokenLogit, TokenProb, SoftAccuracy, TopK, KL, JS],
-    Field(discriminator="metric"),
-]
+if TYPE_CHECKING:
+    Metric = _Metric
+else:
+    Metric = Annotated[Union[tuple(METRICS.values())], Field(discriminator="metric")]
 
 
 class Reduce(Node):
@@ -899,12 +872,15 @@ def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, 
             publish(name, step.reduce, found.node)
         elif isinstance(step, _Metric):
             # every read the kind takes — `of`, and any its signature adds — is
-            # a read before it, of one position a row, and logits to score
-            fields = ("of", *METRIC_SIGNATURES[getattr(step, "metric")].reads)
+            # a read before it, of one position a row; logits where the kind
+            # scores distributions, and otherwise all laid out alike
+            signature = METRIC_SIGNATURES[getattr(step, "metric")]
+            fields = ("of", *signature.reads)
+            layouts = set()
             for field, ref in zip(fields, (step.of, *step.inputs)):
                 found = _of(where, field, ref, visible, fit)
                 _refuse(
-                    found.kind == "read" or (field == "of" and not step.inputs),
+                    found.kind == "read" or not signature.reads,
                     f"{where}: {ref!r} is read at several layers; a metric scores one such read "
                     "layer by layer, and scores it against nothing",
                 )
@@ -913,11 +889,18 @@ def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, 
                     f"{where} scores {ref!r}, a window of {found.node.pos.width or 'varying'} "
                     "positions; a metric scores one position per row",
                 )
+                place = spec.site(found.node.site)[1]
                 _refuse(
-                    found.node.view == "logits" or spec.site(found.node.site)[1].component in ("lm_head", "logits"),
+                    not signature.logits or found.node.view == "logits" or place.component in ("lm_head", "logits"),
                     f"{where}: `{field}` is {ref!r}, which is not logits — a read of `lm_head` or "
-                    "`logits`, or one viewed as logits; a metric scores a distribution over tokens",
+                    f"`logits`, or one viewed as logits; {getattr(step, 'metric')!r} scores a distribution over tokens",
                 )
+                layouts.add((place.component, place.heads, place.units, found.node.view, found.node.featurizer))
+            _refuse(
+                signature.logits or len(layouts) == 1,
+                f"{where}: {' and '.join((step.of, *step.inputs))} are laid out differently — component, "
+                "heads, units, view and featurizer; a metric of two reads compares them position by position",
+            )
             datasets = {one.partition(".")[0] for one in step.references}
             for one in step.references:
                 _refuse(
@@ -1203,12 +1186,23 @@ def _fit(spec: Spec, where: str, name: str, fit: Fit, body: dict[str, Ref]) -> N
         f"temperature (those are {sorted(gates)})",
     )
     terms = metrics | {f"{gate}.mask" for gate in gates}
+    listed = {ref for ref, (kind, _, _) in body.items() if kind == "metric"} - metrics
     for _, term in fit.objective:
+        _refuse(
+            term not in listed,
+            f"{where}: objective names {term!r}, a metric whose value is a list per row; a list "
+            "cannot be minimized",
+        )
         _refuse(
             term in terms,
             f"{where}: objective names {term!r}, which is neither a metric of its body nor the "
             f"mask of a gate it trains (one of {sorted(terms)})",
         )
+    _refuse(
+        fit.early_stop.metric not in listed,
+        f"{where}: early_stop watches {fit.early_stop.metric!r}, a metric whose value is a list "
+        "per row; a list cannot be watched",
+    )
     _refuse(
         fit.early_stop.metric in metrics,
         f"{where}: early_stop watches {fit.early_stop.metric!r}, which is not a metric of its "

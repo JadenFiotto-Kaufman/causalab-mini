@@ -16,7 +16,7 @@ refuse when the answer is no, is their business.
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any
+from typing import Any, Literal, get_args
 
 from ..ops import locate
 from ..shapes import TokenRows
@@ -131,7 +131,8 @@ def same_layout(one: TokenRows, other: TokenRows) -> list[int] | None:
 
 #: How a column's value is spelled as a token: after a space, as it stands
 #: in running text; bare, as the first word of a text; or as the id itself.
-TOKEN_FORMS = ("space_prefixed", "bare", "id")
+TokenForm = Literal["space_prefixed", "bare", "id"]
+TOKEN_FORMS: tuple[str, ...] = get_args(TokenForm)
 
 
 def token_id(tokenizer: Any, text: Any, token_form: str) -> int:

@@ -1,6 +1,6 @@
 {
   "header": {
-    "description": "How much an interchange moves the whole prediction, not one logit: the patched run's next-token distribution scored against the clean run's on the same prompts. `kl` is KL(patched ‖ clean), in nats, weighted by where the patched model puts its mass; `js` is the symmetric Jensen–Shannon divergence, at most log 2. `soft_accuracy` is the probability the patched run puts on the counterfactual answer — `match` without the argmax."
+    "description": "How much an interchange moves the whole prediction, not one logit: the patched run's next-token distribution scored against the clean run's on the same prompts. `kl` is KL(patched ‖ clean), in nats, weighted by where the patched model puts its mass; `js` is the symmetric Jensen–Shannon divergence, at most log 2. `p_answer` is the probability the patched run puts on the counterfactual answer — the soft accuracy, `match` without the argmax."
   },
   "model": {
     "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
@@ -33,7 +33,7 @@
     },
     "kl": {"kind": "metric", "metric": "kl", "of": "patched.logits", "against": "clean.logits"},
     "js": {"kind": "metric", "metric": "js", "of": "patched.logits", "against": "clean.logits"},
-    "soft_accuracy": {"kind": "metric", "metric": "soft_accuracy", "of": "patched.logits", "expected": "pairs.cf_answer"},
-    "saves": ["kl", "js", "soft_accuracy"]
+    "p_answer": {"kind": "metric", "metric": "token_prob", "of": "patched.logits", "token": "pairs.cf_answer"},
+    "saves": ["kl", "js", "p_answer"]
   }
 }
