@@ -57,6 +57,16 @@
   "objective=0.05/iia.json": "b1d4c0fb7709e48b303461272b372229207f2bbb02bf179a872839ac57006dc7",
   "objective=0.05/mask.safetensors": "f13ded6f6f005457ab44d58e2f0037851472aff4ed4a8248e24a9a5ba00ca2a1"
  },
+ "documents/v2/deltanet_state_decode.json": {
+  "after_prompt.safetensors": "bfd682d5c77aea31731e7a5c0506c515bc40b6ee5172893cae1f8b302afd7b8e",
+  "generated.safetensors": "8e71f6c82ab8ea0cb4c54e36a74aa4cc282007eb25cc91b87e6f24d3aa1a2331",
+  "per_step.safetensors": "a91881240f3a59b722fc745d6dc1ca2f9a7f20b2c8570b79a6ad9e881ae5d49f"
+ },
+ "documents/v2/deltanet_state_patch.json": {
+  "moved.json": "6f2e05653b122bed265d2914cae4fd530a88ce91a9543bfe3c4c9daa3d6f9f17",
+  "s_cf.safetensors": "8645a26693546337bafb8a19d2d3cff3d987c16bbdb5d8b5d8f12bd1af849721",
+  "unmoved.json": "ed4ffc888e15ef9039c1ed1daf3b5ad5d593d3cd63a6985593c87f8b1baac865"
+ },
  "documents/v2/entity_mean_ablation.json": {
   "ablated.json": "5d7d10b44a57b526ba61dcd416408193861c0796ac4cd2268e0c7cd7a4c08ab9",
   "clean.json": "307f2eb57f9dd7cea5fef7311625ab433a50edf649c32ec3e260c8b06d8c8cd6",

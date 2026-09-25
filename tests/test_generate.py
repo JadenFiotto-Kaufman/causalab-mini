@@ -269,3 +269,25 @@ def test_a_tap_in_the_continuation_frame_reports_where_it_was(
     executed.write(tmp_path)
     row = json.loads((tmp_path / "p_answer.json").read_text())[0]
     assert row["positions"] == [2] and row["reason"] == ""
+
+
+def test_a_prompt_tap_and_a_first_step_tap_run_in_rank_order(probe_raw, data_root, model_engine):
+    """The prompt frame and the continuation's step 0 act in the same forward,
+    the prefill, so their taps go in by rank whatever their frame: a read of
+    the block's output after the prompt beside a read of the MLP's output,
+    which comes before it, at step 0. Ordered by frame first, nnsight had
+    already run past the MLP."""
+    raw = json.loads(json.dumps(probe_raw))
+    raw["sites"] = {"bo": {"component": "block_output", "layers": 0}, "mo": {"component": "mlp_output", "layers": 0}}
+    step = raw["steps"]["patched"]
+    step.pop("interventions")
+    step["reads"] = {"bo": {"site": "bo", "pos": -1}, "mo": {"site": "mo", "pos": {"frame": "generated", "index": 0}}}
+    raw["steps"] = {"patched": step, "saves": {"patched.bo": "bo.safetensors", "patched.mo": "mo.safetensors"}}
+    built = plan.build_request(raw, data_root, model_engine)
+    assert [(t.address.component, t.step) for t in of_kind(built, plan.Forward)[0].taps] == [
+        ("mlp_output", 0), ("block_output", None)
+    ]
+    executed = model_engine.execute(built)
+    # the prompt's last position is the one the prefill's step-0 tap acts at
+    bo, mo = executed.result("patched.bo"), executed.result("patched.mo")
+    assert bo.shape == mo.shape and not torch.equal(bo, mo)

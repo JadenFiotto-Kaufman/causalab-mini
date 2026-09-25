@@ -1,0 +1,55 @@
+{
+  "header": {
+    "description": "Authored for mini. A Gated DeltaNet layer carries a state, not a stream: a (key, value) matrix per head, with no sequence axis, which is the state after the last token the forward saw. Here the state layer 0 hands on after the counterfactual prompt is swapped in for the one it hands on after the base prompt, and the model then decodes two tokens. The state after the last prompt token is read by nothing in the prompt's own forward, so the prediction there does not move (`unmoved` is exactly 0); the first decode step reads it, so the prediction after that does (`moved`). The site is an ordinary one and the position is the ordinary {'index': -1}: the state is a place with a position, the state after token t."
+  },
+  "model": {
+    "key": "yujiepan/qwen3.5-tiny-random",
+    "revision": "3a13bbea23b6df303d83c6127b4a40f1260598d5",
+    "dtype": "fp32"
+  },
+  "data": {"pairs": {"path": "weekdays/train"}},
+  "sites": {
+    "state": {"component": "linear_attention_state", "layers": 0},
+    "head": {"component": "logits"}
+  },
+  "steps": {
+    "counterfactual": {
+      "kind": "forward",
+      "data": "pairs",
+      "field": "counterfactual_inputs[0]",
+      "reads": {"s_cf": {"site": "state", "pos": -1}}
+    },
+    "clean": {
+      "kind": "generate",
+      "data": "pairs",
+      "field": "input",
+      "max_new_tokens": 2,
+      "min_new_tokens": 2,
+      "do_sample": false,
+      "reads": {
+        "first": {"site": "head", "pos": {"frame": "generated", "index": 0}},
+        "next": {"site": "head", "pos": {"frame": "generated", "index": 1}}
+      }
+    },
+    "patched": {
+      "kind": "generate",
+      "data": "pairs",
+      "field": "input",
+      "max_new_tokens": 2,
+      "min_new_tokens": 2,
+      "do_sample": false,
+      "interventions": {
+        "writes": {
+          "swap": {"site": "state", "pos": -1, "mechanism": "swap", "operand": "counterfactual.s_cf"}
+        }
+      },
+      "reads": {
+        "first": {"site": "head", "pos": {"frame": "generated", "index": 0}},
+        "next": {"site": "head", "pos": {"frame": "generated", "index": 1}}
+      }
+    },
+    "unmoved": {"kind": "metric", "metric": "kl", "of": "patched.first", "against": "clean.first"},
+    "moved": {"kind": "metric", "metric": "kl", "of": "patched.next", "against": "clean.next"},
+    "saves": {"unmoved": "unmoved.json", "moved": "moved.json", "counterfactual.s_cf": "s_cf.safetensors"}
+  }
+}

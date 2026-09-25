@@ -61,7 +61,10 @@ def test_the_interior_is_nnterps_row_for_the_interface_call(model_engine, model)
     assert (located.path, located.io, located.inside) == ("layers.0.self_attn", "inputs", True)
     assert located.seq_axis == 2
     # It is still pure data, and it is still what the document said.
-    assert located == Address("attention_query", 0, module="self_attn", io="inputs", rank=(0, 13), inside=True)
+    assert located == Address(
+        "attention_query", 0, module="self_attn", io="inputs", rank=(0, 13), inside=True,
+        seq_axis=2, heads="num_heads",
+    )
     row = model.internals["attention_queries"].address
     assert row.op == ("attention_interface_1",) and row.select.steps == (0, 1)
 

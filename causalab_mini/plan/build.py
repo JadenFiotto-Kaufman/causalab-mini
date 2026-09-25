@@ -377,7 +377,7 @@ def _resolve_sites(places: dict[str, Any], stacking: set[str], engine: Any) -> _
         address = addresses[name][0] if site.stacked else addresses[name]
         if site.units is not None:
             count, take, what = engine.width(address), site.units, "unit"
-        elif address.heads_kind is not None:
+        elif address.heads is not None:
             count, take, what = engine.heads(address), site.heads, "head"
         else:
             continue
@@ -393,6 +393,15 @@ def _featurizer_op(
     """One declared featurizer, with its width filled in from the site it
     acts at — `site` is what the document wrote, `label` its name there —
     and its bundle loaded and checked when it names one."""
+    if address.seq_axis is None and site.heads is None:
+        # 786,432 wide per layer on Qwen3.5-27B, and one (key, value) matrix
+        # per head: a featurizer over all of it at once is neither a
+        # direction anyone means nor one that fits
+        raise PlanError(
+            f"featurizer {name!r}: the site {label!r} is a recurrent state, a (key, value) "
+            "matrix per head with no feature axis of its own; a featurizer there acts on "
+            "the heads the site names — give it `heads`"
+        )
     d = engine.width(address)
     if site.heads is not None:
         d = d // engine.heads(address) * len(site.heads)
@@ -618,7 +627,7 @@ def _check_layouts(forwards: tuple[Forward, ...]) -> None:
                         f"{_layout(read.flat)}: a value lands in a write of its own layout. "
                         "Read and write at the same position, or at two of one form"
                     )
-                if tap.address.key_axis:
+                if tap.address.keys:
                     _check_keys(write, forward, source)
 
 
@@ -821,13 +830,17 @@ def _forward(
             )
 
     taps = []
-    # Forward order: the prompt frame (None) first, then the decode steps in
-    # order with `"all"` before them, and within each by the address's rank.
-    # nnsight requires it, and the run relies on it too: a read cut from the
-    # decode comes as its steps' parts in step order, with no sort of its own.
-    def order(place: tuple[Address, Any]) -> tuple[int, int, tuple[int, int]]:
+    # Forward order: by the address's rank, then by step — the prompt frame
+    # (None), `"all"`, then the decode steps in order. The rank comes first
+    # because the prompt frame, `"all"` and the continuation's step 0 all act
+    # in one forward, the prefill, and nnsight cannot reach back past a place
+    # the model has run. Only one step's taps act in any forward, so within a
+    # step this is the rank order too; and a read cut from the decode comes as
+    # its steps' parts in step order, which the run relies on, with no sort of
+    # its own.
+    def order(place: tuple[Address, Any]) -> tuple[tuple[int, int], int]:
         address, step = place
-        return (0 if step is None else 1, -1 if step == "all" else (step if step is not None else -1), address.key)
+        return (address.key, -2 if step is None else -1 if step == "all" else step)
 
     for place in sorted(set(written) | set(read), key=order):
         taps.append(
@@ -841,6 +854,7 @@ def _forward(
             )
         )
     _fits_every_row(taps, batch, tokenizer)
+    _once_per_forward(taps)
     decodes: dict[str, Any] = {"max_new_tokens": max_new_tokens, "generation": dict(generation or {})} if max_new_tokens else {}
     return (Generate if max_new_tokens else Forward)(
         input=dataset,
@@ -851,6 +865,30 @@ def _forward(
         taps=tuple(taps),
         **decodes,
     )
+
+
+def _once_per_forward(taps: list[Tap]) -> None:
+    """A place with no sequence axis is there once per forward: a recurrent
+    state, the one after the forward's last token. In the prompt frame that
+    is the state after the prompt, which only a cut naming the last token
+    names — every row's, since the rows are left-padded — and in the
+    continuation frame it is the state after the token each step processed.
+    A position inside the prompt names a state the forward never holds."""
+    for tap in taps:
+        if tap.address.seq_axis is not None:
+            continue
+        for op in (*tap.writes, *tap.reads):
+            where = op.at.where
+            if where is None or where.frame == "generated":
+                continue
+            if where.scope is None and (where.index == -1 or where.last == 1):
+                continue
+            raise PlanError(
+                f"{op.name!r} at {where.spelling()}: {tap.address.component!r} has no sequence "
+                "axis. It is the state after the forward's last token, so in the prompt frame "
+                'it is at {"index": -1} and nowhere else; a state inside the prompt is not '
+                "held by the forward"
+            )
 
 
 def _fits_every_row(taps: list[Tap], batch: _Batch, tokenizer: Any) -> None:

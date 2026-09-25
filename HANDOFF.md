@@ -125,9 +125,12 @@ These are load-bearing. Several tests enforce them.
    `attention_head_outputs`, hard-coded `.source` ops checked on 26 families
    by nnterp's `test_source_ops.py` — so an address is an accessor and a
    layer and nothing else, and the engine's `read`/`write` are
-   `model.internals[name][layer]`. What is left that is purely mini's: the
-   per-head kind, the key axis, the seq axis, the width *attribute name*,
-   and read-only. `ops/` knows nothing about models at all.
+   `model.internals[name][layer]`. The layout is nnterp's row too — the
+   sequence axis, the width, the heads, the key axis, the attention
+   implementation a place needs — and `locate` stamps it into the address, so
+   `address.py`'s table is an alias map from mini's names to nnterp's. What is
+   left that is purely mini's is read-only. `ops/` knows nothing about models
+   at all.
 7. **An engine is nine members and no more**: `load`, then `tokenizer`,
    `num_layers`, `locate`, `width` and `heads` — what the compiler asks of a
    runtime — then `execute`, `forward` and `generate`, what the run asks.

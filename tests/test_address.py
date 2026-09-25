@@ -52,10 +52,17 @@ def test_a_component_neither_table_has_is_refused_by_name(model_engine):
 def test_a_component_only_nnterp_knows_is_addressable(model_engine):
     """nnterp's accessors are an extension point — `RenameConfig(addresses=
     {...})` — and a document should be able to name what a user added there.
-    Mini claims nothing else about such a place: no width, so a featurizer
-    there is refused rather than sized wrongly."""
+    Its layout is its row's, so it comes with a width and a sequence axis
+    mini never had to be told."""
     located = model_engine.locate("attentions_input", 0)
     assert located.accessor == "attentions_input" and located.rank is not None
-    assert located.width_attribute is None
+    assert located.seq_axis == 1 and located.heads is None
+    assert model_engine.width(located) == model_engine.model.hidden_size
+
+
+def test_a_place_whose_width_is_the_batchs_has_none(model_engine):
+    """The row says when the width is not the model's to state: the token ids
+    have no feature axis, so a featurizer there is refused rather than sized
+    wrongly."""
     with pytest.raises(AddressError, match="not a fact about the model"):
-        model_engine.width(located)
+        model_engine.width(model_engine.locate("input_ids"))

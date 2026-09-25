@@ -115,7 +115,7 @@ def applies(frame: int | str | None, step: int | None) -> bool:
     return step == frame
 
 
-def at_step(at: Selection, tensor: Any, seq_axis: int, frame: int | str | None, step: int | None) -> Selection:
+def at_step(at: Selection, tensor: Any, seq_axis: int | None, frame: int | str | None, step: int | None) -> Selection:
     """Where a tap's positions land in *this* forward's tensor.
 
     In the prompt frame at the prefill the plan's positions are right. Past
@@ -125,9 +125,13 @@ def at_step(at: Selection, tensor: Any, seq_axis: int, frame: int | str | None, 
     which is what a step tap means anyway, and what a prompt-frame `-1` at
     the head meant. A tensor with one position is one position; the plan's
     index into the prompt cannot apply to it.
+
+    A tensor with no sequence axis — a recurrent state — is one position in
+    every forward: the state after its last token. The compiler lets only
+    the last token name it, so the plan's positions are that one.
     """
-    length = tensor.shape[seq_axis]
-    if frame is not None or (step is not None and length == 1):
+    length = 1 if seq_axis is None else tensor.shape[seq_axis]
+    if frame is not None or (step is not None and length == 1) or seq_axis is None:
         last = length - 1
         moved = tuple((last,) if window else () for window in at.positions)
         return replace(at, positions=moved, flat=at.flat or is_ragged(moved))
@@ -197,7 +201,7 @@ def _selection(at: Selection | Positions) -> Selection:
     return at if isinstance(at, Selection) else Selection(at, flat=is_ragged(at))
 
 
-def gather(tensor: Any, at: Selection | Positions, seq_axis: int = 1) -> Any:
+def gather(tensor: Any, at: Selection | Positions, seq_axis: int | None = 1) -> Any:
     """A window per row, and of it the features the selection names.
 
     Uniform windows keep the rectangle: (batch, seq, width) -> (batch, w,
@@ -209,8 +213,9 @@ def gather(tensor: Any, at: Selection | Positions, seq_axis: int = 1) -> Any:
 
     `seq_axis` is which axis the sequence runs along — 1 at a module
     boundary, 2 inside attention, where a tensor is (batch, head, seq,
-    head_dim). Which one it is is a fact about the address, not about the
-    tensor, so it is passed in.
+    head_dim), None for a tensor that has none and is one position (a
+    recurrent state). Which one it is is a fact about the address, not
+    about the tensor, so it is passed in.
     """
     at = _selection(at)
     window = _window(tensor, at, seq_axis)
@@ -222,9 +227,15 @@ def gather(tensor: Any, at: Selection | Positions, seq_axis: int = 1) -> Any:
     return split.flatten(-2)
 
 
-def _window(tensor: Any, at: Selection, seq_axis: int) -> Any:
+def _sequence(tensor: Any, seq_axis: int | None) -> Any:
+    """A view of `tensor` with its sequence on axis 1: one position long for
+    a tensor that has no sequence axis."""
+    return tensor.unsqueeze(1) if seq_axis is None else tensor.movedim(seq_axis, 1)
+
+
+def _window(tensor: Any, at: Selection, seq_axis: int | None) -> Any:
     positions = at.positions
-    moved = tensor.movedim(seq_axis, 1)
+    moved = _sequence(tensor, seq_axis)
     if _is_flat(at):
         rows, index = _flat(positions, tensor.device)
         return moved[rows, index]
@@ -247,7 +258,7 @@ def _lead(window: Any, at: Selection) -> tuple[int, ...]:
     return tuple(window.shape[: 1 if _is_flat(at) else 2])
 
 
-def scatter(tensor: Any, at: Selection | Positions, values: Any, seq_axis: int = 1) -> Any:
+def scatter(tensor: Any, at: Selection | Positions, values: Any, seq_axis: int | None = 1) -> Any:
     """A copy of `tensor` with the selection replaced by `values`: the shape
     `gather` would return for it, or anything that broadcasts to that — a
     published (w, width) or (width,) mean, say. Features the selection does
@@ -263,7 +274,7 @@ def scatter(tensor: Any, at: Selection | Positions, values: Any, seq_axis: int =
         split[..., list(take), :] = piece.reshape(*lead, len(take), -1)
         values = split.reshape(window.shape)
     out = tensor.clone()
-    moved = out.movedim(seq_axis, 1)  # a view of `out`
+    moved = _sequence(out, seq_axis)  # a view of `out`
     if _is_flat(at):
         rows, index = _flat(positions, tensor.device)
         moved[rows, index] = values.to(out)
@@ -280,7 +291,7 @@ def apply_write(
     operand: Any,
     mechanism: str = "swap",
     featurizer: Featurizer | None = None,
-    seq_axis: int = 1,
+    seq_axis: int | None = 1,
     params: dict[str, Any] | None = None,
     original: Any = None,
     features: tuple[int, ...] | None = None,
