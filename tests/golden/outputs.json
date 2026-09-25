@@ -66,6 +66,11 @@
   "iia.json": "be5680f5f30242594d68466c36b1d44bdece4e8dfeac5cfd5760b23b8765acc9",
   "logit_diff.json": "8b0d2873d3bcfeb84f6e6e4ffb8d2f1c42bd48b772d1012c33dd666ab37a8b4b"
  },
+ "documents/v2/faithfulness.json": {
+  "js.json": "89cdc6dcba7fd1ec3bdd00378f72f57d0f68e976b33eaac6312db26fd0be18b2",
+  "kl.json": "3c36c28bda3b4eecb9a47ca73c677d292d0433c11af7a4e200ea4b8097080562",
+  "p_answer.json": "2276bda00a812afd521f29cb60322292d1e319a80ce9f261e2025a160ac7867e"
+ },
  "documents/v2/generate_probe.json": {
   "index=0/generated.safetensors": "15f3712cfd2e7a1c3ae7da36d0607eb106168f3c281293aa582abda9e7af3f33",
   "index=0/p_answer.json": "c0e565003cd2ec30a49b2e35713b512babdb7c9420c79d4b0cfe828c8dbbe570",
@@ -150,6 +155,10 @@
   "seed=1/logit_diff.json": "82fd12f0d2c2154e7b1e5f682e614e8c9add289c555a8668d861224ad1269cac",
   "seed=2/iia.json": "b3867965416d4acc207f987ee70412761b9dceb15a55d3b15ecf2b87718cf02c",
   "seed=2/logit_diff.json": "785fddf4dfd6d55f844cd32f1258d569e312964becf72808c685fbefb619d3ec"
+ },
+ "documents/v2/readout.json": {
+  "p_answer.json": "6630d49c9a2f15b76e55fa7f097253d11b9288a417f6379fc480b383e92b1d20",
+  "top3.json": "9d1a0af663519191128c7f16ed31d9049c7606934abbdb25b5f82e7e3a0787da"
  },
  "documents/v2/sae_feature_ablation.json": {
   "features=0/latents.safetensors": "27ccb02bde933b332463787b91bfaf89dbb5edcbd9d9e54287b5b40d30f61c8a",

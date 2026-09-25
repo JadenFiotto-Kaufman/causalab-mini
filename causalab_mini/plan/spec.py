@@ -44,12 +44,25 @@ import functools
 import hashlib
 import json
 import re
-from typing import Annotated, Any, Iterator, Literal, NamedTuple, Union
+from typing import TYPE_CHECKING, Annotated, Any, Iterator, Literal, NamedTuple, Union, cast
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Discriminator, Field, NonNegativeInt, StringConstraints, Tag, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Discriminator,
+    Field,
+    NonNegativeInt,
+    StrictInt,
+    StringConstraints,
+    Tag,
+    create_model,
+    model_validator,
+)
 
 from .. import address
-from ..ops.metrics import COLUMNS as METRIC_COLUMNS
+from ..data.tokens import TokenForm
+from ..ops.metrics import SIGNATURES as METRIC_SIGNATURES
 from ..shapes import Where
 from . import sweep as sweep_module
 
@@ -408,21 +421,29 @@ def _generation_arguments() -> frozenset[str]:
 
 
 class _Metric(Node):
-    """A score of one read, per row. Every other field names a column, as
-    `<dataset>.<column>`: the one dataset whose row i is scored against row
-    i of the read."""
+    """A score of one read, per row. What else a kind takes is its signature
+    (`ops.metrics.SIGNATURES`): further reads, `<step>.<read>` over the same
+    rows, and columns, `<dataset>.<column>` of the one dataset whose row i
+    is scored against row i of the read."""
 
     kind: Literal["metric"]
     #: The read it scores, `<step>.<read>`, at one position per row.
     of: str
-    token_form: Literal["space_prefixed"] = "space_prefixed"
+    #: How each column's value is spelled as a token: after a space, bare,
+    #: or the vocabulary id itself.
+    token_form: TokenForm = "space_prefixed"
+
+    @property
+    def inputs(self) -> tuple[str, ...]:
+        """Its further reads, as written, in the order `ops.metrics.compute`
+        takes them — read off the one table, so a class and the function it
+        feeds cannot disagree about which is which."""
+        return tuple(getattr(self, one) for one in METRIC_SIGNATURES[getattr(self, "metric")].reads)
 
     @property
     def references(self) -> tuple[str, ...]:
-        """Its column fields, as written, in the order `ops.metrics.compute`
-        takes them — read off the one table, so a class and the function it
-        feeds cannot disagree about which is which."""
-        return tuple(getattr(self, one) for one in METRIC_COLUMNS[getattr(self, "metric")])
+        """Its column fields, as written, in the order `compute` takes them."""
+        return tuple(getattr(self, one) for one in METRIC_SIGNATURES[getattr(self, "metric")].columns)
 
     @property
     def columns(self) -> tuple[str, ...]:
@@ -430,40 +451,32 @@ class _Metric(Node):
         return tuple(one.partition(".")[2] for one in self.references)
 
     @property
-    def dataset(self) -> str:
-        """The one dataset the columns are of — `Spec` refuses two."""
-        return self.references[0].partition(".")[0]
+    def dataset(self) -> str | None:
+        """The one dataset the columns are of — `Spec` refuses two — or None
+        for a kind that takes no column."""
+        return self.references[0].partition(".")[0] if self.references else None
 
 
-class Match(_Metric):
-    metric: Literal["match"]
-    expected: str
+def _metric_model(kind: str, one: Any) -> type[_Metric]:
+    """The document model of one metric kind, made from its row: `metric`
+    names the kind, each read and each column is a string, each number a
+    strict positive integer with the row's default. There is no class per
+    kind to keep beside the table — a row is enough for the document to
+    validate the kind, and the schema to describe it."""
+    fields: dict[str, Any] = {"metric": (cast(Any, Literal)[kind], ...)}
+    fields |= {name: (str, ...) for name in (*one.reads, *one.columns)}
+    fields |= {name: (Annotated[StrictInt, Field(gt=0)], default) for name, default in one.params.items()}
+    name = "".join(part.title() for part in kind.split("_"))
+    return create_model(name, __base__=_Metric, __doc__=one.doc, **fields)
 
 
-class LogitDiff(_Metric):
-    metric: Literal["logit_diff"]
-    a: str
-    b: str
+#: One model per kind, in the table's order.
+METRICS = {kind: _metric_model(kind, one) for kind, one in METRIC_SIGNATURES.items()}
 
-
-class CrossEntropy(_Metric):
-    metric: Literal["cross_entropy"]
-    target: str
-
-
-class TokenLogit(_Metric):
-    metric: Literal["token_logit"]
-    token: str
-
-
-class TokenProb(_Metric):
-    metric: Literal["token_prob"]
-    token: str
-
-
-Metric = Annotated[
-    Union[Match, LogitDiff, CrossEntropy, TokenLogit, TokenProb], Field(discriminator="metric")
-]
+if TYPE_CHECKING:
+    Metric = _Metric
+else:
+    Metric = Annotated[Union[tuple(METRICS.values())], Field(discriminator="metric")]
 
 
 class Reduce(Node):
@@ -562,7 +575,7 @@ class Fit(Node):
         """Every declared dataset its body names: one draw indexes them all,
         and its held-out run replaces each."""
         calls = {one.data for _, one in self.steps.items() if isinstance(one, _Call) and isinstance(one.data, str)}
-        return calls | {one.dataset for _, one in self.steps.items() if isinstance(one, _Metric)}
+        return calls | {one.dataset for _, one in self.steps.items() if isinstance(one, _Metric) and one.dataset}
 
     @model_validator(mode="after")
     def _one_body(self) -> "Fit":
@@ -850,26 +863,43 @@ def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, 
                 publish(f"{name}.{read_name}", "layers" if stacked else "read", read)
             # the call's own result: a decode's ids, a forward's logits
             publish(name, "ids" if isinstance(step, Generate) else "logits", step)
-        elif isinstance(step, (_Metric, Reduce)):
-            found = visible.get(step.of)
+        elif isinstance(step, Reduce):
+            found = _of(where, "of", step.of, visible, fit)
             _refuse(
-                found is not None and found.kind in ("read", "layers") and found.scope == fit,
-                f"{where}: `of` is {step.of!r}, which is not a read of a step before it in this "
-                "`steps`; a metric or a reduce is of `<step>.<read>`",
+                found.kind == "read",
+                f"{where}: {step.of!r} is read at several layers; a reduction of it is not implemented",
             )
-            assert found is not None
+            publish(name, step.reduce, found.node)
+        elif isinstance(step, _Metric):
+            # every read the kind takes — `of`, and any its signature adds — is
+            # a read before it, of one position a row; logits where the kind
+            # scores distributions, and otherwise all laid out alike
+            signature = METRIC_SIGNATURES[getattr(step, "metric")]
+            fields = ("of", *signature.reads)
+            layouts = set()
+            for field, ref in zip(fields, (step.of, *step.inputs)):
+                found = _of(where, field, ref, visible, fit)
+                _refuse(
+                    found.kind == "read" or not signature.reads,
+                    f"{where}: {ref!r} is read at several layers; a metric scores one such read "
+                    "layer by layer, and scores it against nothing",
+                )
+                _refuse(
+                    found.node.pos.width == 1,
+                    f"{where} scores {ref!r}, a window of {found.node.pos.width or 'varying'} "
+                    "positions; a metric scores one position per row",
+                )
+                place = spec.site(found.node.site)[1]
+                _refuse(
+                    not signature.logits or found.node.view == "logits" or place.component in ("lm_head", "logits"),
+                    f"{where}: `{field}` is {ref!r}, which is not logits — a read of `lm_head` or "
+                    f"`logits`, or one viewed as logits; {getattr(step, 'metric')!r} scores a distribution over tokens",
+                )
+                layouts.add((place.component, place.heads, place.units, found.node.view, found.node.featurizer))
             _refuse(
-                isinstance(step, _Metric) or found.kind == "read",
-                f"{where}: {step.of!r} is read at several layers; a metric scores it layer by layer, "
-                "and a reduction of it is not implemented",
-            )
-            if isinstance(step, Reduce):
-                publish(name, step.reduce, found.node)
-                continue
-            _refuse(
-                found.node.pos.width == 1,
-                f"{where} scores {step.of!r}, a window of {found.node.pos.width or 'varying'} "
-                "positions; a metric scores one position per row",
+                signature.logits or len(layouts) == 1,
+                f"{where}: {' and '.join((step.of, *step.inputs))} are laid out differently — component, "
+                "heads, units, view and featurizer; a metric of two reads compares them position by position",
             )
             datasets = {one.partition(".")[0] for one in step.references}
             for one in step.references:
@@ -879,7 +909,7 @@ def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, 
                     f"({sorted(spec.data)}); a dataset written in place on a step has no name to name it by",
                 )
             _refuse(
-                len(datasets) == 1,
+                len(datasets) <= 1,
                 f"{where}: its columns come from {sorted(datasets)}; a metric's columns are one "
                 "dataset's, row i against row i of the read",
             )
@@ -896,6 +926,19 @@ def _scope(spec: Spec, steps: Steps, outer: dict[str, Ref], trainers: dict[str, 
                 # the body's values, as its held-out run left them
                 publish(f"{name}.{ref}", kind, node, name)
     return produced
+
+
+def _of(where: str, field: str, ref: str, visible: dict[str, Ref], fit: str) -> Ref:
+    """What a metric's or a reduction's read resolves to: a read of a step
+    before it in this `steps`, or a refusal naming the field."""
+    found = visible.get(ref)
+    _refuse(
+        found is not None and found.kind in ("read", "layers") and found.scope == fit,
+        f"{where}: `{field}` is {ref!r}, which is not a read of a step before it in this "
+        "`steps`; a metric or a reduce is of `<step>.<read>`",
+    )
+    assert found is not None
+    return found
 
 
 def _call(
@@ -1131,7 +1174,11 @@ def _fit(spec: Spec, where: str, name: str, fit: Fit, body: dict[str, Ref]) -> N
         f"{where}: {clash} is both a step of its body and a featurizer it trains, and "
         f"`{name}.{clash[0] if clash else ''}` can name only one of them",
     )
-    metrics = {ref for ref, (kind, _, _) in body.items() if kind == "metric"}
+    # what a fit minimizes and watches is a mean, so a metric of one number a row
+    metrics = {
+        ref for ref, (kind, node, _) in body.items()
+        if kind == "metric" and not METRIC_SIGNATURES[getattr(node, "metric")].tokens
+    }
     gates = {one for one in fit.train if spec.featurizers[one].kind == "gate"}
     _refuse(
         set(fit.anneal) <= gates,
@@ -1139,12 +1186,23 @@ def _fit(spec: Spec, where: str, name: str, fit: Fit, body: dict[str, Ref]) -> N
         f"temperature (those are {sorted(gates)})",
     )
     terms = metrics | {f"{gate}.mask" for gate in gates}
+    listed = {ref for ref, (kind, _, _) in body.items() if kind == "metric"} - metrics
     for _, term in fit.objective:
+        _refuse(
+            term not in listed,
+            f"{where}: objective names {term!r}, a metric whose value is a list per row; a list "
+            "cannot be minimized",
+        )
         _refuse(
             term in terms,
             f"{where}: objective names {term!r}, which is neither a metric of its body nor the "
             f"mask of a gate it trains (one of {sorted(terms)})",
         )
+    _refuse(
+        fit.early_stop.metric not in listed,
+        f"{where}: early_stop watches {fit.early_stop.metric!r}, a metric whose value is a list "
+        "per row; a list cannot be watched",
+    )
     _refuse(
         fit.early_stop.metric in metrics,
         f"{where}: early_stop watches {fit.early_stop.metric!r}, which is not a metric of its "

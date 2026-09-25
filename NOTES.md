@@ -698,6 +698,16 @@ Three kinds, and no others:
 - A column value must resolve to exactly one token id.
 - `unit` and `estimand_version` are derived, never authored, and are written on
   every output row.
+- Mini has more kinds than these three — `token_logit`, `token_prob` (the
+  soft accuracy, with the expected answer as its token), `kl` and `js`,
+  which score `of` against a second read, `against`, `cosine`, which does so
+  for any two reads laid out alike, and `top_k`, whose value per row is a
+  list of tokens with their probabilities — each a row of
+  `ops/metrics.SIGNATURES`, which holds its function, its unit, and which
+  of its fields are reads, columns and numbers. The protocol's own
+  `soft_accuracy` is a different estimand, σ(logit a − logit b), and mini
+  does not have it. `token_form` takes `bare` and `id` beside
+  `space_prefixed`.
 - Eligibility: a row whose answer column is `null`/absent/empty is an *excluded
   measurement*, not a zero. Neither table has such rows, so the machinery is
   needed only if the design wants it.

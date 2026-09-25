@@ -25,7 +25,7 @@ The walk is: for each step, run it. Three rules hold throughout:
 * **what a model call makes is held and shipped only when it is named.** A
   call makes its reads and its own result — a forward's logits, a generate's
   ids — and each is held in the state only when a step of the plan takes it
-  (an operand, a metric's or a reduction's `of`) or a save keeps it, and
+  (an operand, a metric's reads, a reduction's `of`) or a save keeps it, and
   comes home in `results` only when a save keeps it. A forward's logits over
   a real vocabulary and a thousand rows are gigabytes, and nothing asked for
   them.
@@ -66,8 +66,8 @@ class State:
     values: dict[str, Any] = field(default_factory=dict)
     #: For a value that still has its rows, whether it came back flat — one
     #: entry per position found, where its record's windows say — or as a
-    #: rectangle, a row per row. Absent for a value with no row axis: a mean,
-    #: a basis, a metric, a read stacked over every layer.
+    #: rectangle, a row per row — a read at several layers, each layer's
+    #: rows. Absent for a value with no rows: a mean, a basis, a metric.
     flat: dict[str, bool] = field(default_factory=dict)
     #: Where each op acted, per row — the whole of a run's `Record`.
     records: Record = field(default_factory=dict)
@@ -120,11 +120,13 @@ def start(plan: Plan, batch_size: int | None = None) -> State:
 
 def named(step: Step) -> set[str]:
     """Every value a step of this tree takes — a write's operand, a metric's
-    or a reduction's `of` — or a save of it keeps, a fit's updates and
+    reads, a reduction's `of` — or a save of it keeps, a fit's updates and
     held-out run included."""
     if isinstance(step, Forward):
         return set(step.keep) | _operands(step)
-    if isinstance(step, (Metric, Reduce)):
+    if isinstance(step, Metric):
+        return {step.of, *step.reads}
+    if isinstance(step, Reduce):
         return {step.of}
     inner = [*step.steps.values()] if isinstance(step, Plan) else []
     if isinstance(step, Fit):
@@ -149,7 +151,7 @@ def run(engine: Any, step: Step, state: State, name: str = "") -> None:
     elif isinstance(step, Forward):
         call(engine, name, step, state)
     elif isinstance(step, Metric):
-        metric(name, step, state)
+        metric(engine, name, step, state)
     elif isinstance(step, Reduce):
         reduce(name, step, state)
     elif isinstance(step, Fit):
@@ -223,9 +225,9 @@ def call(engine: Any, name: str, step: Forward, state: State) -> None:
         record.update(_continuation(engine, ready, made, made[name]))
     _stack_layers(step, made, record)
     state.records.update(record)
-    # a read has its own form; a call's own result is a rectangle; a read at
-    # every layer has the layers first, and no rows a later window could take
-    forms = {op.stack or op.name: op.flat for tap in step.taps for op in tap.reads if not op.layered}
+    # a read has its own form, and a read at several layers its layers'; a
+    # call's own result is a rectangle
+    forms = {op.layered or op.stack or op.name: op.flat for tap in step.taps for op in tap.reads}
     for one, whole in made.items():
         if one in state.named:
             state.publish(one, whole, forms.get(one, False if one == name else None))
@@ -254,51 +256,22 @@ def _stack_layers(step: Forward, made: dict[str, Any], record: Record) -> None:
             del record[one]
 
 
-def metric(name: str, step: Metric, state: State) -> None:
-    """One score per scored row of one read.
+def metric(engine: Any, name: str, step: Metric, state: State) -> None:
+    """One score per scored row of its reads.
 
     A metric's rows are the intersection of two halves: the column half,
     which the client decided from the data, and the position half, which
-    only the run can know. Neither is authoritative alone. When the read's
-    step reported where it acted, the metric carries the intersection and
-    that record too, so the table it is saved to can say which token each
-    number came from.
+    only the run can know — every read it takes had to find its position on
+    the row. Neither is authoritative alone. When a read's step reported
+    where it acted, the metric carries the intersection and that record
+    too, so the table it is saved to can say which token each number came
+    from.
     """
-    located_rows = state.records[step.of]["rows"]
+    reads = (step.of, *step.reads)
     eligible = tuple(
-        (step.rows is None or row in step.rows) and bool(one) for row, one in enumerate(located_rows)
+        (step.rows is None or row in step.rows) and all(state.records[one]["rows"][row] for one in reads)
+        for row in range(len(state.records[step.of]["rows"]))
     )
-    value = state.values[step.of]
-    # a read at every layer is scored layer by layer, a row of scores each
-    scores = [
-        metrics.compute(step.kind, *_measured(name, step, one, eligible, located_rows))
-        for one in (value if step.layers else [value])
-    ]
-    state.publish(name, torch.stack(scores) if step.layers else scores[0])
-    step.results[name] = state.values[name].detach().cpu()
-    if step.of in state.reported:
-        step.results["eligible"] = {name: eligible}
-        step.results["positions"] = {step.of: state.records[step.of]}
-
-
-def _measured(
-    name: str,
-    step: Metric,
-    value: Any,
-    eligible: tuple[bool, ...],
-    located_rows: Positions,
-) -> tuple[Any, tuple[Any, ...]]:
-    """What this metric scores: the read's eligible rows, and their token ids.
-
-    A metric reads one position per row — the compiler refused anything else
-    — so a rectangular read's `(rows, 1, vocab)` is `(rows, vocab)` with the
-    unit window off. A read gathered flat instead has one row per row it
-    *found*, so the eligible rows are indexed by their place among those.
-    The ids came compiled for the *column*-eligible rows, and the position
-    half may drop more, so they are indexed the same way. Either side holds
-    one entry per eligible row, in row order, and the mean downstream needs
-    no mask.
-    """
     keep = [row for row, one in enumerate(eligible) if one]
     if not keep:
         raise PlanError(
@@ -306,13 +279,62 @@ def _measured(
             f"metric's columns and at a position the run could resolve; a metric of "
             "nothing has no mean"
         )
-    scored = step.rows if step.rows is not None else range(len(eligible))
+    ids = _ids(step, keep, len(eligible))
+    others = tuple(_kept(state.values[one], state.flat[one], keep, state.records[one]["rows"]) for one in step.reads)
+    value = state.values[step.of]
+    # a read at several layers is scored layer by layer, a row of scores each
+    scores = [
+        metrics.compute(step.kind, _kept(one, state.flat[step.of], keep, state.records[step.of]["rows"]), others, ids, step.params)
+        for one in (value if step.layers else [value])
+    ]
+    if metrics.SIGNATURES[step.kind].tokens:
+        # a list per row, each token decoded here, where the tokenizer is
+        scores = [_decoded(engine.tokenizer, *one) for one in scores]
+        state.publish(name, scores if step.layers else scores[0])
+        step.results[name] = state.values[name]
+    else:
+        state.publish(name, torch.stack(scores) if step.layers else scores[0])
+        step.results[name] = state.values[name].detach().cpu()
+    reported = [one for one in reads if one in state.reported]
+    if reported:
+        step.results["eligible"] = {name: eligible}
+        step.results["positions"] = {one: state.records[one] for one in reported}
+
+
+def _decoded(tokenizer: Any, ids: Any, numbers: Any) -> list[list[list[Any]]]:
+    """Per row, each `(token id, number)` as `[token, number]`, the token
+    decoded and spelled as the run's provenance spells the tokens it
+    addressed, as a quoted string — plain strings and floats, which is what
+    comes home."""
+    return [
+        [[repr(tokenizer.decode([token])), number] for token, number in zip(row_ids, row_numbers)]
+        for row_ids, row_numbers in zip(ids.tolist(), numbers.tolist())
+    ]
+
+
+def _ids(step: Metric, keep: list[int], rows: int) -> tuple[Any, ...]:
+    """Each column's token ids for the rows scored. They came compiled for the
+    *column*-eligible rows, and the position half may drop more, so they are
+    indexed by each kept row's place among those."""
+    scored = step.rows if step.rows is not None else range(rows)
     place = {row: index for index, row in enumerate(scored)}
-    ids = tuple(tuple(one[place[row]] for row in keep) for one in step.ids)
-    if not step.flat:
-        return value[keep, 0], ids
+    return tuple(tuple(one[place[row]] for row in keep) for one in step.ids)
+
+
+def _kept(value: Any, flat: bool, keep: list[int], located_rows: Positions) -> Any:
+    """A read's kept rows, `(rows, vocab)`.
+
+    A metric reads one position per row — the compiler refused anything
+    else — so a rectangular read's `(rows, 1, vocab)` is `(rows, vocab)`
+    with the unit window off. A read gathered flat instead has one row per
+    row it *found*, so a kept row is indexed by its place among those.
+    Either way there is one entry per kept row, in row order, and the mean
+    downstream needs no mask.
+    """
+    if not flat:
+        return value[keep, 0]
     found = {row: index for index, row in enumerate(row for row, one in enumerate(located_rows) if one)}
-    return value[[found[row] for row in keep]], ids
+    return value[[found[row] for row in keep]]
 
 
 def reduce(name: str, step: Reduce, state: State) -> None:

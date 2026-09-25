@@ -16,7 +16,7 @@ refuse when the answer is no, is their business.
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any
+from typing import Any, Literal, get_args
 
 from ..ops import locate
 from ..shapes import TokenRows
@@ -129,17 +129,31 @@ def same_layout(one: TokenRows, other: TokenRows) -> list[int] | None:
     return [row for row, (a, b) in enumerate(zip(ours, theirs)) if a != b]
 
 
-def token_id(tokenizer: Any, text: str, token_form: str) -> int:
-    """One vocabulary id for an authored answer string.
+#: How a column's value is spelled as a token: after a space, as it stands
+#: in running text; bare, as the first word of a text; or as the id itself.
+TokenForm = Literal["space_prefixed", "bare", "id"]
+TOKEN_FORMS: tuple[str, ...] = get_args(TokenForm)
 
-    A leading space in the column value is normalized away first, so `" X"` and
-    `"X"` name the same answer and `token_form` alone decides the surface form.
-    A value that is not exactly one token is refused, never scored on its first
-    piece.
+
+def token_id(tokenizer: Any, text: Any, token_form: str) -> int:
+    """One vocabulary id for an authored answer.
+
+    `space_prefixed` and `bare` spell the answer a string: a leading space in
+    the value is normalized away first, so `" X"` and `"X"` name the same
+    answer and `token_form` alone decides the surface form. `id` takes the
+    value as the vocabulary id it is. A string that is not exactly one token
+    is refused, never scored on its first piece; an id outside the
+    vocabulary is refused too.
     """
-    if token_form != "space_prefixed":
-        raise TokenError(f"token_form {token_form!r} is not implemented")
-    surface = " " + text.lstrip()
+    if token_form == "id":
+        if isinstance(text, bool) or not isinstance(text, int) or not 0 <= text < len(tokenizer):
+            raise TokenError(f"answer {text!r} is not a token id of this {len(tokenizer)}-token vocabulary")
+        return text
+    if token_form not in TOKEN_FORMS:
+        raise TokenError(f"token_form {token_form!r} is not one of {TOKEN_FORMS}")
+    if not isinstance(text, str):
+        raise TokenError(f"answer {text!r} is not a string; a token id is scored with token_form 'id'")
+    surface = (" " if token_form == "space_prefixed" else "") + text.lstrip()
     ids = tokenizer.encode(surface, add_special_tokens=False)
     if len(ids) != 1:
         raise TokenError(

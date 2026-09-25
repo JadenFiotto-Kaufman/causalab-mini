@@ -36,9 +36,9 @@ It **imports nothing from causalab**. Only the JSON documents were copied.
 
 ## 2. State as of this handoff
 
-`master`, clean tree, pushed to GitHub (private). **539 tests passing**
+`master`, clean tree, pushed to GitHub (private). **561 tests passing**
 (`CUDA_VISIBLE_DEVICES= uv run pytest tests/ -q`, ~30 s), `uvx pyright` at 0
-errors. **6,927 lines** across 30 files in `causalab_mini/`.
+errors. **7,161 lines** across 30 files in `causalab_mini/`.
 
 The package is five sub-packages and a short spine, each named for what it is
 allowed to know:
@@ -215,7 +215,25 @@ token is a token the model produced). A bare `-1` is sugar for
   reports `results["positions"]` — the window, the reason and the decoded
   tokens per op — and a metric of one of its reads carries its
   `results["eligible"]`, the intersection, and that record. A step with no
-  such position reports neither.
+  such position reports neither. A metric that takes two reads scores the
+  rows both could place.
+- **A metric kind is a row of `ops/metrics.SIGNATURES`, and nothing else.**
+  The row holds the function, the unit and estimand, a one-line doc, and
+  which fields are further reads (`kl`, `js` and `cosine` take `against`),
+  data columns (`logit_diff` takes `a` and `b`) and numbers (`top_k`'s `k`);
+  whether its reads must be logits (`cosine`'s need only be laid out
+  alike); and whether its value per row is a list of tokens, which the run
+  decodes and the table writes as the row's `value`. The document's model
+  for each kind is generated from its row (`spec.METRICS`), the resolver
+  checks every read the row names, the compiler checks the reads are over
+  the same rows and the numbers against the vocabulary, the run hands the
+  function its reads, ids and numbers in the row's order, and `vocab` prints
+  the rows. A new kind is a function and a row — `cosine` was added that
+  way.
+- **A column is spelled as a token one of three ways** (`token_form`):
+  `space_prefixed`, as the answer stands in running text; `bare`, as the
+  first word of a text; or `id`, the vocabulary id itself.
+  `data/tokens.token_id` is the one resolver.
 - **The continuation frame is cut per row at its first stop token.** A read
   whose cut only the finished text can settle (`{"index": -1}`, a scope)
   compiles to one ordinary read per decode step carrying a `stack` name, and
