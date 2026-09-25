@@ -1,0 +1,31 @@
+{
+  "header": {
+    "description": "Authored for mini. The state a Gated DeltaNet layer hands on, read after the prompt and at every decode step. In the continuation frame a position is a decode step, and the state there is the one that step's forward hands on — after the token it processed. Step 0 is the prompt's own forward, so its state is the state after the prompt, the same tensor {'index': -1} reads in the prompt frame. {'frame': 'generated', 'all': true} reads every step and stacks them, a (key, value) matrix per head flattened per step. No new frame and no per-kernel fire: the recurrent state is addressed with the positions every other place has."
+  },
+  "model": {
+    "key": "yujiepan/qwen3.5-tiny-random",
+    "revision": "3a13bbea23b6df303d83c6127b4a40f1260598d5",
+    "dtype": "fp32"
+  },
+  "data": {"prompts": {"path": "weekdays/train"}},
+  "sites": {"state": {"component": "linear_attention_state", "layers": 1}},
+  "steps": {
+    "decode": {
+      "kind": "generate",
+      "data": "prompts",
+      "field": "input",
+      "max_new_tokens": 3,
+      "min_new_tokens": 3,
+      "do_sample": false,
+      "reads": {
+        "after_prompt": {"site": "state", "pos": -1},
+        "per_step": {"site": "state", "pos": {"frame": "generated", "all": true}}
+      }
+    },
+    "saves": {
+      "decode.after_prompt": "after_prompt.safetensors",
+      "decode.per_step": "per_step.safetensors",
+      "decode": "generated.safetensors"
+    }
+  }
+}

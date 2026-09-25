@@ -1995,3 +1995,68 @@ say, in either format. Found by validating every sweep point of the corpus
 validator's input type, `json_schema_input_type=int | Where`, after which all
 207 validate. The schema is only worth what it accepts, and nothing had
 checked it against a document.
+
+## 28. A recurrent state is a place with a position
+
+A Gated DeltaNet layer (Qwen3-Next, Qwen3.5) carries a state instead of a
+stream: a (key, value) matrix per value head, updated token by token, with
+no sequence axis. Its size is a product of three config numbers — 786,432
+floats per row per layer on Qwen3.5-27B. The question was whether mini
+needed a new kind of address for it. It did not.
+
+### 28.1 The state after token t is a position, and the forward holds one
+
+The state has a meaning at every position, as the residual stream does: the
+state after token t. A forward materializes exactly one of them outside its
+kernel — the state after its last token, which it hands the cache — and
+that is the one nnterp names (`linear_attentions_state_output`, on the
+mixer's own forward, so the same place over a prompt and at every decode
+step, whichever kernel runs). So `{"index": -1}` is the state after the
+prompt, and the continuation frame's step k is the state after the token
+step k processed, through the frames mini already had. What it cost:
+`ops.gather`/`scatter`/`at_step` take `seq_axis=None` as "one position, the
+last" (an unsqueeze), and the compiler refuses any other prompt-frame cut at
+such a place, including an anchored `-1`, because a state inside the prompt
+is one the forward never holds. `engine/steps.py` did not change.
+
+Measured on `yujiepan/qwen3.5-tiny-random` (`deltanet_state_patch.json`):
+the state after the counterfactual prompt swapped in after the base prompt
+moves the prediction the prompt's forward makes by a KL of exactly 0 and the
+one after the first decode step by 0.0006 to 0.016 nats; swapped with itself,
+exactly 0. Step 0 of the continuation frame is the prompt's own forward, and
+its state is bit for bit the `{"index": -1}` one.
+
+### 28.2 A call that fires on some steps is read one step late
+
+The forward calls the chunked kernel over a prompt and the recurrent one at
+a decode step: two call sites, two op names. A row naming either is dead on
+the other kind of step, and nnsight drops the rest of the block without an
+error. Worse, and not in the scoping: under `tracer.iter[k]` a request binds
+to the k-th *occurrence of its own location*, and the recurrent kernel's
+k-th call is decode step k + 1. The recurrent kernel's final state read first
+at `iter[1]` equals the cache update at step 2, not step 1. The probe the
+scoping quoted ("recurrent-kernel output[1] == cache-update input: True" at
+`iter[1:2]`) compared two step-2 values. nnterp's kernel rows now name
+whichever call the forward makes and bind a pinned step to its own forward
+through an op that fires on every forward; the state rows never had the
+problem, because the mixer's own ops fire once per forward.
+
+### 28.3 The dense fixture the scoping named loads no weights
+
+`yujiepan/qwen3.6-tiny-random` stores its text weights three
+`language_model` levels deep; loaded as a causal LM, all 55 keys are missing
+and all 55 unexpected, so every load is a fresh random initialization — two
+loads in one process differ. A golden on it would have been noise.
+`yujiepan/qwen3.5-tiny-random` is the same class and loads with nothing
+missing; the two documents pin it.
+
+### 28.4 Which kernel a layer runs is fixed the first time its source is read
+
+nnsight builds a layer's instrumented forward over a copy of the module
+globals it sees then, and the layer calls those for good. The kernels are
+module globals chosen at import (fla where installed, the PyTorch reference
+otherwise). nnterp now decides at load — every linear layer sourced while the
+globals are bound to the references, then restored — and must decide again
+at dispatch: loading the weights builds new modules, which have not been
+sourced, and a layer sourced on the meta model was running whatever the
+global was bound to when a row first touched it.

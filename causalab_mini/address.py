@@ -75,6 +75,22 @@ COMPONENTS = {
     "mlp_neuron_output": "mlps_neurons",
     "mlp_output": "mlps_output",
     "block_output": "layers_output",
+    # --- a Gated DeltaNet layer of a hybrid (Qwen3-Next, Qwen3.5), in the
+    # attention's place. The state is the one the layer hands on: a (key,
+    # value) matrix per head with no sequence axis, which is the state *after
+    # the forward's last token* — `{"index": -1}` after the prompt, and the
+    # generated frame's step k after the token that step processed. The state
+    # a forward starts from is not a place of its own here: over a prompt it
+    # is nothing, and at step k it is the state after step k - 1.
+    "linear_attention_state": "linear_attentions_state_output",
+    # the delta rule's arguments, per value head, and what it returns per head
+    "linear_attention_query": "linear_attention_queries",
+    "linear_attention_key": "linear_attention_keys",
+    "linear_attention_value": "linear_attention_values",
+    "linear_attention_decay": "linear_attention_decays",
+    "linear_attention_beta": "linear_attention_betas",
+    "linear_attention_z": "linear_attention_head_outputs",
+    "linear_attention_output": "linear_attentions_output",
     "ln_final": "ln_final_output",
     "lm_head": "lm_head_output",
     # The model's own output, which is not always the head's: Gemma-2 caps it
@@ -132,8 +148,10 @@ class Address:
     inside: bool = False
     #: The layout, as the row says, stamped by `locate`. Which axis of the
     #: tensor the sequence runs along: 1 at a module boundary, 2 inside the
-    #: attention, where a tensor is (batch, head, seq, head_dim).
-    seq_axis: int = 1
+    #: attention, where a tensor is (batch, head, seq, head_dim), and None for
+    #: a tensor with no sequence axis — a recurrent state, which is one per
+    #: forward: the state after its last token.
+    seq_axis: int | None = 1
     #: The model attribute that counts the heads this tensor is per, or None.
     #: Such a tensor is handed on flat, `(rows, w, heads · per_head)`, whether
     #: the model holds it flat (`o_proj`'s input) or as two axes (the query) —

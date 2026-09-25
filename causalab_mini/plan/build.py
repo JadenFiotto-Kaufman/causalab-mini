@@ -841,6 +841,7 @@ def _forward(
             )
         )
     _fits_every_row(taps, batch, tokenizer)
+    _once_per_forward(taps)
     decodes: dict[str, Any] = {"max_new_tokens": max_new_tokens, "generation": dict(generation or {})} if max_new_tokens else {}
     return (Generate if max_new_tokens else Forward)(
         input=dataset,
@@ -851,6 +852,30 @@ def _forward(
         taps=tuple(taps),
         **decodes,
     )
+
+
+def _once_per_forward(taps: list[Tap]) -> None:
+    """A place with no sequence axis is there once per forward: a recurrent
+    state, the one after the forward's last token. In the prompt frame that
+    is the state after the prompt, which only a cut naming the last token
+    names — every row's, since the rows are left-padded — and in the
+    continuation frame it is the state after the token each step processed.
+    A position inside the prompt names a state the forward never holds."""
+    for tap in taps:
+        if tap.address.seq_axis is not None:
+            continue
+        for op in (*tap.writes, *tap.reads):
+            where = op.at.where
+            if where is None or where.frame == "generated":
+                continue
+            if where.scope is None and (where.index == -1 or where.last == 1):
+                continue
+            raise PlanError(
+                f"{op.name!r} at {where.spelling()}: {tap.address.component!r} has no sequence "
+                "axis. It is the state after the forward's last token, so in the prompt frame "
+                'it is at {"index": -1} and nowhere else; a state inside the prompt is not '
+                "held by the forward"
+            )
 
 
 def _fits_every_row(taps: list[Tap], batch: _Batch, tokenizer: Any) -> None:

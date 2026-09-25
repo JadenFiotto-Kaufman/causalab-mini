@@ -34,8 +34,11 @@ GPT2 = REPO / "documents" / "v2" / "gpt2_reach.json"
 #: The four places inside the attention's call into its implementation,
 #: covered by `test_interior.py` and below; every other component here.
 CALL = ("attention_query", "attention_key", "attention_scores", "attention_z")
-#: Every component, as nnterp's rows describe it.
-COMPONENTS = describe()
+#: Every component the tiny Llama and GPT-2 have, as nnterp's rows describe
+#: it. A Gated DeltaNet layer's are a hybrid's, in `test_linear_state.py`.
+COMPONENTS = {
+    name: entry for name, entry in describe().items() if not entry["accessor"].startswith("linear_attention")
+}
 BOUNDARIES = [name for name in COMPONENTS if name not in CALL]
 LAYERED = [name for name in BOUNDARIES if COMPONENTS[name]["layered"]]
 
