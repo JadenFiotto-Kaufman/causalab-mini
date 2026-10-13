@@ -20,6 +20,14 @@ from causalab_mini.plan import plan as plan_module
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
+#: The server's environment is cached per host by nnsight's `remote-env-per-host`
+#: branch (524c33fc), which nnsight dev does not have yet; `provenance` and the
+#: two tests that pin it wait on it.
+per_host_env = pytest.mark.skipif(
+    not hasattr(__import__("nnsight.ndif", fromlist=["ndif"]), "set_remote_env"),
+    reason="nnsight has no per-host remote env (branch remote-env-per-host, not on dev)",
+)
+
 
 def test_the_cayley_start_is_trainable_at_a_real_width():
     """Unscaled, the start's singular values grow like √d and the Cayley
@@ -116,6 +124,7 @@ def test_the_real_documents_are_valid_and_compile_without_weights(data_root):
             Spec.model_validate(point)
 
 
+@per_host_env
 def test_a_remote_run_records_the_servers_versions_and_not_only_its_own():
     """`run.json`'s `versions` are this process's, and on a remote run the
     code that decides what a block does is the server's — so the record was
@@ -150,6 +159,7 @@ def test_a_run_with_no_server_records_none():
     assert "server" not in provenance.record(object(), "local")
 
 
+@per_host_env
 def test_a_server_that_will_not_say_is_recorded_as_not_having_said():
     """Evidence either way, and not a reason to refuse a run."""
     from nnsight import ndif
