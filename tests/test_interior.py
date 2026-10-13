@@ -69,7 +69,7 @@ def test_the_interior_is_nnterps_value_on_the_attention(eager_engine):
     # It is still pure data, and it is still what the document said.
     assert located == Address(
         "attention_query", 0, module="self_attn", rank=(0, 1, 0), inside=True,
-        dims=("batch", "heads", "seq", "qk_head_dim"),
+        dims=("batch", "num_heads", "seq", "qk_head_dim"),
     )
 
 

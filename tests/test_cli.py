@@ -54,7 +54,7 @@ def test_vocab_is_the_tables_not_a_description_of_them(capsys):
     assert out["metric_kinds"]["kl"]["doc"] == SIGNATURES["kl"].doc
     assert out["token_forms"] == ["space_prefixed", "bare", "id"]
     assert out["components"]["attention_query"]["value"] == "self_attn.attention_queries"
-    assert out["components"]["block_output"]["dims"] == ["batch", "seq", "hidden"]
+    assert out["components"]["block_output"]["dims"] == ["batch", "seq", "hidden_size"]
     assert out["components"]["attention_z"]["heads"] is True
 
 

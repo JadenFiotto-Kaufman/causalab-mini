@@ -376,7 +376,7 @@ def test_a_childs_spelling_is_nnterps_where_nnterp_names_it(model_engine, gpt2_e
     assert attention_output is not None
     assert model_engine.locate("attention_premix", 0) == Address(
         "attention_premix", 0, module="self_attn.o_proj",
-        rank=(0, attention_output[1], -1), dims=("batch", "seq", "heads", "head_dim"),
+        rank=(0, attention_output[1], -1), dims=("batch", "seq", "num_heads", "head_dim"),
     )
 
 

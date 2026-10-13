@@ -66,3 +66,19 @@ def test_a_component_only_nnterp_knows_is_addressable(eager_engine):
     attention = model.layers[0].self_attn
     assert eager_engine.width(located) == attention.num_kv_heads * attention.head_dim
 
+
+
+def test_the_tables_axis_names_are_nnterps():
+    # The table spells axis names as literals so a plan loads without nnterp;
+    # this holds the literals to nnterp's own constants, where an axis that is
+    # a model fact is named as the size attribute that resolves it.
+    from nnterp import Mlp
+    from nnterp.components import BATCH, HEAD_DIM, HEADS, HIDDEN, KV_HEADS, QK_HEAD_DIM, SEQ, VOCAB
+
+    from causalab_mini import address
+
+    assert address._STREAM == (BATCH, SEQ, HIDDEN)
+    assert hasattr(Mlp, "intermediate_size")
+    known = {BATCH, SEQ, HIDDEN, VOCAB, HEADS, KV_HEADS, HEAD_DIM, QK_HEAD_DIM, "intermediate_size"}
+    used = {axis for entry in address._COMPONENTS.values() if entry.dims for axis in entry.dims}
+    assert used <= known

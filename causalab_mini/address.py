@@ -20,9 +20,13 @@ the row says what nnterp cannot: the module (a list of spellings where the
 families disagree and nnterp names none), the axes, and which of nnterp's
 values the place sits beside in the forward. See `_Component.beside`.
 
-A width is never written here, only which size an axis is — `hidden` is the
-model's `hidden_size`, `head_dim` the attention's — and the number is asked of
-the model (`_SIZES`).
+A width is never written here. nnterp names a layout axis that is a model
+fact exactly as the size attribute that holds it — `hidden_size`,
+`num_heads`, `intermediate_size` — so `width` and `head_count` hand the axis
+name to `nnterp.axis_size`, which resolves it on the serving envoy or the
+first envoy above it that declares it. An axis no envoy declares — the batch,
+the sequence, the pattern's keys — is not a fact about the model, and that is
+the refusal.
 
 The table is a floor, not a fence: a component mini has never heard of but
 nnterp serves — a value a user installed with `envoys=` on a family's
@@ -40,7 +44,10 @@ from dataclasses import dataclass
 from typing import Any
 
 #: The three axes of the residual stream, which is what most boundaries carry.
-_STREAM = ("batch", "seq", "hidden")
+#: Axis names are nnterp's (`nnterp.components` exports them as constants);
+#: they are spelled here as literals so a plan loads without importing nnterp,
+#: and a test holds the two spellings together.
+_STREAM = ("batch", "seq", "hidden_size")
 
 
 @dataclass(frozen=True)
@@ -105,7 +112,7 @@ _COMPONENTS = {
     # heads · head_dim wide, which is not hidden_size on Qwen3 or Gemma
     "attention_premix": _Component(
         ("self_attn.o_proj", "self_attn.c_proj", "self_attn.dense", "self_attn.out_proj"), "input",
-        dims=("batch", "seq", "heads", "head_dim"), beside=("self_attn.attention_output", -1),
+        dims=("batch", "seq", "num_heads", "head_dim"), beside=("self_attn.attention_output", -1),
     ),
     "attention_output": _Component(("self_attn",), "attention_output"),
     "block_mid": _Component(("post_attention_layernorm",), "input", dims=_STREAM, beside=("self_attn.attention_output", 1)),
@@ -115,41 +122,25 @@ _COMPONENTS = {
     "mlp_input": _Component(("mlp",), "input", dims=_STREAM, beside=("self_attn.attention_output", 3)),
     "mlp_activation": _Component(
         ("mlp.act_fn", "mlp.act", "mlp.activation_fn"), "output",
-        dims=("batch", "seq", "intermediate"), beside=("mlp.mlp_output", -2),
+        dims=("batch", "seq", "intermediate_size"), beside=("mlp.mlp_output", -2),
     ),
     "mlp_neuron_output": _Component(
         # act(gate)·up on a gated MLP, the activation itself on GPT-2, which
         # has no gate — the same place, a different tensor
         ("mlp.down_proj", "mlp.c_proj", "mlp.fc2", "mlp.dense_4h_to_h", "mlp.fc_out", "mlp.w2"), "input",
-        dims=("batch", "seq", "intermediate"), beside=("mlp.mlp_output", -1),
+        dims=("batch", "seq", "intermediate_size"), beside=("mlp.mlp_output", -1),
     ),
     "mlp_output": _Component(("mlp",), "mlp_output"),
     "block_output": _Component(("",), "layer_output"),
     "ln_final": _Component(("norm",), "output", per_layer=False, dims=_STREAM, beside=("logits", -2)),
     "lm_head": _Component(
-        ("lm_head",), "output", per_layer=False, dims=("batch", "seq", "vocab"), beside=("logits", -1)
+        ("lm_head",), "output", per_layer=False, dims=("batch", "seq", "vocab_size"), beside=("logits", -1)
     ),
     # The model's own output, which is not always the head's: Gemma-2 caps it
     # with `final_logit_softcapping`, so a metric scored on `lm_head` there is
     # scored on numbers the model does not predict from.
     "logits": _Component(("",), "logits", per_layer=False),
 }
-
-#: Which size each axis is: the envoy that holds the number, from the layer
-#: ("" is the model itself), and the attribute. The attention's and the MLP's
-#: are the block's own, read off its module, so they hold on a model whose
-#: blocks differ. An axis not here — the keys of the pattern, the tokens —
-#: has no width that is a fact about the model.
-_SIZES = {
-    "hidden": ("", "hidden_size"),
-    "vocab": ("", "vocab_size"),
-    "heads": ("self_attn", "num_heads"),
-    "kv_heads": ("self_attn", "num_kv_heads"),
-    "head_dim": ("self_attn", "head_dim"),
-    "qk_head_dim": ("self_attn", "qk_head_dim"),
-    "intermediate": ("mlp", "intermediate_size"),
-}
-
 
 class AddressError(ValueError):
     pass
@@ -290,7 +281,7 @@ def _walk(root: Any, path: str, component: str) -> Any:
 
 
 def _heads(axes: tuple[str, ...]) -> str | None:
-    return "q" if "heads" in axes else "kv" if "kv_heads" in axes else None
+    return "q" if "num_heads" in axes else "kv" if "num_kv_heads" in axes else None
 
 
 def locate(model: Any, component: str, layer: int | None) -> Address:
@@ -346,35 +337,29 @@ def _host(root: Any, hosts: tuple[str, ...], component: str) -> tuple[str, Any]:
     raise AddressError(f"this block has no {' or '.join(hosts)} module")
 
 
-def _size(model: Any, axis: str, layer: int | None) -> int:
-    """The number an axis is, asked of the envoy `_SIZES` says holds it — the
-    model's own for a whole-model place."""
-    host, attribute = _SIZES[axis]
-    owner = model if layer is None or not host else _walk(model.layers[layer], host, axis)
-    value = getattr(owner, attribute, None)
-    if value is None:
-        raise AddressError(f"nnterp could not find {attribute!r} for this model")
-    return int(value)
-
-
 def head_count(model: Any, address: Address) -> int:
-    """How many heads the tensor at `address` has, off what nnterp publishes."""
+    """How many heads the tensor at `address` has, off what nnterp publishes:
+    the serving envoy's own count, so it holds on a model whose blocks differ."""
+    from nnterp import axis_size
+
     kind = address.heads_kind
     if kind is None:
         raise AddressError(f"component {address.component!r} is not a per-head tensor")
-    return _size(model, "heads" if kind == "q" else "kv_heads", address.layer)
+    return int(axis_size(address.resolve(model), "num_heads" if kind == "q" else "num_kv_heads"))
 
 
 def width(model: Any, address: Address) -> int:
-    """The feature width at `address`, off what nnterp publishes. A per-head
-    tensor is handed on flat: every head, side by side."""
+    """The feature width at `address`, off what nnterp publishes. An axis is
+    named as the size that holds it, so the last axis is handed to nnterp's
+    `axis_size`, which asks the serving envoy and the envoys above it. A
+    per-head tensor is handed on flat: every head, side by side."""
+    from nnterp import axis_size
+
     last = address._axes[-1]
-    if last not in _SIZES or last in ("heads", "kv_heads"):
-        raise AddressError(
-            f"the width of {address.component!r} is not a fact about the model: its last axis is "
-            f"{last!r}, which depends on the batch (the attention pattern's keys) or is not a feature axis"
-        )
-    size = _size(model, last, address.layer)
+    try:
+        size = int(axis_size(address.resolve(model), last))
+    except ValueError as reason:
+        raise AddressError(f"the width of {address.component!r} is not a fact about the model: {reason}") from None
     if last in ("head_dim", "qk_head_dim"):
         return head_count(model, address) * size
     return size
