@@ -27,12 +27,19 @@ dev = ["pytest"]
 # checkouts this machine develops against, installed editable. That means they
 # can move underneath this project without anything here changing — a `git
 # checkout` in either tree is, for us, a silent dependency upgrade. At the time
-# of writing /home/localjadenfk/wd/nnsight is detached at 524c33fc ("ndif: cache
-# the remote environment per host") and /home/localjadenfk/wd/nnterp is on
-# 334e4ef. If a run stops reproducing, check those two HEADs first.
+# of writing /home/localjadenfk/wd/nnsight-dev-parent is on dev at 52cf9231
+# (includes the #761 drill-race fix) and /home/localjadenfk/wd/nnterp is on
+# 0.8-refactor at 27c8c26 (includes #90, model.order). If a run stops
+# reproducing, check those two HEADs first.
 [tool.uv.sources]
-nnsight = { path = "/home/localjadenfk/wd/nnsight", editable = true }
+nnsight = { path = "/home/localjadenfk/wd/nnsight-dev-parent", editable = true }
 nnterp = { path = "/home/localjadenfk/wd/nnterp", editable = true }
+
+# nnterp declares `nnsight>=0.8`, but the nnsight dev checkout's scm version is
+# an rc (0.8.0rc…, which sorts BELOW 0.8). The override relaxes that one
+# constraint so the editable checkout resolves; delete it once nnsight tags 0.8.0.
+[tool.uv]
+override-dependencies = ["nnsight>=0.8.0rc1"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

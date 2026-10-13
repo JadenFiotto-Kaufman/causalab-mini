@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 from typing import Any, get_args
 
-from nnterp.rename_utils import RenamingError
+from nnterp import UnsupportedFamily
 from pydantic import ValidationError
 
 from . import address, plan as plan_module
@@ -50,8 +50,8 @@ SHAPE_ONLY = {"dispatch": False}
 #: What this package raises when it means "no". Every one carries a message
 #: written for the person who wrote the document, so the entry point prints
 #: that and nothing else. `ValidationError` is pydantic's and is how a
-#: document refuses; `RenamingError` is nnterp's, which mini
-#: forwards wherever a place is a family's to have or not have.
+#: document refuses; `UnsupportedFamily` is nnterp's, for a checkpoint no
+#: family of its standardizes.
 REFUSALS: tuple[type[Exception], ...] = (
     PlanError,          # the compiler, and the run's own refusals
     AddressError,       # a component, a layer, an attention implementation
@@ -60,7 +60,7 @@ REFUSALS: tuple[type[Exception], ...] = (
     DataError,          # a dataset ref, a column, a row
     EngineError,        # a runtime asked for something it does not have
     ValidationError,    # the document
-    RenamingError,      # nnterp, where a place is not this family's
+    UnsupportedFamily,  # nnterp, where a checkpoint is no family's
 )
 
 
@@ -168,9 +168,8 @@ def vocab(args: argparse.Namespace) -> dict[str, Any]:
     lines = [f"step kinds:       {', '.join(payload['step_kinds'])}; a reduce is {' or '.join(payload['reductions'])}"]
     lines.append("components:")
     for name, entry in payload["components"].items():
-        lines.append(f"  {name:22s} nnterp {entry['accessor']}{'  (read-only)' if entry['read_only'] else ''}"
-                     f"{'  [heads]' if entry['heads'] else ''}"
-                     f"{'  needs ' + entry['needs'] + ' attention' if entry['needs'] else ''}")
+        lines.append(f"  {name:22s} {entry['value']}  [{' '.join(entry['dims'])}]"
+                     f"{'  (read-only)' if entry['read_only'] else ''}")
     lines.append(f"mechanisms:       {', '.join(payload['mechanisms'])}")
     lines.append(f"layers:           {payload['layers']}")
     lines.append(f"saves:            {payload['saves']}")
@@ -202,7 +201,7 @@ def model(args: argparse.Namespace) -> dict[str, Any]:
 
     A place is not a property of a checkpoint but of a checkpoint's layer:
     DeepSeek's first blocks are dense and the rest are mixtures of experts,
-    and nnterp answers `unavailable_on(layer)` per layer for exactly that.
+    and nnterp answers `support(layer)` per layer for exactly that.
     Asking at layer 0 only reported the first block as if it were the model.
     Layers that answer alike are one band, so a model whose layers are all
     the same prints one line per component, as before.

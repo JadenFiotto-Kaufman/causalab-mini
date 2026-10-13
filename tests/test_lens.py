@@ -70,8 +70,8 @@ def test_the_lens_projection_matches_the_head_within_an_ulp(model_engine):
     with m.trace(batch):
         resid = m.layers[1].output
         resid = resid[0] if isinstance(resid, tuple) else resid
-        one = m.lm_head(m.ln_final(resid[:, -1:, :])).save()
-        whole = m.lm_head(m.ln_final(resid))[:, -1:, :].save()
+        one = m.lm_head(m.norm(resid[:, -1:, :])).save()
+        whole = m.lm_head(m.norm(resid))[:, -1:, :].save()
         true = m.lm_head.output[:, -1:, :].save()
     assert torch.equal(whole, true), "the whole sequence, then sliced: exact"
     # On bippu the one-position projection differs from the head by an ulp

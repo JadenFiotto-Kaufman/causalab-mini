@@ -825,7 +825,7 @@ def _forward(
     # order with `"all"` before them, and within each by the address's rank.
     # nnsight requires it, and the run relies on it too: a read cut from the
     # decode comes as its steps' parts in step order, with no sort of its own.
-    def order(place: tuple[Address, Any]) -> tuple[int, int, tuple[int, int]]:
+    def order(place: tuple[Address, Any]) -> tuple[int, int, tuple[int, int, int]]:
         address, step = place
         return (0 if step is None else 1, -1 if step == "all" else (step if step is not None else -1), address.key)
 

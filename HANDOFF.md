@@ -110,24 +110,26 @@ These are load-bearing. Several tests enforce them.
    resolves it to the served checkpoint's own tokenizer. A bare name closed
    over would be pickled by value instead, and would be the wrong object.
 6. **`address.py` is the only file that knows anything about model
-   internals**, and since FINDINGS §23 most of what it knows it asks nnterp
-   for. A boundary is the *name of a nnterp accessor*, and which child
-   module that is on a checkpoint, whether the block has the place at all,
-   whether it is one per layer, **where it sits in the forward pass**, and
-   every width and head count are nnterp's — `locate` stamps the resolved
-   child, side and rank into the `Address` and checks `per_layer` against
-   nnterp's answer, so the two cannot drift. The table is a floor and not a
-   fence: a name only `model.internals` has is addressable, because
-   `RenameConfig(addresses={...})` is how a user adds a place, or moves one
-   nnterp has wrong for their model. The four places inside the attention
-   (`attention_query/key/scores/z`) are nnterp rows too —
-   `attention_queries`, `attention_keys`, `attention_scores`,
-   `attention_head_outputs`, hard-coded `.source` ops checked on 26 families
-   by nnterp's `test_source_ops.py` — so an address is an accessor and a
-   layer and nothing else, and the engine's `read`/`write` are
-   `model.internals[name][layer]`. What is left that is purely mini's: the
-   per-head kind, the key axis, the seq axis, the width *attribute name*,
-   and read-only. `ops/` knows nothing about models at all.
+   internals**, and most of what it knows it asks nnterp for. A component is
+   one of nnterp 2.0's standard values, named by the envoy that serves it and
+   the value — `block_output` is the layer's `layer_output`,
+   `attention_query` is `self_attn.attention_queries` — and whether the
+   checkpoint has it (`support`, with nnterp's reason: the attention's
+   interior needs eager attention), **where it sits in the forward pass**
+   (`rank`) and the tensor's axes (the value's `dims`) are nnterp's. `locate`
+   stamps the envoy, the rank and the axes into the `Address`; the sequence
+   axis, the key axis and the per-head kind are read off the axes, and every
+   width is an axis name mapped to a size the model is asked for (`_SIZES`).
+   Six components are module boundaries nnterp 2.0 has no value for (a norm's
+   output, the output projection's input, the MLP's activation): their rows
+   say the module — a list of spellings where nnterp names none — the axes,
+   and which nnterp value they sit beside in the forward, so even their order
+   is stated against nnterp's. The table is a floor and not a fence: a dotted
+   `support()` name nnterp serves — a value a user installed with `envoys=`
+   — is addressable and sized off its own layout. The engine's `read`/`write`
+   are `getattr`/`setattr` of the value on the envoy. What is left that is
+   purely mini's: which components exist, read-only, and those six rows.
+   `ops/` knows nothing about models at all.
 7. **An engine is nine members and no more**: `load`, then `tokenizer`,
    `num_layers`, `locate`, `width` and `heads` — what the compiler asks of a
    runtime — then `execute`, `forward` and `generate`, what the run asks.
@@ -392,8 +394,11 @@ Full detail in `FINDINGS.md`; these are the ones that reach past mini.
 - **`nnsight` and `nnterp` are editable local paths** (`[tool.uv.sources]`)
   pointing at `/home/localjadenfk/wd/nnsight` and `/home/localjadenfk/wd/nnterp`.
   **These are shared working checkouts and can move underneath this project.**
-  At handoff: nnsight is a detached HEAD at `524c33fc` (the commit of nnsight
-  PR #729); nnterp is on branch `standardize-internals`.
+  Since nnterp 2.0: nnsight is `/home/localjadenfk/wd/nnsight-dev-parent` on
+  dev at `52cf9231`, nnterp is at `27c8c26`. nnsight dev does not have PR
+  #729's per-host remote environment, which `engine/provenance.py` is written
+  against: the two tests that pin it skip, and a remote run fails in
+  `provenance.record` until #729 is on dev.
 - **`--engine ndif` needs the server to have our code.** `causalab_mini` and
   `nnterp` must be installed there at the client's versions; nothing of either
   ships by value any more. That makes the two sides one codebase rather than

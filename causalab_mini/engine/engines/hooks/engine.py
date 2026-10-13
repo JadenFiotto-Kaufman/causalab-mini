@@ -5,11 +5,11 @@ engine beside it. No session, no envoys, no tracing, no remote: one
 `model(**batch)` per forward with a hook on each module a tap names, and the
 hook does the reading and the writing on the way out.
 
-What it costs to not be standardized is `loading.standardized`, and what it
-costs to not be nnsight is the inside of a forward: a hook sees a module's
-boundary and nothing between, so `attention_query` — an operation inside the
-attention's forward — is refused by name at compile time rather than
-approximated. Everything else — the walk over steps, the fit loop, the
+What it costs to not be standardized is `loading.standardized` and `PLACES`,
+and what it costs to not be nnsight is the inside of a forward: a hook sees a
+module's boundary and nothing between, so `attention_query` — an operation
+inside the attention's forward — is refused by name at compile time rather
+than approximated. Everything else — the walk over steps, the fit loop, the
 metrics, the write algebra — is the shared code in `engine/steps.py` and
 `ops/`, unchanged, which is the claim this engine was written to test.
 """
@@ -35,11 +35,10 @@ class HooksEngine(Engine):
         self.model = model
         self._dispatched = dispatched
         # What nnterp hands over with the model and nobody else does: the
-        # tokenizer, the standardized names an address is written in, and —
-        # through a weightless shell of the same checkpoint — which child
-        # module each component is on this family, and every width.
+        # tokenizer, and — through a weightless shell of the same checkpoint —
+        # where each place sits in the forward, and every width.
         self._tokenizer = tokenizer
-        self._names = standardized(model, shell)
+        self._names = standardized(model)
         self._shell = shell
 
     @classmethod
@@ -67,28 +66,25 @@ class HooksEngine(Engine):
     def locate(self, component: str, layer: int | None = None) -> Address:
         """The address of `(component, layer)`, or a refusal.
 
-        The same nnterp row the other engine reads — module path, side, and
-        where in the value the tensor is — so what a hook reaches is what an
-        accessor reaches. A row that names an operation inside a module's
-        forward is the exception, and it is refused here, at compile time: a
-        hook fires at a module boundary, and nnsight reaches inside by
-        recompiling the forward (`.source`), which hooks have no equivalent
-        of. Building one would be a different engine — patch the module's
-        `forward` to expose the tensor, or hook `q_proj` and reimplement the
-        reshape and the rotary embedding the query has had by the time it is
-        the query.
+        The address — its place in the forward, its axes — is the one the
+        other engine compiles against, asked of the shell, so the two engines
+        sort and size a plan alike. Which module a hook goes on is `PLACES`,
+        and a component that is not one of them is refused here, at compile
+        time: a hook fires at a module boundary, and nnsight reaches inside
+        by recompiling the forward (`.source`), which hooks have no
+        equivalent of. Building one would be a different engine — patch the
+        module's `forward` to expose the tensor, or hook `q_proj` and
+        reimplement the reshape and the rotary embedding the query has had by
+        the time it is the query.
         """
-        # The row is a fact about the checkpoint that nnterp knows; this
-        # engine's model is not an nnterp one, so it asks the shell.
-        address = address_module.locate(self._shell, component, layer)
-        if address.inside:
+        if component not in PLACES:
             raise AddressError(
-                f"component {component!r} is an operation inside a module's forward — "
-                "one argument or result of one call — and a forward hook only sees the "
-                "module's boundary. nnsight reaches it through `.source`, which has no "
+                f"component {component!r} is not one of the module boundaries a forward hook "
+                f"reaches here, {sorted(PLACES)}. A hook sees a module's boundary and nothing "
+                "inside its forward; nnsight reaches inside through `.source`, which has no "
                 "hooks equivalent; the nnterp engine reaches it."
             )
-        return address
+        return address_module.locate(self._shell, component, layer)
 
     def heads(self, address: Address) -> int:
         return address_module.head_count(self._shell, address)
@@ -181,40 +177,35 @@ def _install(
 ) -> Any:
     """Hook one address, on the side it is addressed on."""
     module = resolve(tap.address, names)
-    if tap.address.io == "output":
+    if PLACES[tap.address.component][1] == "output":
         return module.register_forward_hook(intervene_at(tap, values, featurizers, names, clock))
     return module.register_forward_pre_hook(
         intervene_before(tap, values, featurizers, names, clock), with_kwargs=True
     )
 
 
-def resolve(address: Address, names: Any) -> Any:
-    """The raw module an address names, against the standardized tree. The
-    path is in nnterp's spellings, and inside a block two of them are
-    renames (`self_attn`, `mlp`) that the raw tree does not have: those go
-    through the per-layer lists `standardized()` built.
+#: The places a forward hook reaches: one of the modules `standardized` finds
+#: — a per-layer list, or one whole-model module — and which side of it.
+PLACES = {
+    "input_ids": ("embed_tokens", "input"),
+    "embeddings": ("embed_tokens", "output"),
+    "block_input": ("layers", "input"),
+    "attention_output": ("attentions", "output"),
+    "mlp_input": ("mlps", "input"),
+    "mlp_output": ("mlps", "output"),
+    "block_output": ("layers", "output"),
+    "ln_final": ("ln_final", "output"),
+    "lm_head": ("lm_head", "output"),
+    # the model's own output, whose `logits` field is the tensor
+    "logits": ("model", "output"),
+}
 
-    The empty path is the model itself — nnterp writes a whole-model place
-    that way (`logits` is the model's own output), and a layer's own
-    boundary the same way relative to the layer.
-    """
-    if not address.path:
-        return names.model
-    segments = address.path.split(".")
-    if segments[0] != "layers":
-        return address.resolve(names)
-    layer = int(segments[1])
-    module = names.layers[layer]
-    for index, segment in enumerate(segments[2:]):
-        if index == 0 and segment == "self_attn":
-            module = names.attentions[layer]
-        elif index == 0 and segment == "mlp":
-            module = names.mlps[layer]
-        else:
-            module = getattr(module, segment, None)
-        if module is None:
-            raise AddressError(f"component {address.component!r}: {address.path!r} does not exist on this model")
-    return module
+
+def resolve(address: Address, names: Any) -> Any:
+    """The raw module an address is hooked on, in the tree `standardized`
+    translated: a per-layer place's module at its layer."""
+    found = getattr(names, PLACES[address.component][0])
+    return found if address.layer is None else found[address.layer]
 
 
 def intervene_before(
@@ -296,33 +287,20 @@ def intervene_at(
     read in a model sees that model's writes; the nnterp engine implements the
     same rule by ordering two statements.
 
-    Where the tensor is inside the module's output is nnterp's row to say —
-    a bare tensor, the first element of a tuple, or a field of the output
-    object — and it says it as a `Selection` with `get`/`put`. This engine
-    asks for the row's, which is how it reaches `logits` (the model's own
-    output, whose `logits` field is the tensor) with no rule of its own:
-    unwrapping a tuple's first element is `FirstIfTuple`, one of them.
+    The tensor is the output itself, the first element of a tuple (a block
+    that returns its attention weights beside it), or the `logits` field of
+    the model's own output.
     """
 
     def hook(module: Any, args: Any, output: Any) -> Any:
         if not intervene.applies(tap.step, clock["step"]):
             return None
-        select = selection(tap.address, names)
-        activation = _apply(
-            tap, output if select is None else select.get(output),
-            values, featurizers, names, clock["step"],
-        )
-        return activation if select is None else select.put(output, activation)
+        if isinstance(output, tuple):
+            return (_apply(tap, output[0], values, featurizers, names, clock["step"]), *output[1:])
+        if hasattr(output, "logits"):
+            output.logits = _apply(tap, output.logits, values, featurizers, names, clock["step"])
+            return output
+        return _apply(tap, output, values, featurizers, names, clock["step"])
 
     return hook
 
-
-def selection(address: Address, names: Any) -> Any:
-    """Where the tensor is inside the value at this place, as nnterp's row
-    says it. `None` is the value untouched.
-
-    The row is asked for by the accessor name the plan already carries, off
-    the same weightless shell this engine asks for a module's spelling and
-    for every width — so there is no second table here and no third spelling
-    of "the first element of a tuple"."""
-    return names.shell.internals[address.accessor].address.select

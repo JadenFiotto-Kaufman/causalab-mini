@@ -44,16 +44,6 @@ def gpt2_engine():
 
 
 @pytest.fixture(scope="session")
-def eager_engine():
-    """The same tiny Llama running eager attention — the only implementation
-    under which the attention pattern is a tensor at all."""
-    return NNterpEngine.load(
-        model_block(REPO / "documents" / "v2" / "patching.json"),
-        device_map="cpu", attn_implementation="eager",
-    )
-
-
-@pytest.fixture(scope="session")
 def eager_gpt2_engine():
     return NNterpEngine.load(model_block(GPT2), device_map="cpu", attn_implementation="eager")
 
@@ -91,53 +81,45 @@ def _at(raw, component, layer):
 
 @pytest.mark.parametrize("component", list(_COMPONENTS))
 def test_one_address_serves_both_families(component, eager_engine, eager_gpt2_engine):
-    """FINDINGS §1.11, extended from three components to eleven: the address
-    is *equal* on tiny Llama and tiny GPT-2, whose module trees share no path,
-    because nnterp absorbs the family axis: the accessor, the side and
-    whether it is inside a forward are the same, and only the module path
-    each checkpoint spells differs."""
+    """FINDINGS §1.11, extended from three components to all of them: the
+    address is the same on tiny Llama and tiny GPT-2, whose module trees
+    share no path, because nnterp absorbs the family axis: the value, the
+    envoy it is read off, whether it is inside a forward and the tensor's
+    axes are the same. The envoy differs only where nnterp names no standard
+    module and mini's row lists each family's spelling."""
     layer = 0 if _COMPONENTS[component].per_layer else None
     one, other = eager_engine.locate(component, layer), eager_gpt2_engine.locate(component, layer)
-    assert (one.accessor, one.layer, one.io, one.inside) == (other.accessor, other.layer, other.io, other.inside)
+    assert (one.value, one.layer, one.inside, one.dims) == (other.value, other.layer, other.inside, other.dims)
+    if len(_COMPONENTS[component].hosts) == 1:
+        assert one.module == other.module
 
 
-#: What each standardized name resolves to in a raw HuggingFace tree. This is
-#: the whole of what nnterp's standardization is worth for these two
-#: families, written down — see FINDINGS §6.
+#: What each place the hooks engine hooks resolves to in a raw HuggingFace
+#: tree — see FINDINGS §6. "" is the model itself.
 RAW_PATHS = {
     "llama": {
         "input_ids": "model.embed_tokens",
         "embeddings": "model.embed_tokens",
         "block_input": "model.layers.0",
-        "attention_input_norm": "model.layers.0.input_layernorm",
-        "attention_premix": "model.layers.0.self_attn.o_proj",
         "attention_output": "model.layers.0.self_attn",
-        "block_mid": "model.layers.0.post_attention_layernorm",
-        "mlp_input_norm": "model.layers.0.post_attention_layernorm",
-        "mlp_activation": "model.layers.0.mlp.act_fn",
-        "mlp_neuron_output": "model.layers.0.mlp.down_proj",
         "mlp_input": "model.layers.0.mlp",
         "mlp_output": "model.layers.0.mlp",
         "block_output": "model.layers.0",
         "ln_final": "model.norm",
         "lm_head": "lm_head",
+        "logits": "",
     },
     "gpt2": {
         "input_ids": "transformer.wte",
         "embeddings": "transformer.wte",
         "block_input": "transformer.h.0",
-        "attention_input_norm": "transformer.h.0.ln_1",
-        "attention_premix": "transformer.h.0.attn.c_proj",
         "attention_output": "transformer.h.0.attn",
-        "block_mid": "transformer.h.0.ln_2",
-        "mlp_input_norm": "transformer.h.0.ln_2",
-        "mlp_activation": "transformer.h.0.mlp.act",
-        "mlp_neuron_output": "transformer.h.0.mlp.c_proj",
         "mlp_input": "transformer.h.0.mlp",
         "mlp_output": "transformer.h.0.mlp",
         "block_output": "transformer.h.0",
         "ln_final": "transformer.ln_f",
         "lm_head": "lm_head",
+        "logits": "",
     },
 }
 
@@ -151,11 +133,12 @@ def _qualified(root, module):
 
 @pytest.mark.parametrize("family", list(RAW_PATHS))
 def test_the_hooks_engine_translates_every_name_to_the_right_raw_module(family, hooks_engines):
-    """The nnterp engine resolves a standardized path against a handle that
-    already has those names; the hooks engine resolves the same path against
-    a raw tree that does not. Two families, no shared spelling, one address
-    table — and this is the translation, stated rather than assumed."""
+    """The nnterp engine reads a value off an envoy nnterp has already named;
+    the hooks engine hooks a module of a raw tree that has no such names.
+    Two families, no shared spelling, one table of places — and this is the
+    translation, stated rather than assumed."""
     engine = hooks_engines[family]
+    assert set(RAW_PATHS[family]) == set(hooks.PLACES)
     for component, expected in RAW_PATHS[family].items():
         layer = 0 if _COMPONENTS[component].per_layer else None
         module = hooks.resolve(engine.locate(component, layer), engine._names)
@@ -164,8 +147,9 @@ def test_the_hooks_engine_translates_every_name_to_the_right_raw_module(family, 
 
 def test_the_addresses_sort_into_forward_order(eager_engine):
     """The sort key is what keeps a read at the head from being issued before
-    a read at layer 0 — nnsight refuses that outright. It is nnterp's
-    `internals.rank`, stamped by `locate`, for every place."""
+    a read at layer 0 — nnsight refuses that outright. It is nnterp's `rank`,
+    stamped by `locate`: a value's own, and a module boundary's the value it
+    sits beside."""
     model_engine = eager_engine  # eager, so the pattern is among them
     layered = [model_engine.locate(name, 0) for name in LAYERED]
     order = [one.component for one in sorted(layered, key=lambda one: one.key)]
@@ -211,7 +195,7 @@ def test_every_component_can_be_read_in_one_forward(eager_engine):
                 seen[address.component] = nnterp.read(model, address).clone()
 
     assert set(seen) == set(_COMPONENTS)
-    assert seen["lm_head"].shape[-1] == model_engine.width(Address("lm_head"))
+    assert seen["lm_head"].shape[-1] == model_engine.width(model_engine.locate("lm_head", None))
 
 
 # --------------------------------------------------------------------- #
@@ -228,35 +212,36 @@ def test_the_residual_stream_taps_are_the_tensors_they_claim(model_engine):
         "input_ids": torch.tensor([[1, 2, 3, 4]]),
         "attention_mask": torch.tensor([[1, 1, 1, 1]]),
     }
+    # located before the trace, as a plan is: nnterp measures the forward
+    # order with a run of its own the first time it is asked
+    addresses = [
+        model_engine.locate(name, layer)
+        for name, layer in (("embeddings", None), ("block_input", 0), ("block_output", 0), ("block_input", 1))
+    ]
     with model.session():
         seen = nnsight.save({})
         with model.trace(batch):
-            for name, layer in (
-                ("embeddings", None),
-                ("block_input", 0),
-                ("block_output", 0),
-                ("block_input", 1),
-            ):
-                address = model_engine.locate(name, layer)
-                seen[f"{name}{layer}"] = nnterp.read(model, address).clone()
+            for address in addresses:
+                seen[f"{address.component}{address.layer}"] = nnterp.read(model, address).clone()
 
     assert torch.equal(seen["embeddingsNone"], seen["block_input0"])
     assert torch.equal(seen["block_output0"], seen["block_input1"])
 
 
-def test_the_attention_interior_taps_are_head_shaped(model_engine):
+def test_the_attention_interior_taps_are_head_shaped(eager_engine):
     """`attention_key` is the argument after the query in the same call,
     and `attention_z` is that call's result."""
-    model = model_engine.model
+    model = eager_engine.model
     batch = {
         "input_ids": torch.tensor([[1, 2, 3, 4]]),
         "attention_mask": torch.tensor([[1, 1, 1, 1]]),
     }
+    addresses = [eager_engine.locate(name, 0) for name in ("attention_query", "attention_key", "attention_z")]
     with model.session():
         seen = nnsight.save({})
         with model.trace(batch):
-            for name in ("attention_query", "attention_key", "attention_z"):
-                seen[name] = nnterp.read(model, model_engine.locate(name, 0)).clone()
+            for address in addresses:
+                seen[address.component] = nnterp.read(model, address).clone()
 
     # (batch, head, seq, head_dim) for the two arguments, sequence on axis 2 —
     # and the keys are in key-head space, which is narrower under GQA.
@@ -288,13 +273,12 @@ LAYER_UNDER_TEST = {"block_input": 1, "attention_input_norm": 1}
     "component",
     # `lm_head` and `logits` are where the metric reads, so a write there is
     # the read; `embeddings`/`input_ids` are upstream of everything and are
-    # covered by the no-op test below; a place that needs eager attention is
-    # not in this sdpa document and has its own tests above
+    # covered by the no-op test below; the pattern is not served under this
+    # document's sdpa attention and has its own tests above
     [
         name
         for name in BOUNDARIES
-        if name not in ("lm_head", "logits", "embeddings", "input_ids")
-        and _COMPONENTS[name].needs is None
+        if name not in ("lm_head", "logits", "embeddings", "input_ids", "attention_probs")
     ],
 )
 def test_a_swap_at_every_component_lands_and_moves_the_logits(
@@ -378,14 +362,21 @@ def test_the_token_ids_can_be_read_and_never_written(minimal_raw, data_root, mod
         Spec.model_validate(raw)
 
 
-def test_a_childs_spelling_is_nnterps_to_know(model_engine, gpt2_engine):
-    """`input_layernorm` on Llama, `ln_1` on GPT-2: which a checkpoint has is a
-    fact nnterp reads off its module tree, and `locate` writes into the
-    address so the plan says where."""
+def test_a_childs_spelling_is_nnterps_where_nnterp_names_it(model_engine, gpt2_engine):
+    """`input_layernorm` on Llama, `ln_1` on GPT-2: nnterp names both
+    `input_layernorm`, so the address is the same. The output projection it
+    names on neither, so mini's row lists the spellings and `locate` writes
+    the one the checkpoint has into the address, so the plan says where —
+    with its place in the forward stated against nnterp's: one before the
+    attention's output."""
     assert model_engine.locate("attention_input_norm", 0).module == "input_layernorm"
-    assert gpt2_engine.locate("attention_input_norm", 0).module == "ln_1"
+    assert gpt2_engine.locate("attention_input_norm", 0).module == "input_layernorm"
+    assert gpt2_engine.locate("attention_premix", 0).module == "self_attn.c_proj"
+    attention_output = model_engine.locate("attention_output", 0).rank
+    assert attention_output is not None
     assert model_engine.locate("attention_premix", 0) == Address(
-        "attention_premix", 0, module="self_attn.o_proj", io="input", rank=(0, 25)
+        "attention_premix", 0, module="self_attn.o_proj",
+        rank=(0, attention_output[1], -1), dims=("batch", "seq", "num_heads", "head_dim"),
     )
 
 

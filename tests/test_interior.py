@@ -2,7 +2,8 @@
 
 The query tensor as the attention implementation receives it — after the
 projection, after the head reshape, after RoPE — reached inside the attention
-module's forward through nnsight's `.source`, by nnterp's `attention_queries`.
+module's forward through nnsight's `.source`, by nnterp's `attention_queries`,
+which nnterp serves under eager attention.
 """
 
 import copy
@@ -15,11 +16,17 @@ import torch
 from conftest import of_kind
 
 from causalab_mini import ops, plan
-from causalab_mini.address import Address
+from causalab_mini.address import Address, AddressError
 from causalab_mini.engine import NNterpEngine, steps
 from causalab_mini.engine.engines.nnterp import engine as nnterp
 
 DOCUMENT = pathlib.Path(__file__).resolve().parents[1] / "documents" / "v2" / "attention_query.json"
+
+
+@pytest.fixture(scope="module")
+def model(eager_engine):
+    """This file's model: the document's, which runs eager attention."""
+    return eager_engine.model
 
 
 @pytest.fixture
@@ -50,32 +57,34 @@ def _identity_write(raw):
 # --------------------------------------------------------------------- #
 
 
-def test_the_interior_is_nnterps_row_for_the_interface_call(model_engine, model):
-    """The address is the accessor and the layer; where that is — the
-    attention's call into its implementation, positional argument 1 of the
-    `(args, kwargs)` it is called with — is nnterp's row, one of those its
-    source-ops suite checks on every family."""
-    located = model_engine.locate("attention_query", 0)
+def test_the_interior_is_nnterps_value_on_the_attention(eager_engine):
+    """The address is the envoy, the value and the layer; where that is — the
+    attention's call into its implementation, the query argument of the
+    `(args, kwargs)` it is called with — is nnterp's, and so are its axes:
+    heads before tokens, so the sequence is axis 2."""
+    located = eager_engine.locate("attention_query", 0)
 
-    assert located.accessor == "attention_queries"
-    assert (located.path, located.io, located.inside) == ("layers.0.self_attn", "inputs", True)
-    assert located.seq_axis == 2
+    assert (located.path, located.value, located.inside) == ("layers.0.self_attn", "attention_queries", True)
+    assert located.seq_axis == 2 and located.heads_kind == "q"
     # It is still pure data, and it is still what the document said.
-    assert located == Address("attention_query", 0, module="self_attn", io="inputs", rank=(0, 13), inside=True)
-    row = model.internals["attention_queries"].address
-    assert row.op == ("attention_interface_1",) and row.select.steps == (0, 1)
+    assert located == Address(
+        "attention_query", 0, module="self_attn", rank=(0, 1, 0), inside=True,
+        dims=("batch", "num_heads", "seq", "qk_head_dim"),
+    )
 
 
-def test_an_address_is_only_the_accessor_and_the_layer(model):
-    """Reading needs nothing `locate` resolved: the accessor knows the rest,
-    so a hand-built address reads the tensor the accessor does."""
+def test_an_address_reads_what_nnterps_value_reads(eager_engine, model):
+    """A read at an address is the value off the envoy, nothing of mini's in
+    between: the same tensor `model.layers[0].self_attn.attention_queries`
+    is."""
+    located = eager_engine.locate("attention_query", 0)
     tokens = {"input_ids": torch.tensor([[1, 2, 3]]), "attention_mask": torch.tensor([[1, 1, 1]])}
     with torch.no_grad(), model.trace(tokens):
         got = nnsight.save({})
-        got["address"] = nnterp.read(model, Address("attention_query", 0)).clone()
+        got["address"] = nnterp.read(model, located).clone()
     with torch.no_grad(), model.trace(tokens):
-        got["accessor"] = model.attention_queries[0].clone()
-    assert torch.equal(got["address"], got["accessor"])
+        got["value"] = model.layers[0].self_attn.attention_queries.clone()
+    assert torch.equal(got["address"], got["value"])
 
 
 # --------------------------------------------------------------------- #
@@ -83,18 +92,18 @@ def test_an_address_is_only_the_accessor_and_the_layer(model):
 # --------------------------------------------------------------------- #
 
 
-def test_the_query_is_head_shaped_and_already_rotated(model_engine, model, data_root, interior_raw):
+def test_the_query_is_head_shaped_and_already_rotated(eager_engine, model, data_root, interior_raw):
     """Two claims about the tensor: the sequence is axis 2 because the heads are
     axis 1, and it is past RoPE — so it is not the projection's output."""
-    built = _build(interior_raw, data_root, model_engine)
-    source_forward, _ = steps.located(model_engine, of_kind(built, plan.Forward)[0])
+    built = _build(interior_raw, data_root, eager_engine)
+    source_forward, _ = steps.located(eager_engine, of_kind(built, plan.Forward)[0])
     tap = source_forward.taps[0]
 
     with model.trace(nnterp.batch(source_forward)):
         # q_proj first: nnsight enforces forward order inside a module's forward
         # exactly as it does between modules, and the projection runs before the
         # call that consumes it.
-        projected = model.attentions[0].q_proj.output.clone().save()
+        projected = model.layers[0].self_attn.q_proj.output.clone().save()
         whole = nnterp.read(model, tap.address).clone().save()
         at_position = ops.gather(
             nnterp.read(model, tap.address), tap.reads[0].at.positions, tap.address.seq_axis
@@ -111,11 +120,14 @@ def test_the_query_is_head_shaped_and_already_rotated(model_engine, model, data_
     assert not torch.equal(before, whole)
 
 
-def test_the_interior_is_reached_under_the_checkpoints_own_attention(model):
-    """Reading and writing q needs no eager attention — only scores and
-    probabilities do, and those are one level deeper, inside the implementation
-    this call dispatches to."""
-    assert model.config._attn_implementation == "sdpa"
+def test_the_interior_is_refused_under_sdpa_and_says_how_to_get_it(model_engine):
+    """nnterp serves the attention's interior under eager attention only — the
+    query as well as the scores and the pattern, though the call whose
+    argument the query is runs under sdpa too — so the document says eager,
+    and a model running sdpa refuses the address with the fix."""
+    assert model_engine.model.config._attn_implementation == "sdpa"
+    with pytest.raises(AddressError, match="load with attn_implementation='eager'"):
+        model_engine.locate("attention_query", 0)
 
 
 # --------------------------------------------------------------------- #
@@ -123,10 +135,10 @@ def test_the_interior_is_reached_under_the_checkpoints_own_attention(model):
 # --------------------------------------------------------------------- #
 
 
-def test_a_swap_at_the_interior_lands_bit_for_bit(model_engine, model, data_root, interior_raw):
-    built = _build(interior_raw, data_root, model_engine)
+def test_a_swap_at_the_interior_lands_bit_for_bit(eager_engine, model, data_root, interior_raw):
+    built = _build(interior_raw, data_root, eager_engine)
     source_forward, patched_forward = (
-        steps.located(model_engine, one)[0]
+        steps.located(eager_engine, one)[0]
         for one in of_kind(built, plan.Forward)
     )
     read = source_forward.taps[0].reads[0]
@@ -160,23 +172,23 @@ def test_a_swap_at_the_interior_lands_bit_for_bit(model_engine, model, data_root
     assert torch.equal(landed["after"], landed["source"])
 
 
-def test_a_write_at_the_interior_moves_the_logits(model_engine, model, data_root, interior_raw):
+def test_a_write_at_the_interior_moves_the_logits(eager_engine, model, data_root, interior_raw):
     """The one that proves the write is not decoration: the same document with
     the operand taken from the counterfactual rows scores differently from the
     same document with nothing written, and identically when what is written is
     what was already there."""
-    clean = model_engine.execute(_build(_no_write(interior_raw), data_root, model_engine))
-    identity = model_engine.execute(_build(_identity_write(interior_raw), data_root, model_engine))
-    swapped = model_engine.execute(_build(interior_raw, data_root, model_engine))
+    clean = eager_engine.execute(_build(_no_write(interior_raw), data_root, eager_engine))
+    identity = eager_engine.execute(_build(_identity_write(interior_raw), data_root, eager_engine))
+    swapped = eager_engine.execute(_build(interior_raw, data_root, eager_engine))
 
     assert torch.equal(identity.result("logit_diff"), clean.result("logit_diff"))
     assert not torch.equal(swapped.result("logit_diff"), clean.result("logit_diff"))
 
 
-def test_only_the_declared_position_of_the_query_changes(model_engine, model, data_root, interior_raw):
-    built = _build(interior_raw, data_root, model_engine)
+def test_only_the_declared_position_of_the_query_changes(eager_engine, model, data_root, interior_raw):
+    built = _build(interior_raw, data_root, eager_engine)
     source_forward, patched_forward = (
-        steps.located(model_engine, one)[0]
+        steps.located(eager_engine, one)[0]
         for one in of_kind(built, plan.Forward)
     )
     tap = patched_forward.taps[0]
@@ -213,37 +225,37 @@ def test_only_the_declared_position_of_the_query_changes(model_engine, model, da
     assert torch.equal(seen["clean_first"], seen["patched_first"])
 
 
-def test_the_interior_document_runs_end_to_end(model_engine, tmp_path, data_root, model, interior_raw):
-    built = _build(interior_raw, data_root, model_engine)
-    results = model_engine.execute(built)
+def test_the_interior_document_runs_end_to_end(eager_engine, tmp_path, data_root, model, interior_raw):
+    built = _build(interior_raw, data_root, eager_engine)
+    results = eager_engine.execute(built)
     written = results.write(tmp_path)
 
     assert sorted(path.name for path in written) == ["document.json", "logit_diff.json", "run.json"]
     assert len(json.loads((tmp_path / "logit_diff.json").read_text())) == 4
 
 
-def test_the_interior_is_ordered_before_its_own_blocks_output(interior_raw, data_root, model_engine):
+def test_the_interior_is_ordered_before_its_own_blocks_output(interior_raw, data_root, eager_engine):
     """The forward order now has a rank *inside* a block: layer 0's query is
     read before layer 0's output. nnsight enforces it — get this wrong and the
     run raises rather than returning a wrong number."""
     raw = copy.deepcopy(interior_raw)
     raw["sites"]["block"] = {"component": "block_output", "layers": 0}
     raw["steps"]["patched"]["reads"]["after"] = {"site": "block", "pos": -1}
-    built = _build(raw, data_root, model_engine)
+    built = _build(raw, data_root, eager_engine)
 
     assert [tap.address.component for tap in of_kind(built, plan.Forward)[1].taps] == [
         "attention_query",
         "block_output",
         "lm_head",
     ]
-    model_engine.execute(built)
+    eager_engine.execute(built)
 
 
-def test_the_interior_plan_survives_the_remote_path(model_engine, model, data_root, interior_raw):
+def test_the_interior_plan_survives_the_remote_path(eager_engine, model, data_root, interior_raw):
     """`remote="local"` serializes the session exactly as a remote run would.
     An interior address is a component, a layer and an operation name, so there
     is nothing in it that cannot make the trip."""
-    built = _build(interior_raw, data_root, model_engine)
-    here = model_engine.execute(built)
-    shipped = model_engine.execute(built, remote="local")
+    built = _build(interior_raw, data_root, eager_engine)
+    here = eager_engine.execute(built)
+    shipped = eager_engine.execute(built, remote="local")
     assert torch.equal(here.result("logit_diff"), shipped.result("logit_diff"))

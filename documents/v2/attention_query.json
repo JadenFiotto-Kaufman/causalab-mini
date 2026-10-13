@@ -1,11 +1,12 @@
 {
   "header": {
-    "description": "The interchange at a place inside a module's forward: the query the attention hands its implementation, after the projection, the head reshape and RoPE, at layer 0 \u2014 read on the counterfactual prompt at its last token and swapped into the base prompt's. nnterp's `attention_queries` row reaches it through nnsight's `.source`; the hooks engine refuses it by name. Only the logit difference is saved."
+    "description": "The interchange at a place inside a module's forward: the query the attention hands its implementation, after the projection, the head reshape and RoPE, at layer 0 \u2014 read on the counterfactual prompt at its last token and swapped into the base prompt's. nnterp's `self_attn.attention_queries` reaches it through nnsight's `.source`, and serves it under eager attention only, which the model block says; the hooks engine refuses it by name. Only the logit difference is saved."
   },
   "model": {
     "key": "hf-internal-testing/tiny-random-LlamaForCausalLM",
     "revision": "9fb191250dd56d0ba7ec9785a025ed29c03d5998",
-    "dtype": "fp32"
+    "dtype": "fp32",
+    "attn_implementation": "eager"
   },
   "data": {
     "pairs": {

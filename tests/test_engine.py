@@ -155,10 +155,12 @@ def test_a_meta_shell_compiles_the_same_plan(engine_class, minimal_raw, data_roo
 
 
 def test_a_meta_shell_still_locates_an_interior(minimal_raw):
-    """Where the query is, is nnterp's row — no weight is needed to say so."""
-    shell = NNterpEngine.load(Model.model_validate(minimal_raw["model"]), dispatch=False)
+    """Where the query is, and where it comes in the forward, are nnterp's —
+    no weight is needed to say so: right after the block's input, at the
+    attention's call into its implementation."""
+    shell = NNterpEngine.load(Model.model_validate(minimal_raw["model"]), dispatch=False, attn_implementation="eager")
     located = shell.locate("attention_query", 0)
-    assert (located.accessor, located.inside, located.rank) == ("attention_queries", True, (0, 13))
+    assert (located.module, located.value, located.inside, located.rank) == ("self_attn", "attention_queries", True, (0, 1, 0))
 
 
 def test_a_hooks_shell_refuses_to_run_because_it_has_nowhere_to(minimal_raw, data_root):

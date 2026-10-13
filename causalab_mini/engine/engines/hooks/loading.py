@@ -2,13 +2,14 @@
 
 The nnterp engine's `loading.py` is one call because `StandardizedTransformer`
 answers everything downstream asks: the tokenizer, the layer count, the widths,
-and `layers`/`lm_head`/`attentions` under the same spellings on every family.
+and `layers`/`self_attn`/`lm_head` under the same spellings on every family.
 This file is what that costs when nothing has been standardized, and the answer
 is `standardized` below — the whole translation layer, and the measurement this
 engine exists to produce (FINDINGS §6).
 
 Everything this engine knows about the shape of a raw HuggingFace tree is in
-this file. `engine.py` beside it knows only addresses and hooks.
+this file. `engine.py` beside it knows which of those modules each component
+is hooked on (`PLACES`), and hooks.
 """
 
 from __future__ import annotations
@@ -61,13 +62,14 @@ def load(spec: Any, device_map: str = "cpu", dispatch: bool = True) -> tuple[Any
     return model, tokenizer
 
 
-def standardized(model: Any, shell: Any = None) -> Any:
-    """nnterp's names, against a raw HuggingFace tree.
+def standardized(model: Any) -> Any:
+    """The modules a hook goes on, under one set of names, against a raw
+    HuggingFace tree.
 
-    `Address.path` is written in nnterp's spellings — `layers.{L}`, `lm_head` —
-    and a raw Llama has `model.layers` while a raw GPT-2 has `transformer.h`.
-    This returns an object carrying those spellings, so `Address.resolve` walks
-    it unchanged and no other line of this engine has to know the difference.
+    A raw Llama has `model.layers` while a raw GPT-2 has `transformer.h`.
+    This returns an object carrying one spelling of each — `layers`,
+    `lm_head` — so the engine's `PLACES` names them and no other line of this
+    engine has to know the difference.
 
     Three of the six are published by transformers and needed no family
     knowledge at all — the decoder under `base_model_prefix`, the head under
@@ -95,10 +97,6 @@ def standardized(model: Any, shell: Any = None) -> Any:
     layers = stacks[0]
     return SimpleNamespace(
         model=model,
-        #: The weightless nnterp handle this engine keeps anyway, for the
-        #: module spellings and every width. A row's `select` — where the
-        #: tensor is inside a module's value — is asked of it too.
-        shell=shell,
         layers=layers,
         attentions=[_by_class(block, "Attention", "attentions") for block in layers],
         mlps=[_by_class(block, "MLP", "mlps") for block in layers],
