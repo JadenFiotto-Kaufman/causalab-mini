@@ -24,7 +24,7 @@
   "heads=3/logit_diff.json": "7ed8e06abf5f17536e1c6053a48f8f072eeec5985cffa7283286f5db36c31b06"
  },
  "documents/v2/attention_query.json": {
-  "logit_diff.json": "5f4123feabc6c22ab0ec1911512b08f94333b88275afd60211099f981d1da7f8"
+  "logit_diff.json": "0300a0d38d9fbce37ac1e8a72d75c1d3efb00f35685ea48f02a2b30efbae578a"
  },
  "documents/v2/chat_turn.json": {
   "p_answer.json": "c25ec9499ee3eb7380d9cd215b2d89efef01cf3b1fd7a577dfeb3c1e19ef5d8f"
