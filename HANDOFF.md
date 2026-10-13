@@ -114,33 +114,38 @@ These are load-bearing. Several tests enforce them.
 6. **`address.py` is mini's names; each engine's `address.py` is how its
    runtime finds them.** The root file is engine-neutral and imports no
    engine: each component's name and the facts that hold on any runtime —
-   whether it takes a layer, its axes, whether it may be written — and the
-   `Address` type. Resolving a name on a loaded model is the engine's,
-   through its `locate`, `width` and `heads`. An `Address` holds no routing
-   in anyone's spelling — the document's `(component, layer)` and three
-   facts the locating engine measured that the compiler needs: `rank` to
-   sort taps, `dims` (that engine's declaration of the layout it serves) to
-   size and slice them, and `inside` — so a plan is mini's language end to
-   end, and the engine that runs it finds each place again on its model,
-   through the same routing function `locate` used. nnterp is the reference engine and `engines/nnterp/address.py`
-   the fullest mapping: every name is one of nnterp 2.0's standard values on
-   an envoy (`block_output` is the layer's `layer_output`, `attention_query`
-   is `self_attn.attention_queries`) or one of nine module boundaries nnterp
+   whether it takes a layer, its axes, whether it is an operation inside a
+   forward, whether it may be written — and the `Address` type. An
+   `Address` is the document's `(component, layer)` and one resolved fact,
+   the layout the locating engine declares it will serve (an engine may
+   serve another than the standard one, and the compiler sizes and slices
+   a site against what will arrive). It holds no routing and no order, in
+   anyone's spelling, so a plan is mini's language end to end: the engine
+   that runs it finds each place again on its model, through the same
+   function `locate` used, and puts the taps in the order its runtime needs.
+   Resolving is the engine's, through `locate`, `width` and `heads`. nnterp
+   is the reference engine and `engines/nnterp/address.py` the fullest
+   mapping: every name is one of nnterp 2.0's standard values on an envoy
+   (`block_output` is the layer's `layer_output`, `attention_query` is
+   `self_attn.attention_queries`) or one of nine module boundaries nnterp
    has no value for, which its table places by the module — a list of
    spellings where nnterp names none — and the nnterp value it sits beside.
    nnterp says whether the checkpoint has the place (`support`, with its
-   reason: the attention's interior needs eager attention), **where it sits
-   in the forward pass** (`rank`), the axes as the checkpoint lays them out,
-   and every width (`axis_size` on the axis name); it also takes a dotted
-   `support()` name mini lacks — a value a user installed with `envoys=`.
+   reason: the attention's interior needs eager attention), the axes as the
+   checkpoint lays them out, and every width (`axis_size` on the axis
+   name); it also takes a dotted `support()` name mini lacks — a value a
+   user installed with `envoys=`. **Where a place sits in the forward pass**
+   (`rank`, nnterp's) is nnsight's need, not the language's: the plan keeps
+   a forward's taps in the document's order, by frame, and the nnterp
+   engine sorts each frame by `rank` before its trace. The hooks engine
+   needs no order — a hook fires when its module runs.
    `engines/hooks/address.py` maps ten of the names to module boundaries,
    refuses the rest by name, and asks a weightless nnterp shell for the
-   rest of each address, so the two engines sort and size a plan alike; how
-   much mapping an engine needs is what the standardization is worth.
-   `locate` stamps the `Address` whole, so a pickled plan never reads a
-   table where it lands. Tests hold the duplication: the nnterp table maps
-   exactly mini's names, and a name for one of nnterp's values has that
-   value's axes. `ops/` knows nothing about models at all.
+   axes and widths, so the two engines size a plan alike; how much mapping
+   an engine needs is what the standardization is worth. Tests hold the
+   duplication: the nnterp table maps exactly mini's names, and a name for
+   one of nnterp's values has that value's axes and kind. `ops/` knows
+   nothing about models at all.
 7. **An engine is nine members and no more**: `load`, then `tokenizer`,
    `num_layers`, `locate`, `width` and `heads` — what the compiler asks of a
    runtime — then `execute`, `forward` and `generate`, what the run asks.

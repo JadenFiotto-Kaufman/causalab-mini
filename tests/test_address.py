@@ -26,9 +26,11 @@ def test_addresses_sort_into_forward_order(eager_engine):
     stack. The query is inside the attention, so it comes before the block's
     output at its layer.
 
-    The rank is nnterp's `rank`, stamped by `locate`, because a family may
+    The rank is nnterp's `rank`, asked at execute, because a family may
     build its block differently and mini keeping a second numbering beside
     nnterp's is how the two drift."""
+    from causalab_mini.engine.engines.nnterp.address import rank
+
     stack = [
         eager_engine.locate("lm_head"),
         eager_engine.locate("block_output", 1),
@@ -36,7 +38,7 @@ def test_addresses_sort_into_forward_order(eager_engine):
         eager_engine.locate("attention_query", 1),
         eager_engine.locate("attention_query", 0),
     ]
-    assert [(one.component, one.layer) for one in sorted(stack, key=lambda one: one.rank)] == [
+    assert [(one.component, one.layer) for one in sorted(stack, key=lambda one: rank(eager_engine.model, one.component, one.layer))] == [
         ("attention_query", 0),
         ("block_output", 0),
         ("attention_query", 1),
@@ -58,8 +60,9 @@ def test_a_component_only_nnterp_knows_is_addressable(eager_engine):
     attention are the key heads', `head_dim` deep."""
     located = eager_engine.locate("self_attn.attention_values", 0)
     model = eager_engine.model
-    assert located.inside
-    assert located.rank == eager_engine.locate("attention_key", 0).rank, "served at the same call"
+    from causalab_mini.engine.engines.nnterp.address import rank
+
+    assert rank(model, "self_attn.attention_values", 0) == rank(model, "attention_key", 0), "served at the same call"
     assert located.heads_kind == "kv" and located.seq_axis == 2
     attention = model.layers[0].self_attn
     assert eager_engine.width(located) == attention.num_kv_heads * attention.head_dim
@@ -85,7 +88,7 @@ def test_the_nnterp_engine_maps_exactly_minis_names():
     assert list(ROUTES) == list(address.COMPONENTS)
 
 
-def test_a_name_for_one_of_nnterps_values_has_that_values_axes():
+def test_a_name_for_one_of_nnterps_values_has_that_values_axes_and_kind():
     """A row that names one of nnterp's standard values states its axes
     rather than fetching them, so the table needs no nnterp to be read; this
     holds the two to each other, on nnterp's standard classes."""
@@ -100,3 +103,4 @@ def test_a_name_for_one_of_nnterps_values_has_that_values_axes():
         entry = address.COMPONENTS[name]
         owner = standard.get(hosts[0]) or (Layer if entry.per_layer else StandardizedTransformer)
         assert entry.dims == getattr(owner, value).dims, name
+        assert entry.inside == getattr(owner, value).inside_forward(), name

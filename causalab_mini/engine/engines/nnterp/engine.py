@@ -28,6 +28,8 @@ installed at the client's versions. A server that does not is a
 
 from __future__ import annotations
 
+from dataclasses import replace
+from itertools import groupby
 from typing import Any
 
 import nnsight
@@ -35,7 +37,7 @@ import torch
 
 from ....address import Address
 from ....ops import intervene
-from ....plan import Forward, Generate, Plan
+from ....plan import Forward, Generate, Plan, Tap
 from ....plan import plan as plan_module
 from ... import provenance, steps
 from ...base import Engine
@@ -96,6 +98,7 @@ class NNterpEngine(Engine):
 
     def forward(self, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
         model, made = self.model, {}
+        forward = replace(forward, taps=in_forward_order(model, forward.taps))
         with model.trace(batch(forward)) as tracer:
             apply_interventions(model, forward, values, featurizers)
             made["logits"] = tracer.result.logits
@@ -108,12 +111,26 @@ class NNterpEngine(Engine):
         # with no taps has no loop: an early EOS makes a loop outrun the run
         # and drop what follows it (FINDINGS §12.4), which would be the ids.
         model, prompt, made = self.model, len(step.input_ids[0]), {}
+        step = replace(step, taps=in_forward_order(model, step.taps))
         with model.generate(batch(step), max_new_tokens=step.max_new_tokens, **step.generation) as tracer:
             if step.taps:
                 for index in tracer.iter[: step.max_new_tokens]:
                     apply_interventions(model, step, values, featurizers, index)
             made["ids"] = tracer.result[:, prompt:].clone()
         return made["ids"]
+
+
+def in_forward_order(model: Any, taps: tuple[Tap, ...]) -> tuple[Tap, ...]:
+    """A forward's taps in the order the model reaches them, which nnsight
+    requires: reading layer 8 after layer 2 raises, and a write has to go in
+    above the read that observes it. The plan keeps them in the document's
+    order, grouped by frame — the prompt, then the decode steps — and this
+    sorts within each frame by `rank` (`address.py` beside this file), stably, so two taps at one
+    place keep the document's order. Done before the trace, as data."""
+    def where(tap: Tap) -> tuple[int, int, int]:
+        return address_module.rank(model, tap.address.component, tap.address.layer)
+
+    return tuple(tap for _, frame in groupby(taps, key=lambda tap: tap.step) for tap in sorted(frame, key=where))
 
 
 def batch(forward: Forward) -> dict[str, Any]:

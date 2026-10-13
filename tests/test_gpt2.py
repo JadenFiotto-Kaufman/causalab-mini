@@ -76,13 +76,13 @@ def _identity_write(raw):
 
 
 def test_one_address_serves_both_families(eager_engine, gpt2_engine, gpt2):
-    """The same address — layer, kind and axes — on both models, and the same
+    """The same address — layer and axes — on both models, and the same
     envoy and value reach them, although the modules they land on share no
     path."""
     model = eager_engine.model
     for component, layer in (("block_output", 0), ("lm_head", None), ("attention_query", 0)):
         one, other = eager_engine.locate(component, layer), gpt2_engine.locate(component, layer)
-        assert (one.layer, one.inside, one.dims) == (other.layer, other.inside, other.dims)
+        assert (one.layer, one.dims) == (other.layer, other.dims)
         assert resolve(eager_engine.model, component, layer)[1:3] == resolve(gpt2_engine.model, component, layer)[1:3]
 
     # What nnterp is absorbing on our behalf, spelled out: these are the real

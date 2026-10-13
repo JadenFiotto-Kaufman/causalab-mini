@@ -74,8 +74,8 @@ def resolve(model: Any, component: str, layer: int | None) -> tuple[Any, str, st
     beside)` — the envoy that serves it and its path from the layer (or the
     model), the value read off it, and the `ROUTES` anchor of a boundary.
 
-    The one routing step, shared by `locate` at compile time and `read` /
-    `write` in the trace, so the two cannot come to disagree. An address
+    The one routing step, shared by `locate` and `rank` at compile time and
+    by `read` / `write` in the trace, so they cannot come to disagree. An address
     carries no routing; the engine that holds the model finds it again.
     A name `ROUTES` does not have is a dotted `support()` name: its envoy
     and value are the name's two halves."""
@@ -86,6 +86,21 @@ def resolve(model: Any, component: str, layer: int | None) -> tuple[Any, str, st
         hosts, beside = (host,), None
     module, envoy = _host(model if layer is None else model.layers[layer], hosts, component)
     return envoy, module, value, beside
+
+
+def rank(model: Any, component: str, layer: int | None) -> tuple[int, int, int]:
+    """Where `(component, layer)` comes in this model's forward pass, `(side,
+    rank, step)`: nnterp's `rank` of the value — `side` the layer, or -1 /
+    `num_layers` for a whole-model place before / after the blocks — and,
+    for a boundary, its distance from the value it sits beside (0 for
+    nnterp's own). The one place that knows a component's order: `locate`
+    asks it (nnterp refuses a place the checkpoint lacks here), and the
+    engine sorts a forward's taps by it before the trace."""
+    _, module, value, beside = resolve(model, component, layer)
+    if beside is None:
+        return (*model.rank(f"{module}.{value}" if module else value, layer), 0)
+    anchor, step = beside
+    return (*model.rank(anchor, layer), step)
 
 
 def locate(model: Any, component: str, layer: int | None) -> Address:
@@ -99,15 +114,9 @@ def locate(model: Any, component: str, layer: int | None) -> Address:
     `envoys=` — is accepted, and its axes are its value's own.
     """
     try:
-        envoy, module, value, beside = resolve(model, component, layer)
-        if beside is None:
-            side, rank = model.rank(f"{module}.{value}" if module else value, layer)
-            served = getattr(type(envoy), value)
-            dims, inside, step = served.dims, served.inside_forward(), 0
-        else:
-            anchor, step = beside
-            side, rank = model.rank(anchor, layer)
-            dims, inside = COMPONENTS[component].dims, False
+        rank(model, component, layer)
+        envoy, _, value, beside = resolve(model, component, layer)
+        dims = getattr(type(envoy), value).dims if beside is None else COMPONENTS[component].dims
     except Unavailable as reason:  # a place this family, or this block, lacks
         raise AddressError(f"component {component!r}: {reason}") from None
     except (AddressError, KeyError, IndexError) as error:
@@ -118,7 +127,7 @@ def locate(model: Any, component: str, layer: int | None) -> Address:
             f"name {'at a layer' if layer is not None else 'on the model'} either. Mini's are "
             f"{sorted(ROUTES)}; a value a family lacks is added with `envoys=` at load"
         ) from None
-    return Address(component, layer, (side, rank, step), inside, dims)
+    return Address(component, layer, dims)
 
 
 def _walk(root: Any, path: str, component: str) -> Any:

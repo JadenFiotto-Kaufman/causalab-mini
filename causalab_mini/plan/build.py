@@ -745,7 +745,7 @@ def _forward(
 ) -> Forward:
     """Step `name`, one model call over the rows of `dataset`: the writes in
     force, in the order they apply, and the reads it takes, each by its name
-    in the step — grouped into taps by address and put in forward order.
+    in the step — grouped into taps by address and by frame.
     With `max_new_tokens`, a `Generate`. An op is named `<step>.<op>` in the
     plan, its site by the label its address is held under, and its
     featurizer by the parameter set's own name — `fit.rot` is `rot`.
@@ -821,15 +821,17 @@ def _forward(
             )
 
     taps = []
-    # Forward order: the prompt frame (None) first, then the decode steps in
-    # order with `"all"` before them, and within each by the address's rank.
-    # nnsight requires it, and the run relies on it too: a read cut from the
-    # decode comes as its steps' parts in step order, with no sort of its own.
-    def order(place: tuple[Address, Any]) -> tuple[int, int, tuple[int, int, int]]:
-        address, step = place
-        return (0 if step is None else 1, -1 if step == "all" else (step if step is not None else -1), address.rank)
+    # By frame: the prompt (None) first, then the decode steps in order with
+    # `"all"` before them, and within a frame in the document's order. The
+    # run relies on the frames' order — a read cut from the decode comes as
+    # its steps' parts in step order, with no sort of its own. The order a
+    # forward reaches the places in is a runtime's need, and nnsight's
+    # engine sorts each frame by it at execute.
+    def frame(place: tuple[Address, Any]) -> tuple[int, int]:
+        step = place[1]
+        return (0 if step is None else 1, -1 if step == "all" else (step if step is not None else -1))
 
-    for place in sorted(set(written) | set(read), key=order):
+    for place in sorted(dict.fromkeys([*written, *read]), key=frame):
         taps.append(
             Tap(
                 address=place[0],

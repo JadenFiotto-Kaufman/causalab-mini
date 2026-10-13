@@ -7,9 +7,9 @@ side of it the tensor is on. That table is the translation, and it is kept
 this small on purpose — a component outside it is refused by name, not
 rederived.
 
-Everything else an address says — its place in the forward, its axes, every
+Everything else — whether the checkpoint has the place, its axes, every
 width — is asked of a weightless nnterp shell of the same checkpoint, so the
-two engines sort and size a plan alike.
+two engines size a plan alike.
 """
 
 from __future__ import annotations

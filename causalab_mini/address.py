@@ -3,9 +3,10 @@ each place on any runtime, and what an address of one says.
 
 A component is a name — `block_output`, `attention_query`, `mlp_activation`
 — and the facts about it that hold whatever runs it: whether it is one per
-layer, its axes, and whether it may be written. That is the whole table. How
-a runtime finds the place — which module, which value off it, where it comes
-in the forward, how wide it is on this checkpoint — is that engine's, in its
+layer, its axes, whether it is an operation inside a module's forward, and
+whether it may be written. That is the whole table. How a runtime finds the
+place — which module, which value off it, where it comes in the forward, how
+wide it is on this checkpoint — is that engine's, in its
 own `engines/<name>/address.py`, asked through `Engine.locate`, `width` and
 `heads`. nnterp is the reference engine, and its `address.py` is the fullest
 mapping: every name here is one of nnterp 2.0's standard values or a module
@@ -17,11 +18,12 @@ The axes are in nnterp's axis names, where an axis that is a model fact is
 named as the size attribute that holds it (`hidden_size`, `num_heads`). A
 test holds each row's axes to nnterp's own layout for the value it names.
 
-An `Address` is pure data, stamped whole by the engine that located it — the
-document's `(component, layer)` plus the place's rank, axes and kind as that
-engine measured them — so it pickles, sorts, prints and travels in a plan,
-and nothing on it reads this table again. It holds no routing: the engine
-that runs the plan finds each place again on the model it holds.
+An `Address` is pure data — the document's `(component, layer)` plus the
+layout the locating engine declares it will serve there — so it pickles,
+prints and travels in a plan, and nothing on it reads this table again. It
+holds no routing and no order: the engine that runs the plan finds each
+place again on the model it holds, and puts the taps in whatever order its
+runtime needs.
 """
 
 from __future__ import annotations
@@ -45,6 +47,9 @@ class Component:
     #: Whether this place is one per layer. A document gives a layer for one
     #: and may not for the others.
     per_layer: bool = True
+    #: Whether the place is an operation inside a module's forward rather
+    #: than a module boundary — the attention's interior, and nothing else.
+    inside: bool = False
     #: A tensor that may be read and never written: the token ids are the
     #: model's input, and swapping a float activation into them means nothing.
     read_only: bool = False
@@ -54,22 +59,22 @@ COMPONENTS = {
     # --- inside the attention: the call that hands the heads to the attention
     # implementation, and its result.
     # projected, reshaped to heads and rotated
-    "attention_query": Component(("batch", "num_heads", "seq", "qk_head_dim")),
+    "attention_query": Component(("batch", "num_heads", "seq", "qk_head_dim"), inside=True),
     # the key heads' keys, before a grouped model repeats them: narrower than
     # the query by the grouping ratio, at the same per-head width
-    "attention_key": Component(("batch", "num_kv_heads", "seq", "qk_head_dim")),
+    "attention_key": Component(("batch", "num_kv_heads", "seq", "qk_head_dim"), inside=True),
     # the softmax's argument: QKᵀ·scale with the causal and padding mask
     # already added, so a masked key is -inf here and 0 after
-    "attention_scores": Component(("batch", "num_heads", "query", "key")),
+    "attention_scores": Component(("batch", "num_heads", "query", "key"), inside=True),
     # The attention pattern: the dropout call's output rather than the
     # softmax's, which is the pattern the values are actually mixed with on
     # every family (after the cast, and after an attention sink has been
     # dropped) and the identity in eval mode. A write here is "make this head
     # attend there".
-    "attention_probs": Component(("batch", "num_heads", "query", "key")),
+    "attention_probs": Component(("batch", "num_heads", "query", "key"), inside=True),
     # each head's mix of the values, before the heads are merged for the
     # output projection
-    "attention_z": Component(("batch", "seq", "num_heads", "head_dim")),
+    "attention_z": Component(("batch", "seq", "num_heads", "head_dim"), inside=True),
     "input_ids": Component(("batch", "seq"), per_layer=False, read_only=True),
     # The embedding table's output, before layer 0: `block_input` at layer 0
     # is the same tensor on a model with nothing between them (GPT-2 adds
@@ -107,37 +112,22 @@ class AddressError(ValueError):
 
 @dataclass(frozen=True)
 class Address:
-    """One tap: the document's words, `(component, layer)`, and three facts
-    the locating engine measured on the checkpoint that the compiler needs
-    before anything runs — `rank` to sort the taps, `dims` to size and slice
-    them, `inside` to say what kind of place it is. Every field is filled
-    in by that engine; there is no half-made address.
+    """One tap: the document's words, `(component, layer)`, and one fact the
+    locating engine resolved — the layout it declares it will serve there.
 
-    It carries no routing, in anyone's spelling: which module, which value
-    off it, is the engine's, found again at execute from the model it holds.
-    A plan is mini's language end to end.
+    That one is stamped rather than read off the table because an engine
+    may serve another layout than the standard one — a vLLM engine serves
+    flat `[tokens, hidden_size]` rows with no batch axis — and the compiler
+    sizes, slices and checks a site against what will actually arrive.
+    `Component.dims` is the language's statement; on the nnterp engine a
+    test holds the two equal.
 
-    `dims` is stamped rather than read off the table because an engine may
-    serve a different layout from the standard one — a vLLM engine serves
-    flat `[tokens, hidden_size]` rows with no batch axis — so it is the
-    locating engine's statement of what it will hand over, where
-    `Component.dims` is the language's. On the nnterp engine a test holds
-    the two equal."""
+    Nothing else is resolved into it: which module, which value off it, and
+    in what order a forward reaches it are the engine's, found again at
+    execute from the model it holds. A plan is mini's language end to end."""
 
     component: str
     layer: int | None
-    #: Where this place is in the model's forward pass, `(side, rank, step)`,
-    #: and the sort key that puts taps in forward order — nnsight requires
-    #: it: reading layer 8 after layer 2 raises, and a write has to go in
-    #: above the read that observes it. `side` is the layer, or -1 /
-    #: `num_layers` for a whole-model place before / after the blocks; `rank`
-    #: and `step` order places within it, as the locating engine measures
-    #: them (nnterp: its `rank`, and a boundary's distance from the value it
-    #: sits beside).
-    rank: tuple[int, int, int]
-    #: Whether the place is an operation inside a module's forward rather
-    #: than a module boundary — the query, the scores, the pattern.
-    inside: bool
     #: The tensor's axes, in nnterp's names (`("batch", "num_heads", "seq",
     #: "qk_head_dim")`), as the locating engine will serve them.
     dims: tuple[str, ...]
@@ -193,14 +183,15 @@ def layered(component: str, layer: int | None) -> str | None:
 
 def describe() -> dict[str, dict[str, Any]]:
     """The component vocabulary, as data an agent can read: for each name,
-    whether it takes a layer, its axes, whether it may be written and
-    whether it is per head. This is the table, not a description of it, so
+    whether it takes a layer, its axes, whether it is inside a forward,
+    whether it may be written and whether it is per head. This is the table, not a description of it, so
     it cannot drift. Whether a checkpoint has the place, and where it is
     there, is an engine's to say — `causalab-mini model` asks it."""
     return {
         name: {
             "layered": entry.per_layer,
             "dims": list(entry.dims),
+            "inside": entry.inside,
             "read_only": entry.read_only,
             "heads": _heads(entry.dims) is not None,
         }

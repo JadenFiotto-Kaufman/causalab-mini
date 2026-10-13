@@ -237,10 +237,9 @@ def test_the_pattern_is_at_the_same_address_on_gpt2(data_root, eager_engine):
     # nnterp's value, which is one name over its per-family overrides and a
     # sink flag — where mini had one hardcoded operation
     assert resolve(engine.model, "attention_probs", 0)[1:3] == ("self_attn", "attention_probabilities")
-    assert located.inside, "it is an operation inside the attention, not a module boundary"
     assert located.key_axis and located.seq_axis == 2
     other = eager_engine.locate("attention_probs", 0)
-    assert (located.inside, located.dims) == (other.inside, other.dims)
+    assert located.dims == other.dims
 
 
 # --------------------------------------------------------------------- #

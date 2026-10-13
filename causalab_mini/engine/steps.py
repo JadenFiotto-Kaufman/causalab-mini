@@ -246,7 +246,7 @@ def _stack_layers(step: Forward, made: dict[str, Any], record: Record) -> None:
     first. Every layer read the same positions, so one record says where."""
     parts = [(tap.address.layer, op) for tap in step.taps for op in tap.reads if op.layered]
     for stacked in dict.fromkeys(op.layered for _, op in parts):
-        # taps come in forward order; the stack is in the listed one
+        # taps come in whatever order; the stack is in the listed one
         mine = {layer: op for layer, op in parts if op.layered == stacked}
         names = [mine[layer].name for layer in next(iter(mine.values())).layers]
         if names[0] in made:  # the plan names it

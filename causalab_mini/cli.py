@@ -216,7 +216,7 @@ def model(args: argparse.Namespace) -> dict[str, Any]:
     )
     engine = ENGINES[args.engine][0].load(spec, **SHAPE_ONLY)
     components = {
-        name: _bands(engine, name, range(engine.num_layers) if entry["layered"] else [None])
+        name: _bands(engine, name, entry["inside"], range(engine.num_layers) if entry["layered"] else [None])
         for name, entry in address.describe().items()
     }
     payload = {
@@ -243,11 +243,11 @@ def model(args: argparse.Namespace) -> dict[str, Any]:
     return {"text": "\n".join(lines), **payload}
 
 
-def _bands(engine: Any, name: str, layers: Any) -> list[dict[str, Any]]:
+def _bands(engine: Any, name: str, inside: bool, layers: Any) -> list[dict[str, Any]]:
     """One entry per run of layers that answer alike, in layer order."""
     found: list[dict[str, Any]] = []
     for layer in layers:
-        answer = _resolves(engine, name, layer)
+        answer = _resolves(engine, name, inside, layer)
         if found and {k: v for k, v in found[-1].items() if k != "layers"} == answer:
             found[-1]["layers"] = f"{found[-1]['layers'].split('-')[0]}-{layer}"
             continue
@@ -255,7 +255,7 @@ def _bands(engine: Any, name: str, layers: Any) -> list[dict[str, Any]]:
     return found
 
 
-def _resolves(engine: Any, name: str, layer: int | None) -> dict[str, Any]:
+def _resolves(engine: Any, name: str, inside: bool, layer: int | None) -> dict[str, Any]:
     try:
         located = engine.locate(name, layer)
     except REFUSALS as refusal:
@@ -264,7 +264,7 @@ def _resolves(engine: Any, name: str, layer: int | None) -> dict[str, Any]:
         width: Any = engine.width(located)
     except REFUSALS:
         width = None
-    return {"resolves": True, "width": width, "inside": located.inside}
+    return {"resolves": True, "width": width, "inside": inside}
 
 
 def _choices(field: str) -> tuple[str, ...]:

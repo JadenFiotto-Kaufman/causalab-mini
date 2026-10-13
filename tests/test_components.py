@@ -27,7 +27,7 @@ from causalab_mini.engine.engines.hooks import address as hooks
 from causalab_mini.engine import NNterpEngine
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.engine.engines.nnterp import engine as nnterp
-from causalab_mini.engine.engines.nnterp.address import ROUTES, resolve
+from causalab_mini.engine.engines.nnterp.address import ROUTES, rank, resolve
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 GPT2 = REPO / "documents" / "v2" / "gpt2_reach.json"
@@ -90,7 +90,7 @@ def test_one_address_serves_both_families(component, eager_engine, eager_gpt2_en
     standard module and the route lists each family's spelling."""
     layer = 0 if COMPONENTS[component].per_layer else None
     one, other = eager_engine.locate(component, layer), eager_gpt2_engine.locate(component, layer)
-    assert (one.inside, one.dims) == (other.inside, other.dims)
+    assert one.dims == other.dims
     _, here, value, _ = resolve(eager_engine.model, component, layer)
     _, there, value_there, _ = resolve(eager_gpt2_engine.model, component, layer)
     assert value == value_there
@@ -152,11 +152,12 @@ def test_the_hooks_engine_translates_every_name_to_the_right_raw_module(family, 
 def test_the_addresses_sort_into_forward_order(eager_engine):
     """The sort key is what keeps a read at the head from being issued before
     a read at layer 0 — nnsight refuses that outright. It is nnterp's `rank`,
-    stamped by `locate`: a value's own, and a module boundary's the value it
-    sits beside."""
+    asked by the engine at execute: a value's own, and a module boundary's
+    the value it sits beside."""
     model_engine = eager_engine  # eager, so the pattern is among them
+    model = model_engine.model
     layered = [model_engine.locate(name, 0) for name in LAYERED]
-    order = [one.component for one in sorted(layered, key=lambda one: one.rank)]
+    order = [one.component for one in sorted(layered, key=lambda one: rank(model, one.component, one.layer))]
     assert order == [
         "block_input", "attention_input_norm", "attention_probs", "attention_premix",
         "attention_output", "block_mid", "mlp_input_norm", "mlp_input", "mlp_activation",
@@ -167,7 +168,7 @@ def test_the_addresses_sort_into_forward_order(eager_engine):
         model_engine.locate(name, 0 if COMPONENTS[name].per_layer else None)
         for name in BOUNDARIES
     ]
-    ordered = [one.component for one in sorted(everything, key=lambda one: one.rank)]
+    ordered = [one.component for one in sorted(everything, key=lambda one: rank(model, one.component, one.layer))]
     assert ordered[:2] == ["input_ids", "embeddings"]
     # the head's output, then the model's own — which is not the same tensor
     # on a family that caps its logits
@@ -186,7 +187,7 @@ def test_every_component_can_be_read_in_one_forward(eager_engine):
             model_engine.locate(name, 0 if entry.per_layer else None)
             for name, entry in COMPONENTS.items()
         ),
-        key=lambda one: one.rank,
+        key=lambda one: rank(model, one.component, one.layer),
     )
     batch = {
         "input_ids": torch.tensor([[1, 2, 3, 4]]),
@@ -376,9 +377,10 @@ def test_a_childs_spelling_is_nnterps_where_nnterp_names_it(model_engine, gpt2_e
     assert resolve(gpt2_engine.model, "attention_input_norm", 0)[1] == "input_layernorm"
     assert resolve(gpt2_engine.model, "attention_premix", 0)[1] == "self_attn.c_proj"
     assert resolve(model_engine.model, "attention_premix", 0)[1] == "self_attn.o_proj"
-    attention_output = model_engine.locate("attention_output", 0).rank
+    attention_output = rank(model_engine.model, "attention_output", 0)
+    assert rank(model_engine.model, "attention_premix", 0) == (0, attention_output[1], -1)
     assert model_engine.locate("attention_premix", 0) == Address(
-        "attention_premix", 0, (0, attention_output[1], -1), False, ("batch", "seq", "num_heads", "head_dim"),
+        "attention_premix", 0, ("batch", "seq", "num_heads", "head_dim")
     )
 
 

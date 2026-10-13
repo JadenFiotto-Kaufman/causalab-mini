@@ -94,11 +94,10 @@ class Engine:
     def locate(self, component: str, layer: int | None = None) -> Address:
         """The address of `(component, layer)` on this model.
 
-        The pair, plus what the checkpoint says about it — where in the
-        forward pass, the axes this engine will serve it with, whether it
-        is inside a forward — and a refusal for a place
-        this runtime cannot reach, which is the runtime's business: why this
-        is asked of the engine and not of the address.
+        The pair, plus the axes this engine will serve it with, and a
+        refusal for a place this runtime cannot reach, which is the
+        runtime's business: why this is asked of the engine and not of the
+        address.
         """
         raise NotImplementedError
 

@@ -37,7 +37,7 @@ class HooksEngine(Engine):
         self._dispatched = dispatched
         # What nnterp hands over with the model and nobody else does: the
         # tokenizer, and — through a weightless shell of the same checkpoint —
-        # where each place sits in the forward, and every width.
+        # which places it has, their axes, and every width.
         self._tokenizer = tokenizer
         self._names = standardized(model)
         self._shell = shell
@@ -98,8 +98,8 @@ class HooksEngine(Engine):
     def forward(self, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
         """One forward with its taps applied.
 
-        The taps arrive in forward order and nothing here depends on it: a
-        hook fires when its module runs. What does matter is that every handle
+        The taps arrive in the document's order and nothing here depends on
+        it: a hook fires when its module runs. What does matter is that every handle
         is removed — a leaked hook would intervene on the *next* forward,
         which is a silently wrong number rather than an error.
         """
