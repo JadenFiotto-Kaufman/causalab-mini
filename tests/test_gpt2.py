@@ -28,8 +28,9 @@ DOCUMENT = REPO / "documents" / "v2" / "gpt2_reach.json"
 
 @pytest.fixture(scope="session")
 def gpt2_engine():
-    """An nnterp engine holding the tiny random GPT-2 the document pins."""
-    return NNterpEngine.load(model_block(DOCUMENT), device_map="cpu")
+    """An nnterp engine holding the tiny random GPT-2 the document pins, under
+    eager attention, where nnterp serves the query."""
+    return NNterpEngine.load(model_block(DOCUMENT), device_map="cpu", attn_implementation="eager")
 
 
 @pytest.fixture(scope="session")
@@ -73,33 +74,36 @@ def _identity_write(raw):
 # --------------------------------------------------------------------- #
 
 
-def test_one_address_serves_both_families(model_engine, gpt2_engine, model, gpt2):
-    """The same accessor, layer and side reach both models, although the
+def test_one_address_serves_both_families(eager_engine, gpt2_engine, gpt2):
+    """The same envoy, value, layer and axes reach both models, although the
     modules they land on share no path."""
+    model = eager_engine.model
     for component, layer in (("block_output", 0), ("lm_head", None), ("attention_query", 0)):
-        one, other = model_engine.locate(component, layer), gpt2_engine.locate(component, layer)
-        assert (one.accessor, one.layer, one.io, one.inside) == (other.accessor, other.layer, other.io, other.inside)
+        one, other = eager_engine.locate(component, layer), gpt2_engine.locate(component, layer)
+        assert (one.module, one.value, one.layer, one.inside, one.dims) == (
+            other.module, other.value, other.layer, other.inside, other.dims
+        )
 
     # What nnterp is absorbing on our behalf, spelled out: these are the real
     # paths, and nothing in the project mentions either of them.
-    assert model.attentions[0].path == "model.model.layers.0.self_attn"
-    assert gpt2.attentions[0].path == "model.transformer.h.0.attn"
+    assert model.layers[0].self_attn.path == "model.model.layers.0.self_attn"
+    assert gpt2.layers[0].self_attn.path == "model.transformer.h.0.attn"
     assert model.layers[0].path == "model.model.layers.0"
     assert gpt2.layers[0].path == "model.transformer.h.0"
 
 
-def test_the_interior_operation_is_the_same_call_on_both_families(model_engine, gpt2_engine, model, gpt2):
-    """It is the same name for the same reason — transformers 5.17 spells both
+def test_the_interior_operation_is_the_same_call_on_both_families(eager_engine, gpt2):
+    """It is the same name for the same reason — transformers spells both
     forwards' dispatch identically — not by luck of an occurrence count: on
     GPT-2 the call sits in an `else` branch, under two more assignments and a
     second candidate implementation, and the suffix still lands on 1 because a
-    call-op suffix counts calls of one symbol. nnterp's one row serves both."""
+    call-op suffix counts calls of one symbol. nnterp's one value serves both."""
+    model = eager_engine.model
     for one in (model, gpt2):
-        assert "attention_interface_1" in set(one.attentions[0].source.names)
-        assert one.internals["attention_queries"].address.op == ("attention_interface_1",)
-    gpt2_ops = set(gpt2.attentions[0].source.names)
+        assert "attention_interface_1" in set(one.layers[0].self_attn.source.names)
+    gpt2_ops = set(gpt2.layers[0].self_attn.source.names)
     assert "self__upcast_and_reordered_attn_0" in gpt2_ops  # the branch Llama has not
-    assert "self__upcast_and_reordered_attn_0" not in set(model.attentions[0].source.names)
+    assert "self__upcast_and_reordered_attn_0" not in set(model.layers[0].self_attn.source.names)
 
 
 # --------------------------------------------------------------------- #
@@ -147,9 +151,9 @@ def test_the_engines_head_read_is_the_models_own_logits_here_too(gpt2, gpt2_raw,
 
     source, patched = of_kind(built, plan.Forward)
     with gpt2.trace(nnterp.batch(source)):
-        v_cf = gpt2.layers_output[2][:, -1, :].clone().save()
+        v_cf = gpt2.layers[2].layer_output[:, -1, :].clone().save()
     with gpt2.trace(nnterp.batch(patched)):
-        gpt2.layers_output[2][:, -1, :] = v_cf
+        gpt2.layers[2].layer_output[:, -1, :] = v_cf
         logits = gpt2.logits[:, -1, :].clone().save()
 
     rows = torch.arange(4)

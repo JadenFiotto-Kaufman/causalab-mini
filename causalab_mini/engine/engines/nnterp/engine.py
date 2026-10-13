@@ -170,35 +170,28 @@ def apply_interventions(
                 tap.address.seq_axis,
             )
             if read_op.view == "logits":
-                # The logit lens: the residual pushed through the final norm and
-                # head, here, inside the trace — an envoy called on a value runs
-                # its module on it. Note the GEMM has M = rows·w rather than
-                # rows·seq, which rounds differently from the model's own
-                # logits by an ulp or so (FINDINGS §10).
-                gathered = intervene.softcap(
-                    model.lm_head(model.ln_final(gathered)), softcapping(model)
-                )
+                # The logit lens: the residual pushed through the final norm,
+                # the head and whatever the family does past the head (Gemma-2's
+                # cap), here, inside the trace — nnterp's `project_on_vocab`.
+                # Note the GEMM has M = rows·w rather than rows·seq, which
+                # rounds differently from the model's own logits by an ulp or
+                # so (FINDINGS §10).
+                gathered = model.project_on_vocab(gathered)
             if read_op.featurizer is not None:
                 with intervene.exact(gathered):
                     gathered = featurizers[read_op.featurizer].featurize(gathered)[0]
             values[read_op.name] = gathered.clone()
 
 
-def softcapping(model: Any) -> float | None:
-    """The bound this family puts on its logits, or None. Gemma-2 is the one
-    that has it; `model.logits` is capped and `lm_head_output` is not."""
-    return getattr(model.config, "final_logit_softcapping", None)
-
-
 def read(model: Any, address: Address) -> Any:
-    """The tensor at `address`, during a trace: nnterp's accessor, at the
-    layer — a whole-model one at `None`. The accessor knows the module, the
-    operation inside its forward where there is one, the side, and where in
-    the value the tensor sits; the address is only its name and a layer."""
-    return model.internals[address.accessor][address.layer]
+    """The tensor at `address`, during a trace: the value `locate` found, off
+    the envoy it found it on — one of nnterp's standard values, which knows
+    the operation inside a forward where there is one and unwraps whatever
+    the tensor is reached through, or a module's own input or output."""
+    return getattr(address.resolve(model), address.value)
 
 
 def write(model: Any, address: Address, tensor: Any) -> None:
-    """Put a tensor back where `read` found it; the accessor rebuilds whatever
+    """Put a tensor back where `read` found it; the value rebuilds whatever
     the tensor was reached through — a tuple, a call's arguments."""
-    model.internals[address.accessor][address.layer] = tensor
+    setattr(address.resolve(model), address.value, tensor)

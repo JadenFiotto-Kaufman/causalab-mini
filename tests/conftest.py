@@ -45,6 +45,16 @@ def model_engine():
 
 
 @pytest.fixture(scope="session")
+def eager_engine():
+    """The same tiny Llama under eager attention, the one implementation
+    nnterp serves the attention's interior under: the query, the keys, the
+    scores, the pattern and each head's output."""
+    from causalab_mini.engine import NNterpEngine
+
+    return NNterpEngine.load(model_block(MINIMAL), device_map="cpu", attn_implementation="eager")
+
+
+@pytest.fixture(scope="session")
 def model(model_engine):
     """The nnterp handle itself, for tests that trace it by hand."""
     return model_engine.model

@@ -80,15 +80,15 @@ def test_a_swap_lands_the_source_read_bit_for_bit(model, model_engine, minimal_p
 
 
 def test_the_engines_metrics_equal_hand_computed_ones(model_engine, model, minimal_plan, data_root):
-    """The same experiment written by hand with nnterp's own accessors — a
+    """The same experiment written by hand with nnterp's own values — a
     different way to reach every tensor — down to the last bit."""
     results = model_engine.execute(minimal_plan)
 
     source, patched = of_kind(minimal_plan, plan.Forward)
     with model.trace(nnterp.batch(source)):
-        v_cf = model.layers_output[0][:, -1, :].clone().save()
+        v_cf = model.layers[0].layer_output[:, -1, :].clone().save()
     with model.trace(nnterp.batch(patched)):
-        model.layers_output[0][:, -1, :] = v_cf
+        model.layers[0].layer_output[:, -1, :] = v_cf
         logits = model.logits[:, -1, :].clone().save()
 
     rows = torch.arange(4)

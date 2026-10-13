@@ -53,8 +53,9 @@ def test_vocab_is_the_tables_not_a_description_of_them(capsys):
     assert out["metric_kinds"]["top_k"]["params"] == {"k": 5}
     assert out["metric_kinds"]["kl"]["doc"] == SIGNATURES["kl"].doc
     assert out["token_forms"] == ["space_prefixed", "bare", "id"]
-    assert out["components"]["attention_query"]["accessor"] == "attention_queries"
-    assert out["components"]["block_output"]["width"] == "hidden_size"
+    assert out["components"]["attention_query"]["value"] == "self_attn.attention_queries"
+    assert out["components"]["block_output"]["dims"] == ["batch", "seq", "hidden"]
+    assert out["components"]["attention_z"]["heads"] is True
 
 
 def test_model_answers_without_weights(capsys):
@@ -69,21 +70,26 @@ def test_model_answers_without_weights(capsys):
     assert out["components"]["lm_head"] == [
         {"layers": None, "resolves": True, "width": 32000, "inside": False}
     ]
-    assert out["components"]["attention_query"][0]["inside"] is True
+    assert out["components"]["attention_premix"] == [
+        {"layers": "0-1", "resolves": True, "width": 16, "inside": False}
+    ]
 
 
 def test_model_takes_the_model_blocks_own_fields(capsys):
-    """Two components exist only under eager attention, and a document says
-    which implementation it runs in its `model` block — so this verb takes
-    the same field, validated by the same model."""
+    """The attention's interior exists only under eager attention — nnterp
+    serves it there — and a document says which implementation it runs in
+    its `model` block, so this verb takes the same field, validated by the
+    same model."""
     plain = _json(capsys, ["model", TINY, "--revision", REVISION])
     assert plain["attn_implementation"] == "sdpa"
-    assert plain["components"]["attention_probs"][0]["resolves"] is False
-    assert "eager" in plain["components"]["attention_probs"][0]["why"]
+    for name in ("attention_query", "attention_probs"):
+        assert plain["components"][name][0]["resolves"] is False
+        assert "eager" in plain["components"][name][0]["why"]
 
     eager = _json(capsys, ["model", TINY, "--revision", REVISION, "--attn-implementation", "eager"])
     assert eager["attn_implementation"] == "eager"
     assert eager["components"]["attention_probs"][0]["resolves"] is True
+    assert eager["components"]["attention_query"][0]["inside"] is True
 
 
 def test_model_reports_what_an_engine_refuses(capsys):
@@ -92,7 +98,7 @@ def test_model_reports_what_an_engine_refuses(capsys):
     out = _json(capsys, ["model", TINY, "--revision", REVISION, "--engine", "hooks"])
     assert out["components"]["block_output"][0]["resolves"] is True
     assert out["components"]["attention_query"][0]["resolves"] is False
-    assert "inside a module's forward" in out["components"]["attention_query"][0]["why"]
+    assert "nothing inside its forward" in out["components"]["attention_query"][0]["why"]
     assert out["components"]["logits"][0]["resolves"] is True, "it reaches this one now"
 
 

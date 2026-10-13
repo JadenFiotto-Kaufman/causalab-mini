@@ -15,7 +15,9 @@ hooks engine had to supply that nnterp was quietly providing is FINDINGS §6.
 """
 
 from .base import Engine, EngineError
-from .engines.hooks import HooksEngine
+# nnterp before the hooks engine's transformers imports: nnterp imported after
+# a `transformers.models` module can segfault the process.
 from .engines.nnterp import NNterpEngine
+from .engines.hooks import HooksEngine  # noqa: I001
 
 __all__ = ["Engine", "EngineError", "HooksEngine", "NNterpEngine"]

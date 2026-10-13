@@ -47,14 +47,6 @@ def _score(raw, data_root, engine, name="logit_diff"):
     return engine.execute(plan.build_request(raw, data_root, engine)).result(name)
 
 
-@pytest.fixture(scope="module")
-def eager_engine():
-    from causalab_mini.plan import sweep
-
-    _, point = sweep.points(json.loads(KNOCKOUT.read_text()))[0]
-    return NNterpEngine.load(Spec.model_validate(point).model, device_map="cpu")
-
-
 # --------------------------------------------------------------------- #
 # the split, as tensor code
 # --------------------------------------------------------------------- #
@@ -91,22 +83,22 @@ def test_a_ragged_window_splits_heads_too():
 # --------------------------------------------------------------------- #
 
 
-def test_every_head_at_once_is_the_unsliced_patch(data_root, model_engine):
-    whole = _score(_at("attention_z"), data_root, model_engine)
-    assert torch.equal(_score(_at("attention_z", [0, 1, 2, 3]), data_root, model_engine), whole)
+def test_every_head_at_once_is_the_unsliced_patch(data_root, eager_engine):
+    whole = _score(_at("attention_z"), data_root, eager_engine)
+    assert torch.equal(_score(_at("attention_z", [0, 1, 2, 3]), data_root, eager_engine), whole)
     # and z is o_proj's input: the same tensor, held two ways
-    assert torch.equal(_score(_at("attention_premix"), data_root, model_engine), whole)
+    assert torch.equal(_score(_at("attention_premix"), data_root, eager_engine), whole)
 
 
 @pytest.mark.parametrize("head", [0, 3])
-def test_one_head_of_z_is_the_same_head_of_the_projections_input(head, data_root, model_engine):
-    via_z = _score(_at("attention_z", [head]), data_root, model_engine)
-    via_premix = _score(_at("attention_premix", [head]), data_root, model_engine)
+def test_one_head_of_z_is_the_same_head_of_the_projections_input(head, data_root, eager_engine):
+    via_z = _score(_at("attention_z", [head]), data_root, eager_engine)
+    via_premix = _score(_at("attention_premix", [head]), data_root, eager_engine)
     assert torch.equal(via_z, via_premix)
-    assert not torch.equal(via_z, _score(_at("attention_z"), data_root, model_engine))
+    assert not torch.equal(via_z, _score(_at("attention_z"), data_root, eager_engine))
 
 
-def test_two_sites_of_disjoint_heads_are_one_tap_and_add_up(data_root, model_engine):
+def test_two_sites_of_disjoint_heads_are_one_tap_and_add_up(data_root, eager_engine):
     """Heads are a slice of a place, like positions are — not a different
     place. Two sites at one component share its address, hence its tap."""
     raw = _at("attention_z", [0, 1])
@@ -116,12 +108,12 @@ def test_two_sites_of_disjoint_heads_are_one_tap_and_add_up(data_root, model_eng
     writes = raw["steps"]["patched"]["interventions"]["writes"]
     writes["patch_rest"] = {**writes["patch"], "site": "rest", "operand": "counterfactual.v_rest"}
 
-    built = plan.build_request(raw, data_root, model_engine)
+    built = plan.build_request(raw, data_root, eager_engine)
     (tap,) = [t for t in of_kind(built, plan.Forward)[-1].taps if t.writes]
     assert [(w.at.groups, w.at.take) for w in tap.writes] == [(4, (0, 1)), (4, (2, 3))]
     assert torch.equal(
-        model_engine.execute(built).result("logit_diff"),
-        _score(_at("attention_z"), data_root, model_engine),
+        eager_engine.execute(built).result("logit_diff"),
+        _score(_at("attention_z"), data_root, eager_engine),
     )
 
 
@@ -134,38 +126,39 @@ def test_the_swept_document_gives_a_different_answer_per_head(data_root, model_e
     assert len({tuple(one.tolist()) for one in scores}) == 4
 
 
-def test_the_hooks_engine_patches_a_head_at_the_boundary_it_can_reach(data_root, model_engine):
+def test_the_hooks_engine_refuses_the_projections_input_by_name(data_root):
+    """`attention_premix` is a module boundary, but not one of the modules the
+    hooks engine finds in a raw tree, so it is refused at compile time rather
+    than hooked on a guessed child."""
     raw = _at("attention_premix", [2])
     hooks = HooksEngine.load(Spec.model_validate(raw).model, device_map="cpu")
-    assert hooks.heads(hooks.locate("attention_premix", 0)) == 4
-    assert torch.allclose(
-        _score(raw, data_root, hooks), _score(raw, data_root, model_engine), rtol=0, atol=1e-7
-    )
+    with pytest.raises(AddressError, match="'attention_premix' is not one of the module boundaries"):
+        plan.build_request(raw, data_root, hooks)
 
 
-def test_a_rotation_over_two_heads_is_as_wide_as_two_heads(data_root, model_engine):
+def test_a_rotation_over_two_heads_is_as_wide_as_two_heads(data_root, eager_engine):
     """The reason the slice is handed on flat: DAS inside a pair of heads
     needs nothing but a site that names them."""
     raw = json.loads(DAS.read_text())
     raw["sites"]["target"] = {"component": "attention_z", "layers": 0, "heads": [0, 1]}
     raw["featurizers"]["rot"]["k"] = 4
-    built = plan.build_request(raw, data_root, model_engine)
+    built = plan.build_request(raw, data_root, eager_engine)
     (spec,) = built.step("featurizers", plan.Featurizers).specs
     assert (spec.d, spec.k) == (8, 4)
-    assert torch.isfinite(model_engine.execute(built).step("fit", plan.Fit).results["train"]["loss"]).all()
+    assert torch.isfinite(eager_engine.execute(built).step("fit", plan.Fit).results["train"]["loss"]).all()
 
     raw["featurizers"]["rot"]["k"] = 9
     with pytest.raises(plan.PlanError, match="not a subspace of the 8-wide site"):
-        plan.build_request(raw, data_root, model_engine)
+        plan.build_request(raw, data_root, eager_engine)
 
 
-def test_what_a_headed_site_may_not_say(data_root, model_engine):
+def test_what_a_headed_site_may_not_say(data_root, eager_engine):
     with pytest.raises(ValidationError, match="not a per-head tensor"):
         Spec.model_validate(_at("block_output", [0]))
     with pytest.raises(ValidationError, match="distinct head indices"):
         Spec.model_validate(_at("attention_z", [1, 1]))
     with pytest.raises(plan.PlanError, match="head 4 of a 4-head tensor"):
-        plan.build_request(_at("attention_z", [4]), data_root, model_engine)
+        plan.build_request(_at("attention_z", [4]), data_root, eager_engine)
 
 
 # --------------------------------------------------------------------- #
@@ -175,7 +168,7 @@ def test_what_a_headed_site_may_not_say(data_root, model_engine):
 
 def test_the_pattern_needs_eager_attention_and_says_how_to_get_it(data_root, model_engine):
     raw = json.loads(KNOCKOUT.read_text())
-    with pytest.raises(AddressError, match='say "attn_implementation": "eager"'):
+    with pytest.raises(AddressError, match="load with attn_implementation='eager'"):
         plan.build_request(raw, data_root, model_engine)  # this engine runs sdpa
 
 
@@ -235,21 +228,18 @@ def test_the_pattern_survives_being_shipped(data_root, eager_engine):
         assert torch.equal(here.result(name), shipped.result(name)), name
 
 
-def test_the_pattern_is_at_the_same_address_on_gpt2(data_root):
+def test_the_pattern_is_at_the_same_address_on_gpt2(data_root, eager_engine):
     
     spec = model_block(REPO / "documents" / "v2" / "gpt2_reach.json")
     engine = NNterpEngine.load(spec, device_map="cpu", attn_implementation="eager")
     located = engine.locate("attention_probs", 0)
-    # nnterp's row, which is one name over five per-family overrides, a sink
-    # tag and a validator — where mini had one hardcoded operation
-    assert located.accessor == "attention_probabilities"
+    # nnterp's value, which is one name over its per-family overrides and a
+    # sink flag — where mini had one hardcoded operation
+    assert (located.module, located.value) == ("self_attn", "attention_probabilities")
     assert located.inside, "it is an operation inside the attention, not a module boundary"
-    llama = NNterpEngine.load(
-        model_block(REPO / "documents" / "v2" / "patching.json"),
-        device_map="cpu", attn_implementation="eager",
-    )
-    other = llama.locate("attention_probs", 0)
-    assert (located.accessor, located.io, located.inside) == (other.accessor, other.io, other.inside)
+    assert located.key_axis and located.seq_axis == 2
+    other = eager_engine.locate("attention_probs", 0)
+    assert (located.module, located.value, located.inside, located.dims) == (other.module, other.value, other.inside, other.dims)
 
 
 # --------------------------------------------------------------------- #
@@ -283,8 +273,8 @@ def test_the_mlps_width_is_the_down_projections_input_on_both_families(model_eng
     tiny GPT-2 carrying a stray `intermediate_size: 37` beside 128-wide MLPs."""
     
     gpt2 = NNterpEngine.load(model_block(REPO / "documents" / "v2" / "gpt2_reach.json"), dispatch=False)
-    assert gpt2.width(gpt2.locate("mlp_activation", 0)) == gpt2.model.mlps[0].c_proj.weight.shape[0] == 128
-    llama = model_engine.model.mlps[0].down_proj.in_features
+    assert gpt2.width(gpt2.locate("mlp_activation", 0)) == gpt2.model.layers[0].mlp.c_proj.weight.shape[0] == 128
+    llama = model_engine.model.layers[0].mlp.down_proj.in_features
     assert model_engine.width(model_engine.locate("mlp_neuron_output", 0)) == llama
 
 
