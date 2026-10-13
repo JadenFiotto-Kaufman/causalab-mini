@@ -22,7 +22,7 @@ or a reduction of what one read, a fit — each on its own:
 
 and, inside a forward, the ops of the one call:
 
-      taps: one per address, in forward order
+      taps: one per address, by frame, in document order
         Tap(address, writes, reads)     writes run before reads at the same
           WriteOp(name, at, operand, mechanism, featurizer)   address
           ReadOp(name, at, featurizer)

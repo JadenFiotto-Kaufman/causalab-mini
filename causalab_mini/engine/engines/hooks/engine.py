@@ -5,11 +5,11 @@ engine beside it. No session, no envoys, no tracing, no remote: one
 `model(**batch)` per forward with a hook on each module a tap names, and the
 hook does the reading and the writing on the way out.
 
-What it costs to not be standardized is `loading.standardized` and `PLACES`,
-and what it costs to not be nnsight is the inside of a forward: a hook sees a
-module's boundary and nothing between, so `attention_query` — an operation
-inside the attention's forward — is refused by name at compile time rather
-than approximated. Everything else — the walk over steps, the fit loop, the
+What it costs to not be standardized is `loading.standardized` and the
+translation in `address.py`, and what it costs to not be nnsight is the
+inside of a forward: a hook sees a module's boundary and nothing between, so
+`attention_query` — an operation inside the attention's forward — is refused
+by name at compile time rather than approximated. Everything else — the walk over steps, the fit loop, the
 metrics, the write algebra — is the shared code in `engine/steps.py` and
 `ops/`, unchanged, which is the claim this engine was written to test.
 """
@@ -21,12 +21,13 @@ from typing import Any, Callable, Iterator
 
 import torch
 
-from .... import address as address_module
-from ....address import Address, AddressError
+from ....address import Address
 from ....ops import intervene
 from ....plan import Forward, Generate, Plan, Tap
 from ... import provenance, steps
 from ...base import Engine, EngineError
+from ..nnterp import address as nnterp_address
+from .address import PLACES, locate, resolve
 from .loading import HooksEngineError, load, standardized
 
 
@@ -36,7 +37,7 @@ class HooksEngine(Engine):
         self._dispatched = dispatched
         # What nnterp hands over with the model and nobody else does: the
         # tokenizer, and — through a weightless shell of the same checkpoint —
-        # where each place sits in the forward, and every width.
+        # which places it has, their axes, and every width.
         self._tokenizer = tokenizer
         self._names = standardized(model)
         self._shell = shell
@@ -64,33 +65,13 @@ class HooksEngine(Engine):
         return len(self._names.layers)
 
     def locate(self, component: str, layer: int | None = None) -> Address:
-        """The address of `(component, layer)`, or a refusal.
-
-        The address — its place in the forward, its axes — is the one the
-        other engine compiles against, asked of the shell, so the two engines
-        sort and size a plan alike. Which module a hook goes on is `PLACES`,
-        and a component that is not one of them is refused here, at compile
-        time: a hook fires at a module boundary, and nnsight reaches inside
-        by recompiling the forward (`.source`), which hooks have no
-        equivalent of. Building one would be a different engine — patch the
-        module's `forward` to expose the tensor, or hook `q_proj` and
-        reimplement the reshape and the rotary embedding the query has had by
-        the time it is the query.
-        """
-        if component not in PLACES:
-            raise AddressError(
-                f"component {component!r} is not one of the module boundaries a forward hook "
-                f"reaches here, {sorted(PLACES)}. A hook sees a module's boundary and nothing "
-                "inside its forward; nnsight reaches inside through `.source`, which has no "
-                "hooks equivalent; the nnterp engine reaches it."
-            )
-        return address_module.locate(self._shell, component, layer)
+        return locate(self._shell, component, layer)
 
     def heads(self, address: Address) -> int:
-        return address_module.head_count(self._shell, address)
+        return nnterp_address.head_count(self._shell, address)
 
     def width(self, address: Address) -> int:
-        return address_module.width(self._shell, address)
+        return nnterp_address.width(self._shell, address)
 
     # ----------------------------------------------------------------- #
     # what the run asks
@@ -117,8 +98,8 @@ class HooksEngine(Engine):
     def forward(self, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
         """One forward with its taps applied.
 
-        The taps arrive in forward order and nothing here depends on it: a
-        hook fires when its module runs. What does matter is that every handle
+        The taps arrive in the document's order and nothing here depends on
+        it: a hook fires when its module runs. What does matter is that every handle
         is removed — a leaked hook would intervene on the *next* forward,
         which is a silently wrong number rather than an error.
         """
@@ -182,30 +163,6 @@ def _install(
     return module.register_forward_pre_hook(
         intervene_before(tap, values, featurizers, names, clock), with_kwargs=True
     )
-
-
-#: The places a forward hook reaches: one of the modules `standardized` finds
-#: — a per-layer list, or one whole-model module — and which side of it.
-PLACES = {
-    "input_ids": ("embed_tokens", "input"),
-    "embeddings": ("embed_tokens", "output"),
-    "block_input": ("layers", "input"),
-    "attention_output": ("attentions", "output"),
-    "mlp_input": ("mlps", "input"),
-    "mlp_output": ("mlps", "output"),
-    "block_output": ("layers", "output"),
-    "ln_final": ("ln_final", "output"),
-    "lm_head": ("lm_head", "output"),
-    # the model's own output, whose `logits` field is the tensor
-    "logits": ("model", "output"),
-}
-
-
-def resolve(address: Address, names: Any) -> Any:
-    """The raw module an address is hooked on, in the tree `standardized`
-    translated: a per-layer place's module at its layer."""
-    found = getattr(names, PLACES[address.component][0])
-    return found if address.layer is None else found[address.layer]
 
 
 def intervene_before(

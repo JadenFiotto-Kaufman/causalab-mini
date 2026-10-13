@@ -58,19 +58,14 @@ def _identity_write(raw):
 
 
 def test_the_interior_is_nnterps_value_on_the_attention(eager_engine):
-    """The address is the envoy, the value and the layer; where that is — the
-    attention's call into its implementation, the query argument of the
-    `(args, kwargs)` it is called with — is nnterp's, and so are its axes:
-    heads before tokens, so the sequence is axis 2."""
+    """Where the query is — the attention's call into its implementation, the
+    query argument of the `(args, kwargs)` it is called with — is nnterp's,
+    and so are its axes: heads before tokens, so the sequence is axis 2."""
     located = eager_engine.locate("attention_query", 0)
 
-    assert (located.path, located.value, located.inside) == ("layers.0.self_attn", "attention_queries", True)
     assert located.seq_axis == 2 and located.heads_kind == "q"
     # It is still pure data, and it is still what the document said.
-    assert located == Address(
-        "attention_query", 0, module="self_attn", rank=(0, 1, 0), inside=True,
-        dims=("batch", "num_heads", "seq", "qk_head_dim"),
-    )
+    assert located == Address("attention_query", 0, ("batch", "num_heads", "seq", "qk_head_dim"))
 
 
 def test_an_address_reads_what_nnterps_value_reads(eager_engine, model):
@@ -237,18 +232,45 @@ def test_the_interior_document_runs_end_to_end(eager_engine, tmp_path, data_root
 def test_the_interior_is_ordered_before_its_own_blocks_output(interior_raw, data_root, eager_engine):
     """The forward order now has a rank *inside* a block: layer 0's query is
     read before layer 0's output. nnsight enforces it — get this wrong and the
-    run raises rather than returning a wrong number."""
+    run raises rather than returning a wrong number.
+
+    The plan keeps the document's order — the write, then the reads as
+    written — and the engine puts them in the model's at execute."""
     raw = copy.deepcopy(interior_raw)
     raw["sites"]["block"] = {"component": "block_output", "layers": 0}
     raw["steps"]["patched"]["reads"]["after"] = {"site": "block", "pos": -1}
     built = _build(raw, data_root, eager_engine)
 
-    assert [tap.address.component for tap in of_kind(built, plan.Forward)[1].taps] == [
+    taps = of_kind(built, plan.Forward)[1].taps
+    assert [tap.address.component for tap in taps] == ["attention_query", "lm_head", "block_output"]
+    assert [tap.address.component for tap in nnterp.in_forward_order(eager_engine.model, taps)] == [
         "attention_query",
         "block_output",
         "lm_head",
     ]
     eager_engine.execute(built)
+
+
+def test_taps_the_model_reaches_together_keep_the_documents_order(eager_engine):
+    """The query and the key are served at one call, so neither is before
+    the other; the sort is stable, and the document's order stands."""
+    query, key = (plan.Tap(eager_engine.locate(name, 0), (), ()) for name in ("attention_query", "attention_key"))
+    model = eager_engine.model
+    assert nnterp.in_forward_order(model, (query, key)) == (query, key)
+    assert nnterp.in_forward_order(model, (key, query)) == (key, query)
+
+
+def test_an_engine_that_has_not_measured_its_order_measures_it_in_the_session(
+    eager_engine, data_root, interior_raw
+):
+    """A server's model has not been asked for its order when a plan
+    arrives; the sort asks inside the session, before each trace, and nnterp
+    measures it there."""
+    built = _build(interior_raw, data_root, eager_engine)
+    here = eager_engine.execute(built)
+    eager_engine.model._order = None
+    shipped = eager_engine.execute(built, remote="local")
+    assert torch.equal(here.result("logit_diff"), shipped.result("logit_diff"))
 
 
 def test_the_interior_plan_survives_the_remote_path(eager_engine, model, data_root, interior_raw):

@@ -8,8 +8,8 @@ is `standardized` below — the whole translation layer, and the measurement thi
 engine exists to produce (FINDINGS §6).
 
 Everything this engine knows about the shape of a raw HuggingFace tree is in
-this file. `engine.py` beside it knows which of those modules each component
-is hooked on (`PLACES`), and hooks.
+this file. `address.py` beside it knows which of those modules each
+component is hooked on (`PLACES`), and `engine.py` hooks them.
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ def standardized(model: Any) -> Any:
 
     A raw Llama has `model.layers` while a raw GPT-2 has `transformer.h`.
     This returns an object carrying one spelling of each — `layers`,
-    `lm_head` — so the engine's `PLACES` names them and no other line of this
+    `lm_head` — so `address.PLACES` names them and no other line of this
     engine has to know the difference.
 
     Three of the six are published by transformers and needed no family

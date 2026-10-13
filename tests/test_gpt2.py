@@ -21,6 +21,7 @@ from causalab_mini.address import Address
 from causalab_mini.engine import steps
 from causalab_mini.engine import NNterpEngine
 from causalab_mini.engine.engines.nnterp import engine as nnterp
+from causalab_mini.engine.engines.nnterp.address import resolve
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 DOCUMENT = REPO / "documents" / "v2" / "gpt2_reach.json"
@@ -75,14 +76,14 @@ def _identity_write(raw):
 
 
 def test_one_address_serves_both_families(eager_engine, gpt2_engine, gpt2):
-    """The same envoy, value, layer and axes reach both models, although the
-    modules they land on share no path."""
+    """The same address — layer and axes — on both models, and the same
+    envoy and value reach them, although the modules they land on share no
+    path."""
     model = eager_engine.model
     for component, layer in (("block_output", 0), ("lm_head", None), ("attention_query", 0)):
         one, other = eager_engine.locate(component, layer), gpt2_engine.locate(component, layer)
-        assert (one.module, one.value, one.layer, one.inside, one.dims) == (
-            other.module, other.value, other.layer, other.inside, other.dims
-        )
+        assert (one.layer, one.dims) == (other.layer, other.dims)
+        assert resolve(eager_engine.model, component, layer)[1:3] == resolve(gpt2_engine.model, component, layer)[1:3]
 
     # What nnterp is absorbing on our behalf, spelled out: these are the real
     # paths, and nothing in the project mentions either of them.

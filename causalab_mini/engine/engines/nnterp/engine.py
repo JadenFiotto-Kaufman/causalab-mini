@@ -28,18 +28,20 @@ installed at the client's versions. A server that does not is a
 
 from __future__ import annotations
 
+from dataclasses import replace
+from itertools import groupby
 from typing import Any
 
 import nnsight
 import torch
 
-from .... import address as address_module
 from ....address import Address
 from ....ops import intervene
-from ....plan import Forward, Generate, Plan
+from ....plan import Forward, Generate, Plan, Tap
 from ....plan import plan as plan_module
 from ... import provenance, steps
 from ...base import Engine
+from . import address as address_module
 from .loading import load
 
 
@@ -96,6 +98,7 @@ class NNterpEngine(Engine):
 
     def forward(self, forward: Forward, values: dict[str, Any], featurizers: dict[str, Any]) -> Any:
         model, made = self.model, {}
+        forward = replace(forward, taps=in_forward_order(model, forward.taps))
         with model.trace(batch(forward)) as tracer:
             apply_interventions(model, forward, values, featurizers)
             made["logits"] = tracer.result.logits
@@ -108,12 +111,26 @@ class NNterpEngine(Engine):
         # with no taps has no loop: an early EOS makes a loop outrun the run
         # and drop what follows it (FINDINGS §12.4), which would be the ids.
         model, prompt, made = self.model, len(step.input_ids[0]), {}
+        step = replace(step, taps=in_forward_order(model, step.taps))
         with model.generate(batch(step), max_new_tokens=step.max_new_tokens, **step.generation) as tracer:
             if step.taps:
                 for index in tracer.iter[: step.max_new_tokens]:
                     apply_interventions(model, step, values, featurizers, index)
             made["ids"] = tracer.result[:, prompt:].clone()
         return made["ids"]
+
+
+def in_forward_order(model: Any, taps: tuple[Tap, ...]) -> tuple[Tap, ...]:
+    """A forward's taps in the order the model reaches them, which nnsight
+    requires: reading layer 8 after layer 2 raises, and a write has to go in
+    above the read that observes it. The plan keeps them in the document's
+    order, grouped by frame — the prompt, then the decode steps — and this
+    sorts within each frame by `rank` (`address.py` beside this file), stably, so two taps at one
+    place keep the document's order. Done before the trace, as data."""
+    def where(tap: Tap) -> tuple[int, int, int]:
+        return address_module.rank(model, tap.address.component, tap.address.layer)
+
+    return tuple(tap for _, frame in groupby(taps, key=lambda tap: tap.step) for tap in sorted(frame, key=where))
 
 
 def batch(forward: Forward) -> dict[str, Any]:
@@ -184,14 +201,17 @@ def apply_interventions(
 
 
 def read(model: Any, address: Address) -> Any:
-    """The tensor at `address`, during a trace: the value `locate` found, off
-    the envoy it found it on — one of nnterp's standard values, which knows
-    the operation inside a forward where there is one and unwraps whatever
-    the tensor is reached through, or a module's own input or output."""
-    return getattr(address.resolve(model), address.value)
+    """The tensor at `address`, during a trace: found again by the same
+    routing `locate` used — the address carries none — and read off its
+    envoy: one of nnterp's standard values, which knows the operation inside
+    a forward where there is one and unwraps whatever the tensor is reached
+    through, or a module's own input or output."""
+    envoy, _, value, _ = address_module.resolve(model, address.component, address.layer)
+    return getattr(envoy, value)
 
 
 def write(model: Any, address: Address, tensor: Any) -> None:
     """Put a tensor back where `read` found it; the value rebuilds whatever
     the tensor was reached through — a tuple, a call's arguments."""
-    setattr(address.resolve(model), address.value, tensor)
+    envoy, _, value, _ = address_module.resolve(model, address.component, address.layer)
+    setattr(envoy, value, tensor)

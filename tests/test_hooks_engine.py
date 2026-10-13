@@ -22,7 +22,7 @@ from causalab_mini import plan
 from causalab_mini.address import AddressError
 from causalab_mini.engine import HooksEngine, NNterpEngine, steps
 from causalab_mini.engine.engines.hooks import HooksEngineError
-from causalab_mini.engine.engines.hooks import engine as hooks
+from causalab_mini.engine.engines.hooks import address as hooks
 from causalab_mini.engine.engines.hooks.loading import standardized
 from causalab_mini.plan import ReadOp
 from causalab_mini.plan.spec import Spec

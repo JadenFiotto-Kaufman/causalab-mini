@@ -17,8 +17,11 @@ compiled against a particular model and none of it may be decided later:
     num_layers           bounds the layer band a site may name
     locate(component, layer) -> Address      resolve a site, now, on the client
     width(address) -> int                    how wide the tensor there is
+    heads(address) -> int                    how many heads it has, if per head
 
-and what the **run** asks:
+The last three are the address questions: `address.py` is the names
+they are asked about, and each engine answers them in its own
+`engines/<name>/address.py`. And what the **run** asks:
 
     execute(plan, remote) -> Plan            the whole request
     forward(step, values, featurizers) -> logits    one model call, tapped
@@ -91,10 +94,10 @@ class Engine:
     def locate(self, component: str, layer: int | None = None) -> Address:
         """The address of `(component, layer)` on this model.
 
-        The pair, plus what the checkpoint says about it — which module,
-        which side, where in the forward pass — and a refusal for a place
-        this runtime cannot reach, which is the runtime's business: why this
-        is asked of the engine and not of the address.
+        The pair, plus the axes this engine will serve it with, and a
+        refusal for a place this runtime cannot reach, which is the
+        runtime's business: why this is asked of the engine and not of the
+        address.
         """
         raise NotImplementedError
 

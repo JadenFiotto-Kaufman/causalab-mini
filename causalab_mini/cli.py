@@ -28,6 +28,8 @@ from .data.tokens import TOKEN_FORMS, TokenError
 from .engine import NNterpEngine
 from .engine.base import EngineError
 from .engine.engines.hooks import HooksEngine
+from .engine.engines.hooks import address as hooks_address
+from .engine.engines.nnterp import address as nnterp_address
 from .ops import featurizer, intervene
 from .ops.locate import LocateError
 from .plan import sweep
@@ -36,14 +38,15 @@ from .plan.plan import PlanError
 from .plan.spec import METRIC_SIGNATURES, Model, Optimizer, Reduce, Spec
 from .shapes import Where
 
-#: What `--engine` means: the class, how it is loaded to *run*, and where it
-#: runs. `ndif` is the nnterp engine with no local weights — a meta shell —
-#: executed remotely; the server has the weights. Compiling, for every
+#: What `--engine` means: the class, how it is loaded to *run*, where it
+#: runs, and its `address` module, which `model` asks how each place is
+#: reached. `ndif` is the nnterp engine with no local weights — a meta shell
+#: — executed remotely; the server has the weights. Compiling, for every
 #: engine, is the same shell with nothing dispatched.
-ENGINES: dict[str, tuple[type, dict[str, Any], bool | str]] = {
-    "nnterp": (NNterpEngine, {}, False),
-    "ndif": (NNterpEngine, {"dispatch": False}, True),
-    "hooks": (HooksEngine, {}, False),
+ENGINES: dict[str, tuple[type, dict[str, Any], bool | str, Any]] = {
+    "nnterp": (NNterpEngine, {}, False, nnterp_address),
+    "ndif": (NNterpEngine, {"dispatch": False}, True, nnterp_address),
+    "hooks": (HooksEngine, {}, False, hooks_address),
 }
 SHAPE_ONLY = {"dispatch": False}
 
@@ -168,8 +171,8 @@ def vocab(args: argparse.Namespace) -> dict[str, Any]:
     lines = [f"step kinds:       {', '.join(payload['step_kinds'])}; a reduce is {' or '.join(payload['reductions'])}"]
     lines.append("components:")
     for name, entry in payload["components"].items():
-        lines.append(f"  {name:22s} {entry['value']}  [{' '.join(entry['dims'])}]"
-                     f"{'  (read-only)' if entry['read_only'] else ''}")
+        lines.append(f"  {name:22s} [{' '.join(entry['dims'])}]"
+                     f"{'' if entry['layered'] else '  (no layer)'}{'  (read-only)' if entry['read_only'] else ''}")
     lines.append(f"mechanisms:       {', '.join(payload['mechanisms'])}")
     lines.append(f"layers:           {payload['layers']}")
     lines.append(f"saves:            {payload['saves']}")
@@ -215,8 +218,9 @@ def model(args: argparse.Namespace) -> dict[str, Any]:
         }
     )
     engine = ENGINES[args.engine][0].load(spec, **SHAPE_ONLY)
+    reach = ENGINES[args.engine][3]
     components = {
-        name: _bands(engine, name, range(engine.num_layers) if entry["layered"] else [None])
+        name: _bands(engine, reach, name, range(engine.num_layers) if entry["layered"] else [None])
         for name, entry in address.describe().items()
     }
     payload = {
@@ -243,11 +247,11 @@ def model(args: argparse.Namespace) -> dict[str, Any]:
     return {"text": "\n".join(lines), **payload}
 
 
-def _bands(engine: Any, name: str, layers: Any) -> list[dict[str, Any]]:
+def _bands(engine: Any, reach: Any, name: str, layers: Any) -> list[dict[str, Any]]:
     """One entry per run of layers that answer alike, in layer order."""
     found: list[dict[str, Any]] = []
     for layer in layers:
-        answer = _resolves(engine, name, layer)
+        answer = _resolves(engine, reach, name, layer)
         if found and {k: v for k, v in found[-1].items() if k != "layers"} == answer:
             found[-1]["layers"] = f"{found[-1]['layers'].split('-')[0]}-{layer}"
             continue
@@ -255,7 +259,7 @@ def _bands(engine: Any, name: str, layers: Any) -> list[dict[str, Any]]:
     return found
 
 
-def _resolves(engine: Any, name: str, layer: int | None) -> dict[str, Any]:
+def _resolves(engine: Any, reach: Any, name: str, layer: int | None) -> dict[str, Any]:
     try:
         located = engine.locate(name, layer)
     except REFUSALS as refusal:
@@ -264,7 +268,7 @@ def _resolves(engine: Any, name: str, layer: int | None) -> dict[str, Any]:
         width: Any = engine.width(located)
     except REFUSALS:
         width = None
-    return {"resolves": True, "width": width, "inside": located.inside}
+    return {"resolves": True, "width": width, "inside": reach.inside(engine.model, name, layer)}
 
 
 def _choices(field: str) -> tuple[str, ...]:
@@ -347,7 +351,7 @@ def explain_verb(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
-    _, loading, remote = ENGINES[args.engine]
+    _, loading, remote, _ = ENGINES[args.engine]
     if not remote:
         loading = {**loading, "device_map": args.device_map}
     engine, built = _compile(args, **loading)

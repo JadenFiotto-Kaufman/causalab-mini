@@ -52,8 +52,10 @@ allowed to know:
             locate.py                              a position spec -> indices
     engine/ base.py     steps.py                   the contract, and what a
                                                    plan means on any runtime
-      engines/nnterp/   engine.py  loading.py      one directory per runtime
+      engines/nnterp/   engine.py  loading.py      one directory per runtime,
+                        address.py                 each with its own address.py
       engines/hooks/    engine.py  loading.py      plain HF + forward hooks
+                        address.py
 
 Working end to end: activation patching, one `.source` interior
 (`attention_query`), GPT-2 as a reach-only probe, and a DAS fit — all inside
@@ -109,27 +111,45 @@ These are load-bearing. Several tests enforce them.
    nnsight's persistent objects, so it is written as an id and a server
    resolves it to the served checkpoint's own tokenizer. A bare name closed
    over would be pickled by value instead, and would be the wrong object.
-6. **`address.py` is the only file that knows anything about model
-   internals**, and most of what it knows it asks nnterp for. A component is
-   one of nnterp 2.0's standard values, named by the envoy that serves it and
-   the value — `block_output` is the layer's `layer_output`,
-   `attention_query` is `self_attn.attention_queries` — and whether the
-   checkpoint has it (`support`, with nnterp's reason: the attention's
-   interior needs eager attention), **where it sits in the forward pass**
-   (`rank`) and the tensor's axes (the value's `dims`) are nnterp's. `locate`
-   stamps the envoy, the rank and the axes into the `Address`; the sequence
-   axis, the key axis and the per-head kind are read off the axes, and every
-   width is an axis name mapped to a size the model is asked for (`_SIZES`).
-   Six components are module boundaries nnterp 2.0 has no value for (a norm's
-   output, the output projection's input, the MLP's activation): their rows
-   say the module — a list of spellings where nnterp names none — the axes,
-   and which nnterp value they sit beside in the forward, so even their order
-   is stated against nnterp's. The table is a floor and not a fence: a dotted
-   `support()` name nnterp serves — a value a user installed with `envoys=`
-   — is addressable and sized off its own layout. The engine's `read`/`write`
-   are `getattr`/`setattr` of the value on the envoy. What is left that is
-   purely mini's: which components exist, read-only, and those six rows.
-   `ops/` knows nothing about models at all.
+6. **`address.py` is mini's names; each engine's `address.py` is how its
+   runtime finds them.** The root file is engine-neutral and imports no
+   engine: what each place IS — its name, its axes, whether it takes a
+   layer, whether it may be written — and the `Address` type. Everything
+   about reaching a place — routing, order, how deep a runtime instruments
+   to get at it (nnsight's `.source` for the attention's interior, a hook's
+   refusal) — is an engine's, answered live. An
+   `Address` is the document's `(component, layer)` and one resolved fact,
+   the layout the locating engine declares it will serve (an engine may
+   serve another than the standard one, and the compiler sizes and slices
+   a site against what will arrive). It holds no routing and no order, in
+   anyone's spelling, so a plan is mini's language end to end: the engine
+   that runs it finds each place again on its model, through the same
+   function `locate` used, and puts the taps in the order its runtime needs.
+   Resolving is the engine's, through `locate`, `width` and `heads`. nnterp
+   is the reference engine and `engines/nnterp/address.py` the fullest
+   mapping: every name is one of nnterp 2.0's standard values on an envoy
+   (`block_output` is the layer's `layer_output`, `attention_query` is
+   `self_attn.attention_queries`) or one of nine module boundaries nnterp
+   has no value for, which its table places by the module — a list of
+   spellings where nnterp names none — and the nnterp value it sits beside.
+   nnterp says whether the checkpoint has the place (`support`, with its
+   reason: the attention's interior needs eager attention), whether it is
+   reached inside a module's forward (the value's `inside_forward()`, which
+   `causalab-mini model` reports), the axes as the checkpoint lays them out,
+   and every width (`axis_size` on the axis
+   name); it also takes a dotted `support()` name mini lacks — a value a
+   user installed with `envoys=`. **Where a place sits in the forward pass**
+   (`rank`, nnterp's) is nnsight's need, not the language's: the plan keeps
+   a forward's taps in the document's order, by frame, and the nnterp
+   engine sorts each frame by `rank` before its trace. The hooks engine
+   needs no order — a hook fires when its module runs.
+   `engines/hooks/address.py` maps ten of the names to module boundaries,
+   refuses the rest by name, and asks a weightless nnterp shell for the
+   axes and widths, so the two engines size a plan alike; how much mapping
+   an engine needs is what the standardization is worth. Tests hold the
+   duplication: the nnterp table maps exactly mini's names, and a name for
+   one of nnterp's values has that value's axes. `ops/` knows
+   nothing about models at all.
 7. **An engine is nine members and no more**: `load`, then `tokenizer`,
    `num_layers`, `locate`, `width` and `heads` — what the compiler asks of a
    runtime — then `execute`, `forward` and `generate`, what the run asks.
