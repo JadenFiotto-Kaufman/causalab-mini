@@ -116,9 +116,13 @@ These are load-bearing. Several tests enforce them.
    engine: each component's name and the facts that hold on any runtime —
    whether it takes a layer, its axes, whether it may be written — and the
    `Address` type. Resolving a name on a loaded model is the engine's,
-   through its `locate`, `width` and `heads`, and the `path` and `value` an
-   address carries are the locating engine's (a plan is compiled per engine,
-   rule 8). nnterp is the reference engine and `engines/nnterp/address.py`
+   through its `locate`, `width` and `heads`. An `Address` holds no routing
+   in anyone's spelling — the document's `(component, layer)` and three
+   facts the locating engine measured that the compiler needs: `rank` to
+   sort taps, `dims` (that engine's declaration of the layout it serves) to
+   size and slice them, and `inside` — so a plan is mini's language end to
+   end, and the engine that runs it finds each place again on its model,
+   through the same routing function `locate` used. nnterp is the reference engine and `engines/nnterp/address.py`
    the fullest mapping: every name is one of nnterp 2.0's standard values on
    an envoy (`block_output` is the layer's `layer_output`, `attention_query`
    is `self_attn.attention_queries`) or one of nine module boundaries nnterp

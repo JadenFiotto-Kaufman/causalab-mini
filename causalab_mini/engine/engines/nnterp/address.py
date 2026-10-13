@@ -69,6 +69,25 @@ ROUTES: dict[str, tuple[tuple[str, ...], str, tuple[str, int] | None]] = {
 }
 
 
+def resolve(model: Any, component: str, layer: int | None) -> tuple[Any, str, str, tuple[str, int] | None]:
+    """Where `(component, layer)` is on this model: `(envoy, module, value,
+    beside)` — the envoy that serves it and its path from the layer (or the
+    model), the value read off it, and the `ROUTES` anchor of a boundary.
+
+    The one routing step, shared by `locate` at compile time and `read` /
+    `write` in the trace, so the two cannot come to disagree. An address
+    carries no routing; the engine that holds the model finds it again.
+    A name `ROUTES` does not have is a dotted `support()` name: its envoy
+    and value are the name's two halves."""
+    if component in ROUTES:
+        hosts, value, beside = ROUTES[component]
+    else:
+        host, _, value = component.rpartition(".")
+        hosts, beside = (host,), None
+    module, envoy = _host(model if layer is None else model.layers[layer], hosts, component)
+    return envoy, module, value, beside
+
+
 def locate(model: Any, component: str, layer: int | None) -> Address:
     """The address of `(component, layer)` on a loaded nnterp model, or a
     refusal: a place this family, or this block, does not have — nnterp's
@@ -77,20 +96,13 @@ def locate(model: Any, component: str, layer: int | None) -> Address:
 
     A name mini does not have but nnterp serves — a dotted `support()` name
     at a layer, a root value without, such as a value a user installed with
-    `envoys=` — is accepted: its envoy and value are the name's two halves,
-    and its axes are its value's own.
+    `envoys=` — is accepted, and its axes are its value's own.
     """
-    if component in ROUTES:
-        hosts, value, beside = ROUTES[component]
-    else:
-        host, _, value = component.rpartition(".")
-        hosts, beside = (host,), None
     try:
-        root = model if layer is None else model.layers[layer]
-        module, host = _host(root, hosts, component)
+        envoy, module, value, beside = resolve(model, component, layer)
         if beside is None:
             side, rank = model.rank(f"{module}.{value}" if module else value, layer)
-            served = getattr(type(host), value)
+            served = getattr(type(envoy), value)
             dims, inside, step = served.dims, served.inside_forward(), 0
         else:
             anchor, step = beside
@@ -106,13 +118,7 @@ def locate(model: Any, component: str, layer: int | None) -> Address:
             f"name {'at a layer' if layer is not None else 'on the model'} either. Mini's are "
             f"{sorted(ROUTES)}; a value a family lacks is added with `envoys=` at load"
         ) from None
-    path = module if layer is None else f"layers.{layer}" + (f".{module}" if module else "")
-    return Address(component, layer, path, value, (side, rank, step), inside, dims)
-
-
-def envoy(model: Any, address: Address) -> Any:
-    """The envoy `address` is read off: its path walked from the model."""
-    return _walk(model, address.path, address.component)
+    return Address(component, layer, (side, rank, step), inside, dims)
 
 
 def _walk(root: Any, path: str, component: str) -> Any:
@@ -145,7 +151,7 @@ def head_count(model: Any, address: Address) -> int:
     kind = address.heads_kind
     if kind is None:
         raise AddressError(f"component {address.component!r} is not a per-head tensor")
-    return int(axis_size(envoy(model, address), "num_heads" if kind == "q" else "num_kv_heads"))
+    return int(axis_size(resolve(model, address.component, address.layer)[0], "num_heads" if kind == "q" else "num_kv_heads"))
 
 
 def width(model: Any, address: Address) -> int:
@@ -155,7 +161,7 @@ def width(model: Any, address: Address) -> int:
     per-head tensor is handed on flat: every head, side by side."""
     last = address.dims[-1]
     try:
-        size = int(axis_size(envoy(model, address), last))
+        size = int(axis_size(resolve(model, address.component, address.layer)[0], last))
     except ValueError as reason:
         raise AddressError(f"the width of {address.component!r} is not a fact about the model: {reason}") from None
     if last in ("head_dim", "qk_head_dim"):

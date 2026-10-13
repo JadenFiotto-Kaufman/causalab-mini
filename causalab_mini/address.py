@@ -18,10 +18,10 @@ named as the size attribute that holds it (`hidden_size`, `num_heads`). A
 test holds each row's axes to nnterp's own layout for the value it names.
 
 An `Address` is pure data, stamped whole by the engine that located it — the
-document's `(component, layer)` plus that engine's resolution on the
-checkpoint — so it pickles, sorts, prints and travels in a plan, and nothing
-on it reads this table again. A plan is compiled against one engine (HANDOFF
-rule 8), and so is its addresses' `path` and `value`.
+document's `(component, layer)` plus the place's rank, axes and kind as that
+engine measured them — so it pickles, sorts, prints and travels in a plan,
+and nothing on it reads this table again. It holds no routing: the engine
+that runs the plan finds each place again on the model it holds.
 """
 
 from __future__ import annotations
@@ -107,19 +107,25 @@ class AddressError(ValueError):
 
 @dataclass(frozen=True)
 class Address:
-    """One tap, as the document named it, and what the locating engine
-    resolved for it on the checkpoint. Every field is filled in by that
-    engine; there is no half-made address."""
+    """One tap: the document's words, `(component, layer)`, and three facts
+    the locating engine measured on the checkpoint that the compiler needs
+    before anything runs — `rank` to sort the taps, `dims` to size and slice
+    them, `inside` to say what kind of place it is. Every field is filled
+    in by that engine; there is no half-made address.
+
+    It carries no routing, in anyone's spelling: which module, which value
+    off it, is the engine's, found again at execute from the model it holds.
+    A plan is mini's language end to end.
+
+    `dims` is stamped rather than read off the table because an engine may
+    serve a different layout from the standard one — a vLLM engine serves
+    flat `[tokens, hidden_size]` rows with no batch axis — so it is the
+    locating engine's statement of what it will hand over, where
+    `Component.dims` is the language's. On the nnterp engine a test holds
+    the two equal."""
 
     component: str
     layer: int | None
-    #: Where the locating engine reaches it, as a dotted path from its model
-    #: — on nnterp, the envoy in nnterp's standard names: `layers.3.self_attn`,
-    #: `layers.3` for the layer itself, `lm_head` for a whole-model place.
-    path: str
-    #: What that engine reads there — on nnterp, a standard value off the
-    #: envoy, or `input`/`output`.
-    value: str
     #: Where this place is in the model's forward pass, `(side, rank, step)`,
     #: and the sort key that puts taps in forward order — nnsight requires
     #: it: reading layer 8 after layer 2 raises, and a write has to go in
@@ -133,7 +139,7 @@ class Address:
     #: than a module boundary — the query, the scores, the pattern.
     inside: bool
     #: The tensor's axes, in nnterp's names (`("batch", "num_heads", "seq",
-    #: "qk_head_dim")`), as this checkpoint lays them out.
+    #: "qk_head_dim")`), as the locating engine will serve them.
     dims: tuple[str, ...]
 
     @property

@@ -9,7 +9,8 @@ from causalab_mini.address import AddressError
 
 
 def test_an_address_is_stamped_whole_and_pickles_as_such(model_engine, monkeypatch):
-    """Everything an address says is written into it by `locate`, so a plan
+    """Everything an address says is written into it by `locate`, and none
+    of it is routing, so a plan
     unpickled where another table is installed — or none — means what it
     meant where it was compiled."""
     one = model_engine.locate("block_mid", 1)
@@ -17,7 +18,7 @@ def test_an_address_is_stamped_whole_and_pickles_as_such(model_engine, monkeypat
     monkeypatch.setattr(address, "COMPONENTS", {})
     back = pickle.loads(shipped)
     assert back == one
-    assert (back.path, back.value, back.seq_axis) == ("layers.1.post_attention_layernorm", "input", 1)
+    assert (back.component, back.layer, back.seq_axis) == ("block_mid", 1, 1)
 
 
 def test_addresses_sort_into_forward_order(eager_engine):
@@ -57,7 +58,7 @@ def test_a_component_only_nnterp_knows_is_addressable(eager_engine):
     attention are the key heads', `head_dim` deep."""
     located = eager_engine.locate("self_attn.attention_values", 0)
     model = eager_engine.model
-    assert (located.path, located.value, located.inside) == ("layers.0.self_attn", "attention_values", True)
+    assert located.inside
     assert located.rank == eager_engine.locate("attention_key", 0).rank, "served at the same call"
     assert located.heads_kind == "kv" and located.seq_axis == 2
     attention = model.layers[0].self_attn

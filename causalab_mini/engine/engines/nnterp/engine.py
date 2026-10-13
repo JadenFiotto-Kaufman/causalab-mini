@@ -184,14 +184,17 @@ def apply_interventions(
 
 
 def read(model: Any, address: Address) -> Any:
-    """The tensor at `address`, during a trace: the value `locate` found, off
-    the envoy it found it on — one of nnterp's standard values, which knows
-    the operation inside a forward where there is one and unwraps whatever
-    the tensor is reached through, or a module's own input or output."""
-    return getattr(address_module.envoy(model, address), address.value)
+    """The tensor at `address`, during a trace: found again by the same
+    routing `locate` used — the address carries none — and read off its
+    envoy: one of nnterp's standard values, which knows the operation inside
+    a forward where there is one and unwraps whatever the tensor is reached
+    through, or a module's own input or output."""
+    envoy, _, value, _ = address_module.resolve(model, address.component, address.layer)
+    return getattr(envoy, value)
 
 
 def write(model: Any, address: Address, tensor: Any) -> None:
     """Put a tensor back where `read` found it; the value rebuilds whatever
     the tensor was reached through — a tuple, a call's arguments."""
-    setattr(address_module.envoy(model, address), address.value, tensor)
+    envoy, _, value, _ = address_module.resolve(model, address.component, address.layer)
+    setattr(envoy, value, tensor)

@@ -58,19 +58,14 @@ def _identity_write(raw):
 
 
 def test_the_interior_is_nnterps_value_on_the_attention(eager_engine):
-    """The address is the envoy, the value and the layer; where that is — the
-    attention's call into its implementation, the query argument of the
-    `(args, kwargs)` it is called with — is nnterp's, and so are its axes:
-    heads before tokens, so the sequence is axis 2."""
+    """Where the query is — the attention's call into its implementation, the
+    query argument of the `(args, kwargs)` it is called with — is nnterp's,
+    and so are its axes: heads before tokens, so the sequence is axis 2."""
     located = eager_engine.locate("attention_query", 0)
 
-    assert (located.path, located.value, located.inside) == ("layers.0.self_attn", "attention_queries", True)
     assert located.seq_axis == 2 and located.heads_kind == "q"
     # It is still pure data, and it is still what the document said.
-    assert located == Address(
-        "attention_query", 0, "layers.0.self_attn", "attention_queries", (0, 1, 0), True,
-        ("batch", "num_heads", "seq", "qk_head_dim"),
-    )
+    assert located == Address("attention_query", 0, (0, 1, 0), True, ("batch", "num_heads", "seq", "qk_head_dim"))
 
 
 def test_an_address_reads_what_nnterps_value_reads(eager_engine, model):

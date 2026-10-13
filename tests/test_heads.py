@@ -24,6 +24,7 @@ from causalab_mini import plan
 from causalab_mini.address import AddressError
 from causalab_mini.engine import NNterpEngine
 from causalab_mini.engine.engines.hooks import HooksEngine
+from causalab_mini.engine.engines.nnterp.address import resolve
 from causalab_mini.ops import intervene
 from causalab_mini.plan.spec import Spec
 from causalab_mini.shapes import Selection
@@ -235,11 +236,11 @@ def test_the_pattern_is_at_the_same_address_on_gpt2(data_root, eager_engine):
     located = engine.locate("attention_probs", 0)
     # nnterp's value, which is one name over its per-family overrides and a
     # sink flag — where mini had one hardcoded operation
-    assert (located.path, located.value) == ("layers.0.self_attn", "attention_probabilities")
+    assert resolve(engine.model, "attention_probs", 0)[1:3] == ("self_attn", "attention_probabilities")
     assert located.inside, "it is an operation inside the attention, not a module boundary"
     assert located.key_axis and located.seq_axis == 2
     other = eager_engine.locate("attention_probs", 0)
-    assert (located.path, located.value, located.inside, located.dims) == (other.path, other.value, other.inside, other.dims)
+    assert (located.inside, located.dims) == (other.inside, other.dims)
 
 
 # --------------------------------------------------------------------- #

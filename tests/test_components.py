@@ -27,7 +27,7 @@ from causalab_mini.engine.engines.hooks import address as hooks
 from causalab_mini.engine import NNterpEngine
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.engine.engines.nnterp import engine as nnterp
-from causalab_mini.engine.engines.nnterp.address import ROUTES
+from causalab_mini.engine.engines.nnterp.address import ROUTES, resolve
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 GPT2 = REPO / "documents" / "v2" / "gpt2_reach.json"
@@ -84,15 +84,18 @@ def _at(raw, component, layer):
 def test_one_address_serves_both_families(component, eager_engine, eager_gpt2_engine):
     """FINDINGS §1.11, extended from three components to all of them: the
     address is the same on tiny Llama and tiny GPT-2, whose module trees
-    share no path, because nnterp absorbs the family axis: the value, the
-    envoy it is read off, whether it is inside a forward and the tensor's
-    axes are the same. The envoy differs only where nnterp names no standard
-    module and mini's row lists each family's spelling."""
+    share no path, because nnterp absorbs the family axis: whether it is
+    inside a forward and the tensor's axes are the same. So is where nnterp
+    finds it — the envoy and the value — except where nnterp names no
+    standard module and the route lists each family's spelling."""
     layer = 0 if COMPONENTS[component].per_layer else None
     one, other = eager_engine.locate(component, layer), eager_gpt2_engine.locate(component, layer)
-    assert (one.value, one.layer, one.inside, one.dims) == (other.value, other.layer, other.inside, other.dims)
+    assert (one.inside, one.dims) == (other.inside, other.dims)
+    _, here, value, _ = resolve(eager_engine.model, component, layer)
+    _, there, value_there, _ = resolve(eager_gpt2_engine.model, component, layer)
+    assert value == value_there
     if len(ROUTES[component][0]) == 1:
-        assert one.path == other.path
+        assert here == there
 
 
 #: What each place the hooks engine hooks resolves to in a raw HuggingFace
@@ -366,17 +369,16 @@ def test_the_token_ids_can_be_read_and_never_written(minimal_raw, data_root, mod
 def test_a_childs_spelling_is_nnterps_where_nnterp_names_it(model_engine, gpt2_engine):
     """`input_layernorm` on Llama, `ln_1` on GPT-2: nnterp names both
     `input_layernorm`, so the address is the same. The output projection it
-    names on neither, so mini's row lists the spellings and `locate` writes
-    the one the checkpoint has into the address, so the plan says where —
-    with its place in the forward stated against nnterp's: one before the
-    attention's output."""
-    assert model_engine.locate("attention_input_norm", 0).path == "layers.0.input_layernorm"
-    assert gpt2_engine.locate("attention_input_norm", 0).path == "layers.0.input_layernorm"
-    assert gpt2_engine.locate("attention_premix", 0).path == "layers.0.self_attn.c_proj"
+    names on neither, so the route lists the spellings and the engine
+    finds the one the checkpoint has — with its place in the forward stated
+    against nnterp's: one before the attention's output."""
+    assert resolve(model_engine.model, "attention_input_norm", 0)[1] == "input_layernorm"
+    assert resolve(gpt2_engine.model, "attention_input_norm", 0)[1] == "input_layernorm"
+    assert resolve(gpt2_engine.model, "attention_premix", 0)[1] == "self_attn.c_proj"
+    assert resolve(model_engine.model, "attention_premix", 0)[1] == "self_attn.o_proj"
     attention_output = model_engine.locate("attention_output", 0).rank
     assert model_engine.locate("attention_premix", 0) == Address(
-        "attention_premix", 0, "layers.0.self_attn.o_proj", "input",
-        (0, attention_output[1], -1), False, ("batch", "seq", "num_heads", "head_dim"),
+        "attention_premix", 0, (0, attention_output[1], -1), False, ("batch", "seq", "num_heads", "head_dim"),
     )
 
 
