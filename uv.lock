@@ -7,6 +7,9 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 
+[manifest]
+overrides = [{ name = "nnsight", editable = "/home/localjadenfk/wd/nnsight-dev-parent" }]
+
 [[package]]
 name = "accelerate"
 version = "1.15.0"
@@ -80,7 +83,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "accelerate" },
-    { name = "nnsight", editable = "/home/localjadenfk/wd/nnsight" },
+    { name = "nnsight", editable = "/home/localjadenfk/wd/nnsight-dev-parent" },
     { name = "nnterp", editable = "/home/localjadenfk/wd/nnterp" },
     { name = "pydantic" },
     { name = "safetensors" },
@@ -422,6 +425,37 @@ wheels = [
 ]
 
 [[package]]
+name = "jaxtyping"
+version = "0.3.7"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version < '3.11'",
+]
+dependencies = [
+    { name = "wadler-lindig" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/38/40/a2ea3ce0e3e5f540eb970de7792c90fa58fef1b27d34c83f9fa94fea4729/jaxtyping-0.3.7.tar.gz", hash = "sha256:3bd7d9beb7d3cb01a89f93f90581c6f4fff3e5c5dc3c9307e8f8687a040d10c4", size = 45721, upload-time = "2026-01-30T14:18:47.409Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/78/42/caf65e9a0576a3abadc537e2f831701ba9081f21317fb3be87d64451587a/jaxtyping-0.3.7-py3-none-any.whl", hash = "sha256:303ab8599edf412eeb40bf06c863e3168fa186cf0e7334703fa741ddd7046e66", size = 56101, upload-time = "2026-01-30T14:18:45.954Z" },
+]
+
+[[package]]
+name = "jaxtyping"
+version = "0.3.11"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.12'",
+    "python_full_version == '3.11.*'",
+]
+dependencies = [
+    { name = "wadler-lindig" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/91/c1/091b8852bd7cbf50bd655543c8506033cf4029300c67f8c176c1286879a9/jaxtyping-0.3.11.tar.gz", hash = "sha256:b09c14acf6686feb9e0df5b0d8c6e7c5b6f8d36bf059ee54cd522a186c2ef050", size = 46489, upload-time = "2026-06-13T18:35:23.167Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8b/38/c66bbdc5047f4776c2bd3e47e5295a350e3fa44d5b8942105e71c2a876a0/jaxtyping-0.3.11-py3-none-any.whl", hash = "sha256:8a4bedc4e3f963fa82df41bd13c7ebc2bad925601eb48614c65798f21329d4e3", size = 56593, upload-time = "2026-06-13T18:35:22.01Z" },
+]
+
+[[package]]
 name = "jinja2"
 version = "3.1.6"
 source = { registry = "https://pypi.org/simple" }
@@ -575,7 +609,7 @@ wheels = [
 
 [[package]]
 name = "nnsight"
-source = { editable = "/home/localjadenfk/wd/nnsight" }
+source = { editable = "/home/localjadenfk/wd/nnsight-dev-parent" }
 dependencies = [
     { name = "cloudpickle" },
     { name = "greenlet" },
@@ -621,58 +655,31 @@ provides-extras = ["dev", "vllm", "serve"]
 name = "nnterp"
 source = { editable = "/home/localjadenfk/wd/nnterp" }
 dependencies = [
+    { name = "jaxtyping", version = "0.3.7", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "jaxtyping", version = "0.3.11", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "nnsight" },
     { name = "transformers" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "flash-attn", marker = "sys_platform != 'win32' and extra == 'llms'" },
-    { name = "hf-xet", marker = "extra == 'llms'" },
+    { name = "jaxtyping" },
+    { name = "jinja2", marker = "extra == 'encyclopedia'" },
+    { name = "jinja2", marker = "extra == 'test'" },
+    { name = "markdown", marker = "extra == 'encyclopedia'" },
+    { name = "markdown", marker = "extra == 'test'" },
     { name = "nnsight", specifier = ">=0.8" },
-    { name = "nnsight", extras = ["vllm"], marker = "extra == 'vllm'" },
-    { name = "pandas", marker = "extra == 'display'" },
-    { name = "pillow", marker = "extra == 'llms'" },
-    { name = "plotly", marker = "extra == 'display'" },
-    { name = "sentencepiece", marker = "extra == 'llms'" },
-    { name = "timm", marker = "extra == 'llms'" },
-    { name = "transformers" },
+    { name = "pillow", marker = "extra == 'models'" },
+    { name = "protobuf", marker = "extra == 'models'" },
+    { name = "pygments", marker = "extra == 'encyclopedia'" },
+    { name = "pytest", marker = "extra == 'test'" },
+    { name = "pytest-xdist", marker = "extra == 'test'" },
+    { name = "sentencepiece", marker = "extra == 'models'" },
+    { name = "tiktoken", marker = "extra == 'models'" },
+    { name = "transformers", specifier = ">=5.17" },
+    { name = "vllm", marker = "extra == 'vllm'" },
 ]
-provides-extras = ["display", "llms", "vllm"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "black", extras = ["jupyter"] },
-    { name = "build" },
-    { name = "filelock", specifier = ">=3.19.1" },
-    { name = "ipykernel" },
-    { name = "ipywidgets" },
-    { name = "jupyter" },
-    { name = "jupytext" },
-    { name = "myst-parser", specifier = ">=2.0.0" },
-    { name = "nbsphinx" },
-    { name = "pre-commit" },
-    { name = "pydata-sphinx-theme" },
-    { name = "pytest", specifier = ">=7.0" },
-    { name = "pytest-cov", specifier = ">=6.2.1" },
-    { name = "pytest-xdist", specifier = ">=3.8.0" },
-    { name = "ruff" },
-    { name = "sphinx", specifier = ">=7.2.0" },
-    { name = "sphinx-autodoc-typehints", specifier = ">=1.25.0" },
-    { name = "sphinx-copybutton" },
-    { name = "sphinx-design" },
-    { name = "sphinx-rtd-theme", specifier = ">=2.0.0" },
-]
-docs = [
-    { name = "myst-parser", specifier = ">=2.0.0" },
-    { name = "nbsphinx" },
-    { name = "pydata-sphinx-theme" },
-    { name = "sphinx", specifier = ">=7.2.0" },
-    { name = "sphinx-autodoc-typehints", specifier = ">=1.25.0" },
-    { name = "sphinx-copybutton" },
-    { name = "sphinx-design" },
-    { name = "sphinx-rtd-theme", specifier = ">=2.0.0" },
-]
+provides-extras = ["models", "vllm", "test", "encyclopedia"]
 
 [[package]]
 name = "numpy"
@@ -1737,6 +1744,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a3/26/b09b8010994eccc3c09092e6b34058f36a460eea2d4c3e8b910c695975a0/typing_inspection-0.4.4.tar.gz", hash = "sha256:547274fa6b0a561ccf549cc9524b999a578e737d015d8709d021f9d0d13bea47", size = 76928, upload-time = "2026-08-12T12:37:25.997Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/67/81/4add07e5172b7ac40d8ed5ff580409a7801a4fe26d529bdd915401dabfbe/typing_inspection-0.4.4-py3-none-any.whl", hash = "sha256:65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147", size = 14750, upload-time = "2026-08-12T12:37:24.648Z" },
+]
+
+[[package]]
+name = "wadler-lindig"
+version = "0.1.7"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1e/67/cbae4bf7683a64755c2c1778c418fea96d00e34395bb91743f08bd951571/wadler_lindig-0.1.7.tar.gz", hash = "sha256:81d14d3fe77d441acf3ebd7f4aefac20c74128bf460e84b512806dccf7b2cd55", size = 15842, upload-time = "2025-06-18T07:00:42.843Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8d/96/04e7b441807b26b794da5b11e59ed7f83b2cf8af202bd7eba8ad2fa6046e/wadler_lindig-0.1.7-py3-none-any.whl", hash = "sha256:e3ec83835570fd0a9509f969162aeb9c65618f998b1f42918cfc8d45122fe953", size = 20516, upload-time = "2025-06-18T07:00:41.684Z" },
 ]
 
 [[package]]
