@@ -19,7 +19,7 @@ compiled against a particular model and none of it may be decided later:
     width(address) -> int                    how wide the tensor there is
     heads(address) -> int                    how many heads it has, if per head
 
-The last three are the address questions: `address.py` is the standard set
+The last three are the address questions: `address.py` is the names
 they are asked about, and each engine answers them in its own
 `engines/<name>/address.py`. And what the **run** asks:
 

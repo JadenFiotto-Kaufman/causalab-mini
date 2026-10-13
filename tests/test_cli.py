@@ -53,7 +53,10 @@ def test_vocab_is_the_tables_not_a_description_of_them(capsys):
     assert out["metric_kinds"]["top_k"]["params"] == {"k": 5}
     assert out["metric_kinds"]["kl"]["doc"] == SIGNATURES["kl"].doc
     assert out["token_forms"] == ["space_prefixed", "bare", "id"]
-    assert out["components"]["attention_query"]["value"] == "self_attn.attention_queries"
+    # the vocabulary is mini's names and what holds on any runtime; where a
+    # checkpoint keeps each is the engine's, and `model` asks it
+    assert "value" not in out["components"]["attention_query"]
+    assert out["components"]["attention_query"]["dims"] == ["batch", "num_heads", "seq", "qk_head_dim"]
     assert out["components"]["block_output"]["dims"] == ["batch", "seq", "hidden_size"]
     assert out["components"]["attention_z"]["heads"] is True
 

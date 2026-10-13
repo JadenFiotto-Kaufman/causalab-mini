@@ -64,16 +64,38 @@ def test_a_component_only_nnterp_knows_is_addressable(eager_engine):
     assert eager_engine.width(located) == attention.num_kv_heads * attention.head_dim
 
 
-
 def test_the_tables_axis_names_are_nnterps():
-    # The table spells axis names as literals so a plan loads without nnterp;
+    # The table spells axis names as literals so it is read without nnterp;
     # this holds the literals to nnterp's own constants, where an axis that is
     # a model fact is named as the size attribute that resolves it.
     from nnterp import Mlp
-    from nnterp.components import BATCH, HEAD_DIM, HEADS, HIDDEN, KV_HEADS, QK_HEAD_DIM, SEQ, VOCAB
+    from nnterp.components import BATCH, HEAD_DIM, HEADS, HIDDEN, KEY, KV_HEADS, QK_HEAD_DIM, QUERY, SEQ, VOCAB
 
     assert address._STREAM == (BATCH, SEQ, HIDDEN)
     assert hasattr(Mlp, "intermediate_size")
-    known = {BATCH, SEQ, HIDDEN, VOCAB, HEADS, KV_HEADS, HEAD_DIM, QK_HEAD_DIM, "intermediate_size"}
-    used = {axis for entry in address.COMPONENTS.values() if entry.boundary for axis in entry.boundary[0]}
+    known = {BATCH, SEQ, HIDDEN, VOCAB, HEADS, KV_HEADS, HEAD_DIM, QK_HEAD_DIM, QUERY, KEY, "intermediate_size"}
+    used = {axis for entry in address.COMPONENTS.values() for axis in entry.dims}
     assert used <= known
+
+
+def test_the_nnterp_engine_maps_exactly_minis_names():
+    from causalab_mini.engine.engines.nnterp.address import ROUTES
+
+    assert list(ROUTES) == list(address.COMPONENTS)
+
+
+def test_a_name_for_one_of_nnterps_values_has_that_values_axes():
+    """A row that names one of nnterp's standard values states its axes
+    rather than fetching them, so the table needs no nnterp to be read; this
+    holds the two to each other, on nnterp's standard classes."""
+    from nnterp import Attention, Layer, Mlp, StandardizedTransformer
+
+    from causalab_mini.engine.engines.nnterp.address import ROUTES
+
+    standard = {"self_attn": Attention, "mlp": Mlp}
+    for name, (hosts, value, beside) in ROUTES.items():
+        if beside is not None:
+            continue
+        entry = address.COMPONENTS[name]
+        owner = standard.get(hosts[0]) or (Layer if entry.per_layer else StandardizedTransformer)
+        assert entry.dims == getattr(owner, value).dims, name

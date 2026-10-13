@@ -1,6 +1,6 @@
 """The component vocabulary: eleven names, and what each one is.
 
-`address.py` is the standard set of places and each engine's `address.py`
+`address.py` is mini's names for the places and each engine's `address.py`
 is how its runtime reaches them, so this is where both are checked. Three things are asked of every component:
 that both families and both engines resolve it to the same place, that the
 order the addresses sort into is the order the forward actually runs them in,
@@ -27,6 +27,7 @@ from causalab_mini.engine.engines.hooks import address as hooks
 from causalab_mini.engine import NNterpEngine
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.engine.engines.nnterp import engine as nnterp
+from causalab_mini.engine.engines.nnterp.address import ROUTES
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 GPT2 = REPO / "documents" / "v2" / "gpt2_reach.json"
@@ -90,7 +91,7 @@ def test_one_address_serves_both_families(component, eager_engine, eager_gpt2_en
     layer = 0 if COMPONENTS[component].per_layer else None
     one, other = eager_engine.locate(component, layer), eager_gpt2_engine.locate(component, layer)
     assert (one.value, one.layer, one.inside, one.dims) == (other.value, other.layer, other.inside, other.dims)
-    if len(COMPONENTS[component].hosts) == 1:
+    if len(ROUTES[component][0]) == 1:
         assert one.path == other.path
 
 

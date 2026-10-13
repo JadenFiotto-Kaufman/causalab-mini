@@ -14,10 +14,10 @@ The pipeline, which is also the reading order:
 
 and the rest, each named for what it is allowed to know:
 
-    address.py  WHERE a tensor can be read: the standard set of components,
-                in nnterp's names, and the `Address` an engine stamps for
-                one — its envoy, value, axes and place in the forward. How
-                a runtime resolves one is that engine's own `address.py`.
+    address.py  WHERE a tensor can be read: mini's component names, what
+                holds of each on any runtime (layer, axes, writability), and
+                the `Address` an engine stamps for one. How a runtime finds
+                one is that engine's own `address.py`.
     data/       the corpus: a dataset ref -> padded token rows. Client-side.
     ops/        agnostic: gather, scatter, the write seam, featurizers,
                 metrics. Knows nothing about models at all.

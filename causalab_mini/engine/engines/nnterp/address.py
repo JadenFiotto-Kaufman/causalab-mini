@@ -1,11 +1,13 @@
 """How a loaded nnterp model answers the address questions.
 
-The standard set is `causalab_mini/address.py`, written in nnterp's own
-names, so here resolving is asking: whether the checkpoint has a place and
-why not (`support`, `nnterp.Unavailable` — the attention's interior needs
-eager attention, a hybrid's linear blocks have no `self_attn`), **where it
-comes in the forward pass** (`model.rank`), the tensor's axes (the served
-value's `dims`) and whether it is an operation inside a forward.
+nnterp is the reference engine, so this is the fullest mapping of mini's
+names: every component is one of nnterp 2.0's standard values on an envoy,
+or a module boundary beside one. `ROUTES` says which, and resolving is then
+asking nnterp: whether the checkpoint has the place and why not (`support`,
+`nnterp.Unavailable` — the attention's interior needs eager attention, a
+hybrid's linear blocks have no `self_attn`), **where it comes in the forward
+pass** (`model.rank`), the tensor's axes as this checkpoint lays them out
+(the served value's `dims`) and whether it is an operation inside a forward.
 
 A width is never written here. nnterp names a layout axis that is a model
 fact exactly as the size attribute that holds it — `hidden_size`,
@@ -22,7 +24,49 @@ from typing import Any
 
 from nnterp import Unavailable, axis_size
 
-from ....address import COMPONENTS, Address, AddressError, Component
+from ....address import COMPONENTS, Address, AddressError
+
+#: Each of mini's names, as nnterp reaches it: `(hosts, value, beside)`.
+#:
+#: `hosts` is the envoy, a dotted path from the layer for a per-layer place
+#: and from the model for a whole-model one ("" is that envoy itself); more
+#: than one is the spellings families use for a module nnterp gives no
+#: standard name, tried in order. `value` is read off it: one of nnterp's
+#: standard values, or `input` / `output`, a module boundary nnsight serves
+#: as it is. `beside` is set for a module boundary nnterp 2.0 has no value
+#: for: nnterp ranks only its values, so the boundary's place in the forward
+#: is the value it sits beside at the same layer, and how far before
+#: (negative) or after it.
+ROUTES: dict[str, tuple[tuple[str, ...], str, tuple[str, int] | None]] = {
+    # the attention's interior: nnterp serves these under eager attention only
+    "attention_query": (("self_attn",), "attention_queries", None),
+    "attention_key": (("self_attn",), "attention_keys", None),
+    "attention_scores": (("self_attn",), "attention_scores", None),
+    "attention_probs": (("self_attn",), "attention_probabilities", None),
+    "attention_z": (("self_attn",), "attention_head_outputs", None),
+    "input_ids": (("",), "input_ids", None),
+    "embeddings": (("",), "token_embeddings", None),
+    "block_input": (("",), "layer_input", None),
+    "attention_input_norm": (("input_layernorm",), "output", ("layer_input", 1)),
+    "attention_premix": (
+        ("self_attn.o_proj", "self_attn.c_proj", "self_attn.dense", "self_attn.out_proj"), "input",
+        ("self_attn.attention_output", -1),
+    ),
+    "attention_output": (("self_attn",), "attention_output", None),
+    "block_mid": (("post_attention_layernorm",), "input", ("self_attn.attention_output", 1)),
+    "mlp_input_norm": (("post_attention_layernorm",), "output", ("self_attn.attention_output", 2)),
+    "mlp_input": (("mlp",), "input", ("self_attn.attention_output", 3)),
+    "mlp_activation": (("mlp.act_fn", "mlp.act", "mlp.activation_fn"), "output", ("mlp.mlp_output", -2)),
+    "mlp_neuron_output": (
+        ("mlp.down_proj", "mlp.c_proj", "mlp.fc2", "mlp.dense_4h_to_h", "mlp.fc_out", "mlp.w2"), "input",
+        ("mlp.mlp_output", -1),
+    ),
+    "mlp_output": (("mlp",), "mlp_output", None),
+    "block_output": (("",), "layer_output", None),
+    "ln_final": (("norm",), "output", ("logits", -2)),
+    "lm_head": (("lm_head",), "output", ("logits", -1)),
+    "logits": (("",), "logits", None),
+}
 
 
 def locate(model: Any, component: str, layer: int | None) -> Address:
@@ -31,38 +75,39 @@ def locate(model: Any, component: str, layer: int | None) -> Address:
     reason, which for the attention's interior under sdpa is that it is read
     inside the eager attention forward.
 
-    A name the table does not have but nnterp serves — a dotted `support()`
-    name at a layer, a root value without, such as a value a user installed
-    with `envoys=` — is accepted: its envoy and value are the name's two
-    halves, and its axes are its value's own.
+    A name mini does not have but nnterp serves — a dotted `support()` name
+    at a layer, a root value without, such as a value a user installed with
+    `envoys=` — is accepted: its envoy and value are the name's two halves,
+    and its axes are its value's own.
     """
-    entry = COMPONENTS.get(component)
-    if entry is None:
+    if component in ROUTES:
+        hosts, value, beside = ROUTES[component]
+    else:
         host, _, value = component.rpartition(".")
-        entry = Component((host,), value)
+        hosts, beside = (host,), None
     try:
         root = model if layer is None else model.layers[layer]
-        module, host = _host(root, entry.hosts, component)
-        if entry.boundary is None:
-            side, rank = model.rank(f"{module}.{entry.value}" if module else entry.value, layer)
-            served = getattr(type(host), entry.value)
+        module, host = _host(root, hosts, component)
+        if beside is None:
+            side, rank = model.rank(f"{module}.{value}" if module else value, layer)
+            served = getattr(type(host), value)
             dims, inside, step = served.dims, served.inside_forward(), 0
         else:
-            dims, anchor, step = entry.boundary
+            anchor, step = beside
             side, rank = model.rank(anchor, layer)
-            inside = False
+            dims, inside = COMPONENTS[component].dims, False
     except Unavailable as reason:  # a place this family, or this block, lacks
         raise AddressError(f"component {component!r}: {reason}") from None
     except (AddressError, KeyError, IndexError) as error:
-        if component in COMPONENTS:
+        if component in ROUTES:
             raise AddressError(f"component {component!r}: {error.args[0]}") from None
         raise AddressError(
             f"component {component!r} has no address here, and nnterp serves no value of that "
             f"name {'at a layer' if layer is not None else 'on the model'} either. Mini's are "
-            f"{sorted(COMPONENTS)}; a value a family lacks is added with `envoys=` at load"
+            f"{sorted(ROUTES)}; a value a family lacks is added with `envoys=` at load"
         ) from None
     path = module if layer is None else f"layers.{layer}" + (f".{module}" if module else "")
-    return Address(component, layer, path, entry.value, (side, rank, step), inside, dims)
+    return Address(component, layer, path, value, (side, rank, step), inside, dims)
 
 
 def envoy(model: Any, address: Address) -> Any:

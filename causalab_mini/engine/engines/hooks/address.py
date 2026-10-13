@@ -1,7 +1,7 @@
 """How the hooks engine answers the address questions.
 
 A forward hook reaches a module's boundary and nothing inside its forward,
-so this engine's vocabulary is the part of the standard set that is one: ten
+so this engine's vocabulary is the part of mini's names that are one: ten
 places, each a module `loading.standardized` finds in the raw tree and the
 side of it the tensor is on. That table is the translation, and it is kept
 this small on purpose — a component outside it is refused by name, not

@@ -168,8 +168,8 @@ def vocab(args: argparse.Namespace) -> dict[str, Any]:
     lines = [f"step kinds:       {', '.join(payload['step_kinds'])}; a reduce is {' or '.join(payload['reductions'])}"]
     lines.append("components:")
     for name, entry in payload["components"].items():
-        lines.append(f"  {name:22s} {entry['value']}  [{' '.join(entry['dims'])}]"
-                     f"{'  (read-only)' if entry['read_only'] else ''}")
+        lines.append(f"  {name:22s} [{' '.join(entry['dims'])}]"
+                     f"{'' if entry['layered'] else '  (no layer)'}{'  (read-only)' if entry['read_only'] else ''}")
     lines.append(f"mechanisms:       {', '.join(payload['mechanisms'])}")
     lines.append(f"layers:           {payload['layers']}")
     lines.append(f"saves:            {payload['saves']}")
