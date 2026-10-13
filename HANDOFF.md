@@ -113,9 +113,11 @@ These are load-bearing. Several tests enforce them.
    over would be pickled by value instead, and would be the wrong object.
 6. **`address.py` is mini's names; each engine's `address.py` is how its
    runtime finds them.** The root file is engine-neutral and imports no
-   engine: each component's name and the facts that hold on any runtime —
-   whether it takes a layer, its axes, whether it is an operation inside a
-   forward, whether it may be written — and the `Address` type. An
+   engine: what each place IS — its name, its axes, whether it takes a
+   layer, whether it may be written — and the `Address` type. Everything
+   about reaching a place — routing, order, how deep a runtime instruments
+   to get at it (nnsight's `.source` for the attention's interior, a hook's
+   refusal) — is an engine's, answered live. An
    `Address` is the document's `(component, layer)` and one resolved fact,
    the layout the locating engine declares it will serve (an engine may
    serve another than the standard one, and the compiler sizes and slices
@@ -131,8 +133,10 @@ These are load-bearing. Several tests enforce them.
    has no value for, which its table places by the module — a list of
    spellings where nnterp names none — and the nnterp value it sits beside.
    nnterp says whether the checkpoint has the place (`support`, with its
-   reason: the attention's interior needs eager attention), the axes as the
-   checkpoint lays them out, and every width (`axis_size` on the axis
+   reason: the attention's interior needs eager attention), whether it is
+   reached inside a module's forward (the value's `inside_forward()`, which
+   `causalab-mini model` reports), the axes as the checkpoint lays them out,
+   and every width (`axis_size` on the axis
    name); it also takes a dotted `support()` name mini lacks — a value a
    user installed with `envoys=`. **Where a place sits in the forward pass**
    (`rank`, nnterp's) is nnsight's need, not the language's: the plan keeps
@@ -144,7 +148,7 @@ These are load-bearing. Several tests enforce them.
    axes and widths, so the two engines size a plan alike; how much mapping
    an engine needs is what the standardization is worth. Tests hold the
    duplication: the nnterp table maps exactly mini's names, and a name for
-   one of nnterp's values has that value's axes and kind. `ops/` knows
+   one of nnterp's values has that value's axes. `ops/` knows
    nothing about models at all.
 7. **An engine is nine members and no more**: `load`, then `tokenizer`,
    `num_layers`, `locate`, `width` and `heads` — what the compiler asks of a

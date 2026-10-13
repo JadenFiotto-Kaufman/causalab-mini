@@ -103,6 +103,15 @@ def rank(model: Any, component: str, layer: int | None) -> tuple[int, int, int]:
     return (*model.rank(anchor, layer), step)
 
 
+def inside(model: Any, component: str, layer: int | None) -> bool:
+    """Whether nnterp reaches `(component, layer)` inside a module's forward
+    — through `.source`, which is why the attention's interior needs eager
+    attention — rather than at a module boundary: the served value's own
+    answer, and never true of a boundary row."""
+    envoy, _, value, beside = resolve(model, component, layer)
+    return beside is None and getattr(type(envoy), value).inside_forward()
+
+
 def locate(model: Any, component: str, layer: int | None) -> Address:
     """The address of `(component, layer)` on a loaded nnterp model, or a
     refusal: a place this family, or this block, does not have — nnterp's

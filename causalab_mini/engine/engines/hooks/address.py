@@ -55,6 +55,12 @@ def locate(shell: Any, component: str, layer: int | None) -> Address:
     return nnterp_address.locate(shell, component, layer)
 
 
+def inside(model: Any, component: str, layer: int | None) -> bool:
+    """Never: a hook reaches a module's boundary, and `locate` has refused
+    every place that is not one."""
+    return False
+
+
 def resolve(address: Address, names: Any) -> Any:
     """The raw module an address is hooked on, in the tree `standardized`
     translated: a per-layer place's module at its layer."""

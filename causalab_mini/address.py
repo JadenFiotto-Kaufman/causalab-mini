@@ -2,11 +2,11 @@
 each place on any runtime, and what an address of one says.
 
 A component is a name — `block_output`, `attention_query`, `mlp_activation`
-— and the facts about it that hold whatever runs it: whether it is one per
-layer, its axes, whether it is an operation inside a module's forward, and
-whether it may be written. That is the whole table. How a runtime finds the
-place — which module, which value off it, where it comes in the forward, how
-wide it is on this checkpoint — is that engine's, in its
+— and what the place IS, whatever runs it: whether it is one per layer, its
+axes, and whether it may be written. That is the whole table. Everything
+about reaching the place — which module, which value off it, where it comes
+in the forward, how deep the runtime has to instrument to get at it, how wide
+it is on this checkpoint — is that engine's, answered live, in its
 own `engines/<name>/address.py`, asked through `Engine.locate`, `width` and
 `heads`. nnterp is the reference engine, and its `address.py` is the fullest
 mapping: every name here is one of nnterp 2.0's standard values or a module
@@ -47,9 +47,6 @@ class Component:
     #: Whether this place is one per layer. A document gives a layer for one
     #: and may not for the others.
     per_layer: bool = True
-    #: Whether the place is an operation inside a module's forward rather
-    #: than a module boundary — the attention's interior, and nothing else.
-    inside: bool = False
     #: A tensor that may be read and never written: the token ids are the
     #: model's input, and swapping a float activation into them means nothing.
     read_only: bool = False
@@ -59,22 +56,22 @@ COMPONENTS = {
     # --- inside the attention: the call that hands the heads to the attention
     # implementation, and its result.
     # projected, reshaped to heads and rotated
-    "attention_query": Component(("batch", "num_heads", "seq", "qk_head_dim"), inside=True),
+    "attention_query": Component(("batch", "num_heads", "seq", "qk_head_dim")),
     # the key heads' keys, before a grouped model repeats them: narrower than
     # the query by the grouping ratio, at the same per-head width
-    "attention_key": Component(("batch", "num_kv_heads", "seq", "qk_head_dim"), inside=True),
+    "attention_key": Component(("batch", "num_kv_heads", "seq", "qk_head_dim")),
     # the softmax's argument: QKᵀ·scale with the causal and padding mask
     # already added, so a masked key is -inf here and 0 after
-    "attention_scores": Component(("batch", "num_heads", "query", "key"), inside=True),
+    "attention_scores": Component(("batch", "num_heads", "query", "key")),
     # The attention pattern: the dropout call's output rather than the
     # softmax's, which is the pattern the values are actually mixed with on
     # every family (after the cast, and after an attention sink has been
     # dropped) and the identity in eval mode. A write here is "make this head
     # attend there".
-    "attention_probs": Component(("batch", "num_heads", "query", "key"), inside=True),
+    "attention_probs": Component(("batch", "num_heads", "query", "key")),
     # each head's mix of the values, before the heads are merged for the
     # output projection
-    "attention_z": Component(("batch", "seq", "num_heads", "head_dim"), inside=True),
+    "attention_z": Component(("batch", "seq", "num_heads", "head_dim")),
     "input_ids": Component(("batch", "seq"), per_layer=False, read_only=True),
     # The embedding table's output, before layer 0: `block_input` at layer 0
     # is the same tensor on a model with nothing between them (GPT-2 adds
@@ -183,15 +180,14 @@ def layered(component: str, layer: int | None) -> str | None:
 
 def describe() -> dict[str, dict[str, Any]]:
     """The component vocabulary, as data an agent can read: for each name,
-    whether it takes a layer, its axes, whether it is inside a forward,
-    whether it may be written and whether it is per head. This is the table, not a description of it, so
+    whether it takes a layer, its axes, whether it may be written and
+    whether it is per head. This is the table, not a description of it, so
     it cannot drift. Whether a checkpoint has the place, and where it is
     there, is an engine's to say — `causalab-mini model` asks it."""
     return {
         name: {
             "layered": entry.per_layer,
             "dims": list(entry.dims),
-            "inside": entry.inside,
             "read_only": entry.read_only,
             "heads": _heads(entry.dims) is not None,
         }

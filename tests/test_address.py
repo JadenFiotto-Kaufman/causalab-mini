@@ -88,7 +88,7 @@ def test_the_nnterp_engine_maps_exactly_minis_names():
     assert list(ROUTES) == list(address.COMPONENTS)
 
 
-def test_a_name_for_one_of_nnterps_values_has_that_values_axes_and_kind():
+def test_a_name_for_one_of_nnterps_values_has_that_values_axes():
     """A row that names one of nnterp's standard values states its axes
     rather than fetching them, so the table needs no nnterp to be read; this
     holds the two to each other, on nnterp's standard classes."""
@@ -103,4 +103,3 @@ def test_a_name_for_one_of_nnterps_values_has_that_values_axes_and_kind():
         entry = address.COMPONENTS[name]
         owner = standard.get(hosts[0]) or (Layer if entry.per_layer else StandardizedTransformer)
         assert entry.dims == getattr(owner, value).dims, name
-        assert entry.inside == getattr(owner, value).inside_forward(), name
