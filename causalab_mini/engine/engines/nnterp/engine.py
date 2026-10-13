@@ -33,13 +33,13 @@ from typing import Any
 import nnsight
 import torch
 
-from .... import address as address_module
 from ....address import Address
 from ....ops import intervene
 from ....plan import Forward, Generate, Plan
 from ....plan import plan as plan_module
 from ... import provenance, steps
 from ...base import Engine
+from . import address as address_module
 from .loading import load
 
 
@@ -188,10 +188,10 @@ def read(model: Any, address: Address) -> Any:
     the envoy it found it on — one of nnterp's standard values, which knows
     the operation inside a forward where there is one and unwraps whatever
     the tensor is reached through, or a module's own input or output."""
-    return getattr(address.resolve(model), address.value)
+    return getattr(address_module.envoy(model, address), address.value)
 
 
 def write(model: Any, address: Address, tensor: Any) -> None:
     """Put a tensor back where `read` found it; the value rebuilds whatever
     the tensor was reached through — a tuple, a call's arguments."""
-    setattr(address.resolve(model), address.value, tensor)
+    setattr(address_module.envoy(model, address), address.value, tensor)

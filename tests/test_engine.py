@@ -10,7 +10,6 @@ from typing import Any
 import pytest
 import torch
 
-from causalab_mini.address import Address
 from causalab_mini.engine import Engine, EngineError, NNterpEngine, steps
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.plan import Forward, Plan, build_request
@@ -73,9 +72,9 @@ def test_the_base_engine_has_no_implementation():
     with pytest.raises(NotImplementedError):
         bare.locate("block_output", 0)
     with pytest.raises(NotImplementedError):
-        bare.width(Address("block_output", 0))
+        bare.width(None)  # type: ignore[arg-type]
     with pytest.raises(NotImplementedError):
-        bare.heads(Address("attention_z", 0))
+        bare.heads(None)  # type: ignore[arg-type]
     with pytest.raises(NotImplementedError):
         bare.tokenizer
     with pytest.raises(NotImplementedError):
@@ -160,7 +159,7 @@ def test_a_meta_shell_still_locates_an_interior(minimal_raw):
     attention's call into its implementation."""
     shell = NNterpEngine.load(Model.model_validate(minimal_raw["model"]), dispatch=False, attn_implementation="eager")
     located = shell.locate("attention_query", 0)
-    assert (located.module, located.value, located.inside, located.rank) == ("self_attn", "attention_queries", True, (0, 1, 0))
+    assert (located.path, located.value, located.inside, located.rank) == ("layers.0.self_attn", "attention_queries", True, (0, 1, 0))
 
 
 def test_a_hooks_shell_refuses_to_run_because_it_has_nowhere_to(minimal_raw, data_root):

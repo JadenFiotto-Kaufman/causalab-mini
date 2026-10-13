@@ -68,8 +68,8 @@ def test_the_interior_is_nnterps_value_on_the_attention(eager_engine):
     assert located.seq_axis == 2 and located.heads_kind == "q"
     # It is still pure data, and it is still what the document said.
     assert located == Address(
-        "attention_query", 0, module="self_attn", rank=(0, 1, 0), inside=True,
-        dims=("batch", "num_heads", "seq", "qk_head_dim"),
+        "attention_query", 0, "layers.0.self_attn", "attention_queries", (0, 1, 0), True,
+        ("batch", "num_heads", "seq", "qk_head_dim"),
     )
 
 

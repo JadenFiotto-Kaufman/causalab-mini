@@ -827,7 +827,7 @@ def _forward(
     # decode comes as its steps' parts in step order, with no sort of its own.
     def order(place: tuple[Address, Any]) -> tuple[int, int, tuple[int, int, int]]:
         address, step = place
-        return (0 if step is None else 1, -1 if step == "all" else (step if step is not None else -1), address.key)
+        return (0 if step is None else 1, -1 if step == "all" else (step if step is not None else -1), address.rank)
 
     for place in sorted(set(written) | set(read), key=order):
         taps.append(

@@ -1,7 +1,7 @@
 """The component vocabulary: eleven names, and what each one is.
 
-`address.py` is the only file that knows where a tensor lives, so this is
-where that knowledge is checked. Three things are asked of every component:
+`address.py` is the standard set of places and each engine's `address.py`
+is how its runtime reaches them, so this is where both are checked. Three things are asked of every component:
 that both families and both engines resolve it to the same place, that the
 order the addresses sort into is the order the forward actually runs them in,
 and that a write at it lands bit for bit.
@@ -22,8 +22,8 @@ import torch
 from conftest import model_block, same_numbers
 
 from causalab_mini import ops, plan
-from causalab_mini.address import Address, _COMPONENTS
-from causalab_mini.engine.engines.hooks import engine as hooks
+from causalab_mini.address import COMPONENTS, Address
+from causalab_mini.engine.engines.hooks import address as hooks
 from causalab_mini.engine import NNterpEngine
 from causalab_mini.engine.engines.hooks import HooksEngine
 from causalab_mini.engine.engines.nnterp import engine as nnterp
@@ -34,8 +34,8 @@ GPT2 = REPO / "documents" / "v2" / "gpt2_reach.json"
 #: The four places inside the attention's call into its implementation,
 #: covered by `test_interior.py` and below; every other component here.
 CALL = ("attention_query", "attention_key", "attention_scores", "attention_z")
-BOUNDARIES = [name for name in _COMPONENTS if name not in CALL]
-LAYERED = [name for name in BOUNDARIES if _COMPONENTS[name].per_layer]
+BOUNDARIES = [name for name in COMPONENTS if name not in CALL]
+LAYERED = [name for name in BOUNDARIES if COMPONENTS[name].per_layer]
 
 
 @pytest.fixture(scope="session")
@@ -79,7 +79,7 @@ def _at(raw, component, layer):
 # --------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("component", list(_COMPONENTS))
+@pytest.mark.parametrize("component", list(COMPONENTS))
 def test_one_address_serves_both_families(component, eager_engine, eager_gpt2_engine):
     """FINDINGS §1.11, extended from three components to all of them: the
     address is the same on tiny Llama and tiny GPT-2, whose module trees
@@ -87,11 +87,11 @@ def test_one_address_serves_both_families(component, eager_engine, eager_gpt2_en
     envoy it is read off, whether it is inside a forward and the tensor's
     axes are the same. The envoy differs only where nnterp names no standard
     module and mini's row lists each family's spelling."""
-    layer = 0 if _COMPONENTS[component].per_layer else None
+    layer = 0 if COMPONENTS[component].per_layer else None
     one, other = eager_engine.locate(component, layer), eager_gpt2_engine.locate(component, layer)
     assert (one.value, one.layer, one.inside, one.dims) == (other.value, other.layer, other.inside, other.dims)
-    if len(_COMPONENTS[component].hosts) == 1:
-        assert one.module == other.module
+    if len(COMPONENTS[component].hosts) == 1:
+        assert one.path == other.path
 
 
 #: What each place the hooks engine hooks resolves to in a raw HuggingFace
@@ -140,7 +140,7 @@ def test_the_hooks_engine_translates_every_name_to_the_right_raw_module(family, 
     engine = hooks_engines[family]
     assert set(RAW_PATHS[family]) == set(hooks.PLACES)
     for component, expected in RAW_PATHS[family].items():
-        layer = 0 if _COMPONENTS[component].per_layer else None
+        layer = 0 if COMPONENTS[component].per_layer else None
         module = hooks.resolve(engine.locate(component, layer), engine._names)
         assert _qualified(engine.model, module) == expected, component
 
@@ -152,7 +152,7 @@ def test_the_addresses_sort_into_forward_order(eager_engine):
     sits beside."""
     model_engine = eager_engine  # eager, so the pattern is among them
     layered = [model_engine.locate(name, 0) for name in LAYERED]
-    order = [one.component for one in sorted(layered, key=lambda one: one.key)]
+    order = [one.component for one in sorted(layered, key=lambda one: one.rank)]
     assert order == [
         "block_input", "attention_input_norm", "attention_probs", "attention_premix",
         "attention_output", "block_mid", "mlp_input_norm", "mlp_input", "mlp_activation",
@@ -160,10 +160,10 @@ def test_the_addresses_sort_into_forward_order(eager_engine):
     ]
 
     everything = [
-        model_engine.locate(name, 0 if _COMPONENTS[name].per_layer else None)
+        model_engine.locate(name, 0 if COMPONENTS[name].per_layer else None)
         for name in BOUNDARIES
     ]
-    ordered = [one.component for one in sorted(everything, key=lambda one: one.key)]
+    ordered = [one.component for one in sorted(everything, key=lambda one: one.rank)]
     assert ordered[:2] == ["input_ids", "embeddings"]
     # the head's output, then the model's own — which is not the same tensor
     # on a family that caps its logits
@@ -180,9 +180,9 @@ def test_every_component_can_be_read_in_one_forward(eager_engine):
     addresses = sorted(
         (
             model_engine.locate(name, 0 if entry.per_layer else None)
-            for name, entry in _COMPONENTS.items()
+            for name, entry in COMPONENTS.items()
         ),
-        key=lambda one: one.key,
+        key=lambda one: one.rank,
     )
     batch = {
         "input_ids": torch.tensor([[1, 2, 3, 4]]),
@@ -194,7 +194,7 @@ def test_every_component_can_be_read_in_one_forward(eager_engine):
             for address in addresses:
                 seen[address.component] = nnterp.read(model, address).clone()
 
-    assert set(seen) == set(_COMPONENTS)
+    assert set(seen) == set(COMPONENTS)
     assert seen["lm_head"].shape[-1] == model_engine.width(model_engine.locate("lm_head", None))
 
 
@@ -288,7 +288,7 @@ def test_a_swap_at_every_component_lands_and_moves_the_logits(
     moved. A write that landed nowhere would leave the logits equal to the
     un-intervened run's, and a write at the wrong tensor would still move
     them — so the test is both: it moves, and an identity write does not."""
-    layer = LAYER_UNDER_TEST.get(component, 0) if _COMPONENTS[component].per_layer else None
+    layer = LAYER_UNDER_TEST.get(component, 0) if COMPONENTS[component].per_layer else None
     raw = _at(minimal_raw, component, layer)
 
     swapped = model_engine.execute(plan.build_request(raw, data_root, model_engine))
@@ -314,7 +314,7 @@ def test_an_interchange_at_the_embeddings_of_a_shared_last_token_is_a_no_op(
     and at layer 0 the declared position has attended to nothing yet. The
     same swap moves the logits one layer up (see the test above, which takes
     `block_input` at layer 1)."""
-    raw = _at(minimal_raw, component, 0 if _COMPONENTS[component].per_layer else None)
+    raw = _at(minimal_raw, component, 0 if COMPONENTS[component].per_layer else None)
     swapped = model_engine.execute(plan.build_request(raw, data_root, model_engine))
 
     clean = copy.deepcopy(raw)
@@ -330,7 +330,7 @@ def test_the_two_engines_agree_at_the_new_components(
 ):
     """Bit-identical across a traced engine and a hooked one, including at an
     input-side boundary, which the hooks engine reaches with a pre-hook."""
-    layer = LAYER_UNDER_TEST.get(component, 0) if _COMPONENTS[component].per_layer else None
+    layer = LAYER_UNDER_TEST.get(component, 0) if COMPONENTS[component].per_layer else None
     raw = _at(minimal_raw, component, layer)
 
     traced = model_engine.execute(plan.build_request(raw, data_root, model_engine))
@@ -369,14 +369,13 @@ def test_a_childs_spelling_is_nnterps_where_nnterp_names_it(model_engine, gpt2_e
     the one the checkpoint has into the address, so the plan says where —
     with its place in the forward stated against nnterp's: one before the
     attention's output."""
-    assert model_engine.locate("attention_input_norm", 0).module == "input_layernorm"
-    assert gpt2_engine.locate("attention_input_norm", 0).module == "input_layernorm"
-    assert gpt2_engine.locate("attention_premix", 0).module == "self_attn.c_proj"
+    assert model_engine.locate("attention_input_norm", 0).path == "layers.0.input_layernorm"
+    assert gpt2_engine.locate("attention_input_norm", 0).path == "layers.0.input_layernorm"
+    assert gpt2_engine.locate("attention_premix", 0).path == "layers.0.self_attn.c_proj"
     attention_output = model_engine.locate("attention_output", 0).rank
-    assert attention_output is not None
     assert model_engine.locate("attention_premix", 0) == Address(
-        "attention_premix", 0, module="self_attn.o_proj",
-        rank=(0, attention_output[1], -1), dims=("batch", "seq", "num_heads", "head_dim"),
+        "attention_premix", 0, "layers.0.self_attn.o_proj", "input",
+        (0, attention_output[1], -1), False, ("batch", "seq", "num_heads", "head_dim"),
     )
 
 

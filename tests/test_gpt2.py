@@ -80,8 +80,8 @@ def test_one_address_serves_both_families(eager_engine, gpt2_engine, gpt2):
     model = eager_engine.model
     for component, layer in (("block_output", 0), ("lm_head", None), ("attention_query", 0)):
         one, other = eager_engine.locate(component, layer), gpt2_engine.locate(component, layer)
-        assert (one.module, one.value, one.layer, one.inside, one.dims) == (
-            other.module, other.value, other.layer, other.inside, other.dims
+        assert (one.path, one.value, one.layer, one.inside, one.dims) == (
+            other.path, other.value, other.layer, other.inside, other.dims
         )
 
     # What nnterp is absorbing on our behalf, spelled out: these are the real
